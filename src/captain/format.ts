@@ -1,5 +1,5 @@
 import { now } from "./state";
-import type { Stage, Worktree } from "./types";
+import type { FleetMetrics, Stage, Worktree } from "./types";
 
 // ANSI styling that no-ops when output isn't a TTY or NO_COLOR is set, so piped
 // output (and the LLM reading it via `--json`) stays clean.
@@ -50,19 +50,24 @@ export const STAGE_META: Record<Stage, StageMeta> = {
   SIMPLIFY: { glyph: "◐", group: "in-flight", label: "simplify" },
 };
 
-export const fmtAge = (since: number): string => {
-  if (since <= 0) {
-    return "—";
-  }
-  const mins = Math.max(0, Math.floor(now() - since) / 60);
-  const m = Math.floor(mins);
+// A bare duration in seconds → "5m" / "2h5m" (no "ago"/"just now" framing).
+export const fmtDuration = (sec: number): string => {
+  const m = Math.floor(Math.max(0, sec) / 60);
   if (m < 1) {
-    return "just now";
+    return "<1m";
   }
   if (m < 60) {
     return `${m}m`;
   }
   return `${Math.floor(m / 60)}h${m % 60}m`;
+};
+
+export const fmtAge = (since: number): string => {
+  if (since <= 0) {
+    return "—";
+  }
+  const sec = now() - since;
+  return sec < 60 ? "just now" : fmtDuration(sec);
 };
 
 export const groupOf = (stage: Stage): Group => STAGE_META[stage].group;
@@ -182,5 +187,64 @@ export const renderStatus = (
   if (needs === 0 && ready === 0) {
     lines.push(s.dim("→ all worktrees flowing; nothing needs you."));
   }
+  return `${lines.join("\n")}\n`;
+};
+
+// Lifecycle order for the metrics stage table (STAGE_META is keyed, not ordered).
+const STAGE_ORDER: Stage[] = [
+  "ADOPTED",
+  "PLANNING",
+  "PLAN_READY",
+  "IMPLEMENTING",
+  "SIMPLIFY",
+  "REVIEW",
+  "PR_OPEN",
+  "BABYSITTING",
+  "READY_TO_MERGE",
+  "BLOCKED",
+];
+
+const pct = (x: number): string => `${Math.round(x * 100)}%`;
+const plural = (n: number, w: string): string =>
+  `${n} ${w}${n === 1 ? "" : "s"}`;
+
+// The measurement view: fleet-wide velocity/autonomy up top, then a per-stage
+// table of how long worktrees dwell and how reliably the watcher advances them.
+// Plain when not a TTY (style no-ops), so `--json` and pipes stay parseable.
+export const renderMetrics = (m: FleetMetrics, s: Style): string => {
+  const head = `${s.bold("Captain")}  ${s.dim("metrics")}`;
+  if (m.runs === 0) {
+    return [head, s.dim("  no runs recorded yet."), ""].join("\n");
+  }
+
+  const lines = [
+    head,
+    "",
+    `  ${s.dim("runs")}          ${m.runs}`,
+    `  ${s.dim("PR-ready")}      ${m.prsReady}  ${s.dim(`(${m.throughputPerDay.toFixed(1)}/day)`)}`,
+    `  ${s.dim("autonomous")}    ${m.autonomousRuns}  ${s.dim(`(${pct(m.autonomyRate)} of PR-ready)`)}`,
+    `  ${s.dim("intervention")}  ${pct(m.interventionRate)}  ${s.dim(
+      `(${plural(m.interventions.plans, "plan")} · ${plural(m.interventions.rejects, "reject")} · ${plural(m.interventions.blocks, "block")})`
+    )}`,
+    "",
+    s.dim("STAGES"),
+  ];
+
+  for (const stage of STAGE_ORDER) {
+    const sm = m.stages[stage];
+    if (!sm) {
+      continue;
+    }
+    const meta = STAGE_META[stage];
+    const paint = paintGroup(s, meta.group);
+    const label = meta.label.padEnd(14);
+    const timing = `${s.dim("median")} ${fmtDuration(sm.medianSec).padStart(6)}  ${s.dim("total")} ${fmtDuration(sm.totalSec).padStart(6)}`;
+    const flow =
+      sm.advances + sm.reworks > 0
+        ? `  ${s.dim(`(${plural(sm.advances, "advance")} · ${plural(sm.reworks, "rework")})`)}`
+        : "";
+    lines.push(`  ${paint(meta.glyph)} ${paint(label)} ${timing}${flow}`);
+  }
+  lines.push("");
   return `${lines.join("\n")}\n`;
 };

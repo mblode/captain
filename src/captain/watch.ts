@@ -2,9 +2,20 @@ import { listWorkspaces, notify, readScreen, send } from "./control";
 import type { CmuxWorkspace } from "./control";
 import { streamAgentEvents } from "./events";
 import { groupOf } from "./format";
+import { appendHistory, readHistory } from "./history";
+import { computeMetrics } from "./metrics";
 import { transition } from "./pipeline";
 import { cursorPath, DEFAULT_FLEET, loadState, now, saveState } from "./state";
-import type { FleetState, HookEvent, Stage, Worktree } from "./types";
+import { deriveTuning } from "./tuning";
+import type {
+  FleetState,
+  GateKind,
+  HookEvent,
+  HistoryKind,
+  PipelineTuning,
+  Stage,
+  Worktree,
+} from "./types";
 
 const RECONCILE_MS = 30_000;
 const BUSY = /esc to interrupt/iu;
@@ -27,6 +38,34 @@ interface WatchOptions {
   match?: string;
   log?: (message: string) => void;
 }
+
+// Append one audit-log line for a worktree (ts/seq filled in; seq 0 for adopt).
+const record = (
+  workspaceId: string,
+  name: string,
+  rec: {
+    event: string;
+    from: Stage;
+    to: Stage;
+    kind: HistoryKind;
+    seq?: number;
+    action?: string;
+    gate?: GateKind;
+  }
+): void => {
+  appendHistory(DEFAULT_FLEET, {
+    action: rec.action,
+    event: rec.event,
+    from: rec.from,
+    gate: rec.gate,
+    kind: rec.kind,
+    name,
+    seq: rec.seq ?? 0,
+    to: rec.to,
+    ts: now(),
+    workspaceId,
+  });
+};
 
 // Adopt current cmux workspaces into the fleet (excluding the captain itself),
 // and drop tracked worktrees whose workspace has vanished.
@@ -56,6 +95,12 @@ const reconcile = (
         stage: "ADOPTED",
         workspaceId: w.id,
       };
+      record(w.id, w.name, {
+        event: "adopt",
+        from: "ADOPTED",
+        kind: "adopt",
+        to: "ADOPTED",
+      });
     }
   }
   state.worktrees = Object.fromEntries(
@@ -63,10 +108,12 @@ const reconcile = (
   );
 };
 
+// A real stage change resets the retry counter; a busy-defer (same stage) keeps it.
 const setStage = (wt: Worktree, stage: Stage): void => {
   if (wt.stage !== stage) {
     wt.stage = stage;
     wt.since = now();
+    wt.retries = 0;
   }
 };
 
@@ -90,7 +137,8 @@ const pendingCount = (state: FleetState): number =>
 const handleEvent = (
   state: FleetState,
   ev: HookEvent,
-  opts: WatchOptions
+  opts: WatchOptions,
+  tuning: PipelineTuning
 ): void => {
   // Never drive ourselves.
   if (ev.workspaceId === state.captainWorkspaceId) {
@@ -101,22 +149,45 @@ const handleEvent = (
   if (!wt) {
     return;
   }
-  const result = transition(wt, ev);
+  const result = transition(wt, ev, tuning);
   if (!result) {
     return;
   }
+  // The stage we're leaving — captured before setStage, for the audit log.
+  const from = wt.stage;
 
   if (result.send) {
     // Verify before you send: only advance if the surface looks idle, otherwise
-    // leave the stage untouched so the next Stop retries the advance.
+    // count a rework, bump the retry counter, and let the next Stop retry — the
+    // tuning policy escalates to a human once retries exhaust the learned budget.
     if (BUSY.test(readScreen(wt.workspaceId, opts.env, 8))) {
-      opts.log?.(`${wt.name} still busy — deferring ${result.send}`);
+      wt.retries += 1;
+      record(wt.workspaceId, wt.name, {
+        action: result.send,
+        event: ev.hookEventName,
+        from,
+        kind: "rework",
+        seq: ev.seq,
+        to: from,
+      });
+      opts.log?.(
+        `${wt.name} still busy — deferring ${result.send} (retry ${wt.retries})`
+      );
+      saveState(state);
       return;
     }
     send(wt.workspaceId, result.send, opts.env);
     setStage(wt, result.nextStage);
     wt.gate = undefined;
     wt.note = undefined;
+    record(wt.workspaceId, wt.name, {
+      action: result.send,
+      event: ev.hookEventName,
+      from,
+      kind: "advance",
+      seq: ev.seq,
+      to: result.nextStage,
+    });
     opts.log?.(`${wt.name} → ${result.send.replace("/", "")}`);
     saveState(state);
     return;
@@ -139,6 +210,14 @@ const handleEvent = (
       result.notify ?? wt.name,
       opts.env
     );
+    record(wt.workspaceId, wt.name, {
+      event: ev.hookEventName,
+      from,
+      gate: result.gate,
+      kind: "gate",
+      seq: ev.seq,
+      to: result.nextStage,
+    });
     opts.log?.(`⚑ ${result.notify}`);
   }
   saveState(state);
@@ -171,14 +250,27 @@ export const watch = (input: {
   saveState(state);
   banner(state, opts);
 
+  // The learned driving policy, recomputed from the audit log. Refreshed on each
+  // reconcile so it adapts as runs accumulate; the event handler reads it live.
+  const refreshTuning = (): PipelineTuning =>
+    deriveTuning(
+      computeMetrics(
+        readHistory(DEFAULT_FLEET),
+        Object.values(state.worktrees),
+        now()
+      )
+    );
+  let tuning = refreshTuning();
+
   // Periodic reconcile catches worktrees spawned/closed after startup.
   const timer = setInterval(() => {
     reconcile(state, listWorkspaces(opts.env), opts.match);
     saveState(state);
+    tuning = refreshTuning();
   }, RECONCILE_MS);
   timer.unref?.();
 
   streamAgentEvents(cursorPath(DEFAULT_FLEET), opts.env, (ev) =>
-    handleEvent(state, ev, opts)
+    handleEvent(state, ev, opts, tuning)
   );
 };

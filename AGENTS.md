@@ -22,19 +22,22 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: fanout | status | approve | reject | stop | watch
+  cli.ts            # Commander entry: fanout | status | metrics | approve | reject | stop | watch
   runner.ts         # the inherited fan-out + armWatcher (writes match, ensures the daemon)
   cmux.ts git.ts linear.ts repo.ts issue.ts prompt.ts images.ts launch.ts progress.ts shell.ts
   captain/
-    pipeline.ts     # PURE state machine: (worktree, hook event) -> transition. Start here.
-    types.ts        # Stage, Worktree, FleetState, HookEvent, Transition
+    pipeline.ts     # PURE state machine: (worktree, hook event, tuning?) -> transition. Start here.
+    types.ts        # Stage, Worktree, FleetState, HookEvent, Transition, HistoryRecord, FleetMetrics, PipelineTuning
     state.ts        # DEFAULT_FLEET + atomic load/save of ~/.claude/captain/default/state.json + cursor
+    history.ts      # append-only audit log ~/.claude/captain/default/history.jsonl (appendHistory/readHistory)
+    metrics.ts      # PURE: roll history + live state into FleetMetrics (durations, autonomy, intervention rate)
+    tuning.ts       # PURE: deriveTuning(metrics) -> per-stage retry budgets (the self-improvement loop)
     daemon.ts       # singleton watcher: pidfile guard, ensureDaemon (detached spawn), stopDaemon
     control.ts      # cmux wrappers: workspace.list, send, read-screen, notify, feed reply
     events.ts       # spawn `cmux events --category agent --reconnect`, parse agent.hook frames
-    watch.ts        # the live daemon: adopt -> react to events -> advance / park gates
-    commands.ts     # status (the one read view) + approve/reject + friendly-id resolution
-    format.ts       # TTY-aware colour, stage glyphs, grouped status with inline resolve commands
+    watch.ts        # the live daemon: adopt -> react to events -> advance / park gates; records history + applies tuning
+    commands.ts     # status + metrics (read views) + approve/reject + friendly-id resolution
+    format.ts       # TTY-aware colour, stage glyphs, grouped status + the metrics view
 ```
 
 ## DX surface
@@ -55,10 +58,24 @@ watcher-health header. `stop` tears the daemon down. `CAPTAIN_NO_WATCH=1` opts o
 The advance pipeline (`NEXT_ON_STOP` in `pipeline.ts`) is derived from real cadence usage:
 `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`, stopping at PR-ready.
 
+## Metrics & the self-improvement loop
+
+Every transition the watcher makes is appended to `history.jsonl` (`history.ts`) — advances,
+gates, busy-defer reworks, plus approve/reject from `commands.ts`. `captain metrics` rolls that
+log + live state into a `FleetMetrics` view (`metrics.ts`, PURE): per-stage durations, PR-ready
+throughput, autonomy rate, and the intervention rate (the essay's "correction/redirect rate").
+The loop closes in `tuning.ts`: `deriveTuning(metrics)` turns observed per-stage reliability into
+retry budgets, which the watcher passes into `transition()` so a chronically-stuck stage escalates
+to a human gate instead of retrying forever. **Cold-start parity**: with an empty/young log no
+stage is capped, so driving is identical to pre-tuning behaviour; it only adapts once real
+outcomes accrue. The dead `Worktree.retries` field is now wired (bumped on busy-defer, reset on a
+clean stage change in `setStage`).
+
 ## Gotchas
 
 - **ESM, bundler resolution**: extensionless relative imports (`./state`, not `./state.js`); `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
-- **The state machine is pure** (`pipeline.ts`) — keep I/O (cmux, fs) out of it so it stays unit-testable.
+- **The pure core stays pure** (`pipeline.ts`, `metrics.ts`, `tuning.ts`) — keep I/O (cmux, fs) out so they stay unit-testable; `transition` takes `tuning` as plain input data, not a fs read.
+- **History is append-only** (`history.ts`): one JSON line per record, so it never races the `state.json` temp+rename and a truncated tail line is just skipped on read. Safe to write from both the watcher and the `approve`/`reject` CLI process.
 - **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (see `isNewGate` in `watch.ts`), never double-notify.
 - **Never trust cmux's built-in status** (it desyncs); derive state from the agent event stream.
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill can parse them.

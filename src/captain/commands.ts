@@ -1,7 +1,9 @@
 import { feedList, replyExitPlan } from "./control";
 import { watcherHealth } from "./daemon";
-import { renderStatus, style, useColor } from "./format";
+import { renderMetrics, renderStatus, style, useColor } from "./format";
 import type { Style } from "./format";
+import { appendHistory, readHistory } from "./history";
+import { computeMetrics } from "./metrics";
 import { onPlanApproved } from "./pipeline";
 import { DEFAULT_FLEET, loadState, now, saveState } from "./state";
 import type { FleetState, Worktree } from "./types";
@@ -53,6 +55,22 @@ export const status = (json: boolean, out: NodeJS.WritableStream): void => {
   out.write(renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET)));
 };
 
+// The measurement view: velocity, autonomy, intervention rate, and per-stage
+// timings — derived purely from the audit log + live state.
+export const metrics = (json: boolean, out: NodeJS.WritableStream): void => {
+  const state = loadState(DEFAULT_FLEET);
+  const m = computeMetrics(
+    readHistory(DEFAULT_FLEET),
+    Object.values(state.worktrees),
+    now()
+  );
+  if (json) {
+    out.write(`${JSON.stringify(m, null, 2)}\n`);
+    return;
+  }
+  out.write(renderMetrics(m, styleFor(out)));
+};
+
 // Approve plan(s): reply to the cmux exit-plan feed item, then mark IMPLEMENTING
 // so the next Stop auto-advances. `spec` = "all" or ticket names / ids.
 export const approve = (
@@ -80,6 +98,16 @@ export const approve = (
     wt.gate = undefined;
     wt.note = undefined;
     wt.since = now();
+    appendHistory(DEFAULT_FLEET, {
+      event: "approve",
+      from: "PLAN_READY",
+      kind: "approve",
+      name: wt.name,
+      seq: 0,
+      to: wt.stage,
+      ts: now(),
+      workspaceId: wt.workspaceId,
+    });
     out.write(`${s.green("✓")} approved ${s.bold(wt.name)} → implementing\n`);
   }
   saveState(state);
@@ -108,6 +136,16 @@ export const reject = (
   wt.gate = undefined;
   wt.note = note;
   wt.since = now();
+  appendHistory(DEFAULT_FLEET, {
+    event: "reject",
+    from: "PLAN_READY",
+    kind: "reject",
+    name: wt.name,
+    seq: 0,
+    to: "PLANNING",
+    ts: now(),
+    workspaceId: wt.workspaceId,
+  });
   saveState(state);
   out.write(`${s.yellow("↩")} ${s.bold(wt.name)} back to planning: ${note}\n`);
 };
