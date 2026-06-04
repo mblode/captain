@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { renderPrompt } from "./prompt.js";
-import type { LinearIssue } from "./types.js";
+import { renderPrompt } from "./prompt";
+import type { LinearIssue } from "./types";
 
 describe("prompt rendering", () => {
   it("renders Linear copy-as-prompt shape without url", () => {

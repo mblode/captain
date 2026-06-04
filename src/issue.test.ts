@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseIssueInput, slugify } from "./issue.js";
+import { parseIssueInput, slugify } from "./issue";
 
 describe("issue parsing", () => {
   it("parses bare issue IDs", () => {

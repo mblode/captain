@@ -8,7 +8,7 @@ import {
   downloadImage,
   extractImageUrls,
   shouldSendLinearAuth,
-} from "./images.js";
+} from "./images";
 
 const cleanup: string[] = [];
 

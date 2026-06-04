@@ -1,4 +1,4 @@
-import type { HookEvent, Stage, Transition, Worktree } from "./types.js";
+import type { HookEvent, Stage, Transition, Worktree } from "./types";
 
 // The auto-advance pipeline: when a worktree in `stage` finishes a turn (Stop),
 // send the slash command and move to the next stage. The flow is:

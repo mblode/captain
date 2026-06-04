@@ -1,23 +1,15 @@
-import { listWorkspaces, notify, readScreen, send } from "./control.js";
-import type { CmuxWorkspace } from "./control.js";
-import { streamAgentEvents } from "./events.js";
-import { groupOf } from "./format.js";
-import { transition } from "./pipeline.js";
-import { cursorPath, loadState, saveState } from "./state.js";
-import type {
-  FleetState,
-  GateKind,
-  HookEvent,
-  Stage,
-  Worktree,
-} from "./types.js";
+import { listWorkspaces, notify, readScreen, send } from "./control";
+import type { CmuxWorkspace } from "./control";
+import { streamAgentEvents } from "./events";
+import { groupOf } from "./format";
+import { transition } from "./pipeline";
+import { cursorPath, DEFAULT_FLEET, loadState, now, saveState } from "./state";
+import type { FleetState, HookEvent, Stage, Worktree } from "./types";
 
 const RECONCILE_MS = 30_000;
 const BUSY = /esc to interrupt/iu;
 // A line that reads like a real question/prompt (prose, not TUI chrome).
 const PROSE = /^[A-Za-z][\w ,'"()/-]{14,118}[.?]?$/u;
-
-const now = (): number => Math.floor(Date.now() / 1000);
 
 const agentOf = (name: string): Worktree["agent"] => {
   if (/codex/iu.test(name)) {
@@ -31,7 +23,6 @@ const agentOf = (name: string): Worktree["agent"] => {
 
 interface WatchOptions {
   env: NodeJS.ProcessEnv;
-  fleetId: string;
   // only track worktrees whose cwd contains this substring
   match?: string;
   log?: (message: string) => void;
@@ -79,7 +70,7 @@ const setStage = (wt: Worktree, stage: Stage): void => {
   }
 };
 
-// Best-effort: pull a one-line summary of what a gate is asking, so `gates` can
+// Best-effort: pull a one-line summary of what a gate is asking, so `status` can
 // show it without opening the workspace. Returns undefined when nothing reads cleanly.
 const gateHint = (
   workspaceId: string,
@@ -138,7 +129,7 @@ const handleEvent = (
   );
   setStage(wt, result.nextStage);
   if (result.gate) {
-    wt.gate = result.gate as GateKind;
+    wt.gate = result.gate;
   }
   if (isNewGate) {
     wt.note = gateHint(wt.workspaceId, opts.env);
@@ -156,17 +147,26 @@ const handleEvent = (
 const banner = (state: FleetState, opts: WatchOptions): void => {
   const n = Object.keys(state.worktrees).length;
   opts.log?.(
-    `live on fleet "${opts.fleetId}" — ${n} worktree${n === 1 ? "" : "s"}${opts.match ? ` (match: ${opts.match})` : ""}`
+    `live on fleet "${DEFAULT_FLEET}" — ${n} worktree${n === 1 ? "" : "s"}${opts.match ? ` (match: ${opts.match})` : ""}`
   );
   opts.log?.("reacting to cmux agent events. Ctrl-C to stop (state is saved).");
 };
 
-// The live daemon. Loads state, adopts workspaces, then reacts to each agent.hook
-// frame as it arrives. Blocks forever (the event stream keeps it alive).
-export const watch = (opts: WatchOptions): void => {
-  const state = loadState(opts.fleetId);
+// The live daemon. Loads state, adopts workspaces (scoped to the match `fanout`
+// persisted), then reacts to each agent.hook frame as it arrives. Blocks forever
+// (the event stream keeps it alive). Normally auto-started detached by `fanout`.
+export const watch = (input: {
+  env: NodeJS.ProcessEnv;
+  log?: (message: string) => void;
+}): void => {
+  const state = loadState(DEFAULT_FLEET);
   state.captainWorkspaceId =
-    opts.env.CMUX_WORKSPACE_ID ?? state.captainWorkspaceId;
+    input.env.CMUX_WORKSPACE_ID ?? state.captainWorkspaceId;
+  // `fanout` hands a fresh match via env; fall back to the persisted one on a
+  // manual restart. The watcher is the sole writer of state.json from here on.
+  const match = input.env.CAPTAIN_MATCH || state.match;
+  state.match = match;
+  const opts: WatchOptions = { env: input.env, log: input.log, match };
   reconcile(state, listWorkspaces(opts.env), opts.match);
   saveState(state);
   banner(state, opts);
@@ -178,7 +178,7 @@ export const watch = (opts: WatchOptions): void => {
   }, RECONCILE_MS);
   timer.unref?.();
 
-  streamAgentEvents(cursorPath(opts.fleetId), opts.env, (ev) =>
+  streamAgentEvents(cursorPath(DEFAULT_FLEET), opts.env, (ev) =>
     handleEvent(state, ev, opts)
   );
 };

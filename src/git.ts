@@ -3,9 +3,9 @@ import { mkdir, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
-import { CliError } from "./errors.js";
-import { run, runRequired } from "./shell.js";
-import type { WorktreeResult } from "./types.js";
+import { CliError } from "./errors";
+import { run, runRequired } from "./shell";
+import type { WorktreeResult } from "./types";
 
 interface EnsureWorktreeOptions {
   env: NodeJS.ProcessEnv;

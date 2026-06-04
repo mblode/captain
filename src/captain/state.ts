@@ -8,7 +8,13 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { FleetState } from "./types.js";
+import type { FleetState } from "./types";
+
+// Captain drives a single fleet; the id only namespaces state on disk.
+export const DEFAULT_FLEET = "default";
+
+// Epoch seconds — the fleet's time unit (worktree `since`, state `updatedAt`).
+export const now = (): number => Math.floor(Date.now() / 1000);
 
 export const fleetDir = (fleetId: string): string =>
   join(homedir(), ".claude", "captain", fleetId);
@@ -31,7 +37,7 @@ export const loadState = (fleetId: string): FleetState => {
 export const saveState = (state: FleetState): void => {
   const dir = fleetDir(state.fleetId);
   mkdirSync(dir, { recursive: true });
-  state.updatedAt = Math.floor(Date.now() / 1000);
+  state.updatedAt = now();
   const path = statePath(state.fleetId);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);

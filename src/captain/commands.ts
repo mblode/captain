@@ -1,19 +1,12 @@
-import { feedList, replyExitPlan } from "./control.js";
-import { fmtAge, renderStatus, style, useColor } from "./format.js";
-import type { Style } from "./format.js";
-import { onPlanApproved } from "./pipeline.js";
-import { loadState, saveState } from "./state.js";
-import type { FleetState, Worktree } from "./types.js";
-
-const now = (): number => Math.floor(Date.now() / 1000);
+import { feedList, replyExitPlan } from "./control";
+import { watcherHealth } from "./daemon";
+import { renderStatus, style, useColor } from "./format";
+import type { Style } from "./format";
+import { onPlanApproved } from "./pipeline";
+import { DEFAULT_FLEET, loadState, now, saveState } from "./state";
+import type { FleetState, Worktree } from "./types";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
-
-// A short, friendly handle for command examples (the ticket part of the name).
-const shortName = (wt: Worktree): string => {
-  const m = wt.name.match(/([a-z]+-\d+)/iu);
-  return m ? m[1] : wt.name;
-};
 
 // Resolve a user-friendly target spec to worktrees. Accepts "all", or a
 // comma-separated list of ticket names ("tig-430"), substrings, or workspace ids
@@ -49,100 +42,26 @@ export const resolveTargets = (
   return { matched, unknown };
 };
 
-export const status = (
-  fleetId: string,
-  json: boolean,
-  out: NodeJS.WritableStream
-): void => {
-  const rows = Object.values(loadState(fleetId).worktrees);
+// The one read surface: a watcher-health header, then worktrees grouped with the
+// few that need a decision on top — each carrying its inline resolve command.
+export const status = (json: boolean, out: NodeJS.WritableStream): void => {
+  const rows = Object.values(loadState(DEFAULT_FLEET).worktrees);
   if (json) {
     out.write(`${JSON.stringify(rows, null, 2)}\n`);
     return;
   }
-  out.write(renderStatus(fleetId, rows, styleFor(out)));
-};
-
-// Pending decisions, batched, each with the exact command to resolve it.
-export const gates = (
-  fleetId: string,
-  json: boolean,
-  out: NodeJS.WritableStream
-): void => {
-  const state = loadState(fleetId);
-  const rows = Object.values(state.worktrees).filter(
-    (w) => w.stage === "PLAN_READY" || w.stage === "BLOCKED"
-  );
-  if (json) {
-    out.write(`${JSON.stringify(rows, null, 2)}\n`);
-    return;
-  }
-  const s = styleFor(out);
-  if (rows.length === 0) {
-    out.write(`${s.green("✓")} nothing needs you — the fleet is flowing.\n`);
-    return;
-  }
-  out.write(`${s.bold(`${rows.length} pending`)} — ${fleetId}\n\n`);
-  for (const wt of rows) {
-    const head =
-      wt.stage === "PLAN_READY"
-        ? s.yellow(`◆ ${wt.name}  plan ready`)
-        : s.yellow(`● ${wt.name}  blocked · ${wt.gate ?? "?"}`);
-    out.write(`${head}  ${s.dim(fmtAge(wt.since))}\n`);
-    if (wt.note) {
-      out.write(`    ${s.dim(wt.note)}\n`);
-    }
-    if (wt.stage === "PLAN_READY") {
-      out.write(
-        `    ${s.dim("read:")}    cmux read-screen --workspace ${wt.name} --scrollback\n`
-      );
-      out.write(
-        `    ${s.dim("approve:")} captain approve --fleet ${fleetId} --plans ${shortName(wt)}\n`
-      );
-      out.write(
-        `    ${s.dim("reject:")}  captain reject --fleet ${fleetId} --ref ${shortName(wt)} --note "…"\n`
-      );
-    } else {
-      out.write(
-        `    ${s.dim("answer:")}  cmux send --workspace ${wt.name} "<reply>\\n"  (or focus the workspace)\n`
-      );
-    }
-    out.write("\n");
-  }
-};
-
-// Worktrees parked at the PR-ready stop point, with a copy-paste merge hint.
-export const ready = (fleetId: string, out: NodeJS.WritableStream): void => {
-  const s = styleFor(out);
-  const rows = Object.values(loadState(fleetId).worktrees).filter(
-    (w) => w.stage === "READY_TO_MERGE" || w.stage === "BABYSITTING"
-  );
-  if (rows.length === 0) {
-    out.write(s.dim("nothing ready to merge yet.\n"));
-    return;
-  }
-  out.write(`${s.bold(`${rows.length} ready`)} — ${fleetId}\n\n`);
-  for (const wt of rows) {
-    out.write(`${s.green("✓")} ${s.bold(wt.name)}\n`);
-    out.write(
-      `    ${wt.prUrl ? s.dim(wt.prUrl) : s.dim("(PR url pending)")}\n`
-    );
-    if (wt.prUrl) {
-      out.write(`    ${s.dim("merge:")} gh pr merge ${wt.prUrl} --squash\n`);
-    }
-    out.write("\n");
-  }
+  out.write(renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET)));
 };
 
 // Approve plan(s): reply to the cmux exit-plan feed item, then mark IMPLEMENTING
 // so the next Stop auto-advances. `spec` = "all" or ticket names / ids.
 export const approve = (
-  fleetId: string,
   spec: string,
   env: NodeJS.ProcessEnv,
   out: NodeJS.WritableStream
 ): void => {
   const s = styleFor(out);
-  const state = loadState(fleetId);
+  const state = loadState(DEFAULT_FLEET);
   const { matched, unknown } = resolveTargets(state, spec, "PLAN_READY");
   for (const u of unknown) {
     out.write(s.yellow(`  no PLAN_READY worktree matches "${u}"\n`));
@@ -168,14 +87,13 @@ export const approve = (
 
 // Reject a plan: reply with revision feedback and send the worktree back to PLANNING.
 export const reject = (
-  fleetId: string,
   ref: string,
   note: string,
   env: NodeJS.ProcessEnv,
   out: NodeJS.WritableStream
 ): void => {
   const s = styleFor(out);
-  const state = loadState(fleetId);
+  const state = loadState(DEFAULT_FLEET);
   const { matched } = resolveTargets(state, ref, "PLAN_READY");
   const [wt] = matched;
   if (!wt) {

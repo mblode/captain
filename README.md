@@ -27,20 +27,18 @@ Requires Node ≥ 22 and `git`, `claude`, [`cmux`](https://cmux.com/) on your PA
 ## Quick start
 
 ```bash
-# 1. Fan out: a git worktree + plan-mode agent per Linear issue
+# 1. Fan out — a worktree + plan-mode agent per issue, AND starts the watcher
 captain fanout TIG-430 TIG-431 TIG-449
 
-# 2. Start the live watcher in its OWN cmux workspace (CMUX_CAPTAIN=1 self-excludes it)
-CMUX_CAPTAIN=1 captain watch --fleet qa --match frontyard
-
-# 3. From anywhere, drive it
-captain status  --fleet qa     # glanceable: NEEDS YOU first, then in-flight, then ready
-captain gates   --fleet qa     # the pending decisions, each with the command to resolve it
-captain approve --fleet qa --plans tig-430,tig-431   # or --plans all
-captain ready   --fleet qa     # PR-ready worktrees + a merge hint
+# 2. Drive it from anywhere — one view, with the command to resolve each gate inline
+captain status                          # NEEDS YOU first, then in-flight, then ready
+captain approve --plans tig-430,tig-431 # or --plans all
+captain reject  --ref tig-449 --note "don't touch auth"
+captain stop                            # stop the watcher when you're done
 ```
 
-The watcher reacts to cmux `agent.hook.*` events the instant they arrive:
+`fanout` starts a single background watcher (no env vars, no extra steps) that reacts to cmux
+`agent.hook.*` events the instant they arrive:
 
 | Event                              | Captain does                              |
 | ---------------------------------- | ----------------------------------------- |
@@ -48,20 +46,20 @@ The watcher reacts to cmux `agent.hook.*` events the instant they arrive:
 | `ExitPlanMode`                     | park a **plan-approval** gate, notify you |
 | `AskUserQuestion` / `Notification` | park a **blocked** gate, notify you       |
 
-State lives in `~/.claude/captain/<fleet>/state.json`; a restart resumes from the event cursor
-with no missed events.
+State lives in `~/.claude/captain/default/state.json`; a restart resumes from the event cursor
+with no missed events. (`CAPTAIN_NO_WATCH=1 captain fanout …` creates the worktrees without
+auto-driving them.)
 
 ## Commands
 
-| Command                                                 | What it does                                     |
-| ------------------------------------------------------- | ------------------------------------------------ |
-| `captain fanout <ISSUE-ID…>`                            | worktree + plan-mode agent per Linear issue      |
-| `captain watch --fleet <id> [--match <substr>]`         | the live daemon — run in its own workspace       |
-| `captain status --fleet <id> [--json]`                  | grouped fleet view (NEEDS YOU first)             |
-| `captain gates --fleet <id>`                            | pending decisions, each with its resolve command |
-| `captain approve --fleet <id> --plans <tickets\|all>`   | approve plan(s) → implementing                   |
-| `captain reject --fleet <id> --ref <ticket> --note "…"` | send a plan back to planning                     |
-| `captain ready --fleet <id>`                            | PR-ready worktrees + a merge hint                |
+| Command                                    | What it does                                          |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `captain fanout <ISSUE-ID…>`               | worktree + agent per Linear issue, and starts the watcher |
+| `captain status [--json]`                  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline |
+| `captain approve --plans <tickets\|all>`   | approve plan(s) → implementing                        |
+| `captain reject --ref <ticket> --note "…"` | send a plan back to planning                          |
+| `captain stop`                             | stop the background watcher                            |
+| `captain watch`                            | (rarely needed) restart the watcher in the foreground |
 
 Targets accept friendly ticket names (`tig-430`), not UUIDs. Run `captain --help` for the full
 workflow.

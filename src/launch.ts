@@ -1,5 +1,5 @@
-import { CliError } from "./errors.js";
-import { commandExists, run } from "./shell.js";
+import { CliError } from "./errors";
+import { commandExists, run } from "./shell";
 
 export const copyCommand = (command: string, env: NodeJS.ProcessEnv): void => {
   if (commandExists("pbcopy", env)) {

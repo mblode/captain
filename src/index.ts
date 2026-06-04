@@ -3,29 +3,25 @@ export {
   cmuxReachable,
   isFanOutInput,
   openIssueWorkspace,
-} from "./cmux.js";
-export { approve, gates, ready, reject, status } from "./captain/commands.js";
-export {
-  isHumanGated,
-  onPlanApproved,
-  transition,
-} from "./captain/pipeline.js";
-export { loadState, saveState } from "./captain/state.js";
-export type * from "./captain/types.js";
-export { watch } from "./captain/watch.js";
-export { CliError } from "./errors.js";
-export { ensureWorktree, fetchOrigin } from "./git.js";
+} from "./cmux";
+export { approve, reject, status } from "./captain/commands";
+export { isHumanGated, onPlanApproved, transition } from "./captain/pipeline";
+export { DEFAULT_FLEET, loadState, saveState } from "./captain/state";
+export type * from "./captain/types";
+export { watch } from "./captain/watch";
+export { CliError } from "./errors";
+export { ensureWorktree, fetchOrigin } from "./git";
 export {
   downloadImage,
   downloadIssueImages,
   extractImageUrls,
   shouldSendLinearAuth,
-} from "./images.js";
-export { isIssueId, parseIssueInput, slugify } from "./issue.js";
-export { fetchLinearIssue } from "./linear.js";
-export { copyCommand, launchPlanMode } from "./launch.js";
-export { createProgress, withPrefix } from "./progress.js";
-export { renderPrompt } from "./prompt.js";
-export { expandTilde, resolveRepo } from "./repo.js";
-export { runLinearWorktree } from "./runner.js";
-export type * from "./types.js";
+} from "./images";
+export { isIssueId, parseIssueInput, slugify } from "./issue";
+export { fetchLinearIssue } from "./linear";
+export { copyCommand, launchPlanMode } from "./launch";
+export { createProgress, withPrefix } from "./progress";
+export { renderPrompt } from "./prompt";
+export { expandTilde, resolveRepo } from "./repo";
+export { runLinearWorktree } from "./runner";
+export type * from "./types";

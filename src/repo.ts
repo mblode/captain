@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { CliError } from "./errors.js";
-import { run } from "./shell.js";
-import type { ResolvedRepo } from "./types.js";
+import { CliError } from "./errors";
+import { run } from "./shell";
+import type { ResolvedRepo } from "./types";
 
 interface ResolveRepoOptions {
   cwd: string;

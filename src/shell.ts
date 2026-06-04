@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-import type { RunOptions, RunResult } from "./types.js";
+import type { RunOptions, RunResult } from "./types";
 
 export const run = (
   command: string,

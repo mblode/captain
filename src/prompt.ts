@@ -1,4 +1,4 @@
-import type { LinearIssue, LinearRelatedIssue } from "./types.js";
+import type { LinearIssue, LinearRelatedIssue } from "./types";
 
 const renderRelatedIssue = (
   tag: "parent-issue" | "sub-issue",

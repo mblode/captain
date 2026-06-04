@@ -1,4 +1,5 @@
-import type { Stage, Worktree } from "./types.js";
+import { now } from "./state";
+import type { Stage, Worktree } from "./types";
 
 // ANSI styling that no-ops when output isn't a TTY or NO_COLOR is set, so piped
 // output (and the LLM reading it via `--json`) stays clean.
@@ -53,7 +54,7 @@ export const fmtAge = (since: number): string => {
   if (since <= 0) {
     return "—";
   }
-  const mins = Math.max(0, Math.floor(Date.now() / 1000 - since) / 60);
+  const mins = Math.max(0, Math.floor(now() - since) / 60);
   const m = Math.floor(mins);
   if (m < 1) {
     return "just now";
@@ -76,6 +77,12 @@ const paintGroup = (s: Style, group: Group): Paint => {
   return s.cyan;
 };
 
+// A short, friendly handle for command examples (the ticket part of the name).
+export const shortName = (wt: Worktree): string => {
+  const m = wt.name.match(/([a-z]+-\d+)/iu);
+  return m ? m[1] : wt.name;
+};
+
 // One worktree line: "  ◆ frontyard-tig-431   plan ready   2m   <hint>"
 const row = (wt: Worktree, s: Style, width: number): string => {
   const meta = STAGE_META[wt.stage];
@@ -87,24 +94,50 @@ const row = (wt: Worktree, s: Style, width: number): string => {
   return `  ${paint(meta.glyph)} ${s.bold(name)} ${paint(label)} ${s.dim(fmtAge(wt.since).padStart(8))} ${detail}${pr}`;
 };
 
+// The inline "how to resolve this" lines shown under a worktree that's parked at
+// a human gate or ready to merge — so the one status view is also the runbook.
+const actionLines = (wt: Worktree, s: Style): string[] => {
+  if (wt.stage === "PLAN_READY") {
+    return [
+      `      ${s.dim("read:")}    cmux read-screen --workspace ${wt.name} --scrollback`,
+      `      ${s.dim("approve:")} captain approve --plans ${shortName(wt)}`,
+      `      ${s.dim("reject:")}  captain reject --ref ${shortName(wt)} --note "…"`,
+    ];
+  }
+  // BLOCKED and any other needs-you stage: answer in the workspace.
+  if (groupOf(wt.stage) === "needs-you") {
+    return [
+      `      ${s.dim("answer:")}  cmux send --workspace ${wt.name} "<reply>\\n"  (or focus the workspace)`,
+    ];
+  }
+  if (groupOf(wt.stage) === "ready") {
+    return wt.prUrl
+      ? [`      ${s.dim("merge:")}   gh pr merge ${wt.prUrl} --squash`]
+      : [`      ${s.dim("(PR url pending)")}`];
+  }
+  return [];
+};
+
 const SECTIONS: { group: Group; heading: string }[] = [
   { group: "needs-you", heading: "NEEDS YOU" },
   { group: "in-flight", heading: "IN FLIGHT" },
   { group: "ready", heading: "READY TO MERGE" },
 ];
 
-// The glanceable fleet view: header with counts, worktrees grouped so the few
-// that need a decision are always at the top, and a one-line next-action footer.
+// The one glanceable fleet view: a watcher-health header, worktrees grouped so the
+// few that need a decision sit on top, each gated/ready one carrying the exact
+// command to resolve it. This is the whole read surface — there's no `gates`/`ready`.
 export const renderStatus = (
-  fleetId: string,
   worktrees: Worktree[],
-  s: Style
+  s: Style,
+  watcher: string
 ): string => {
+  const head = `${s.bold("Captain")}  ${s.dim(`watcher: ${watcher}`)}`;
   if (worktrees.length === 0) {
     return [
-      s.bold(`Captain · ${fleetId}`),
+      head,
       s.dim("  no worktrees tracked yet."),
-      s.dim("  start the watcher, then: captain fanout <ISSUE-ID> …"),
+      s.dim("  start one: captain fanout <ISSUE-ID> …"),
       "",
     ].join("\n");
   }
@@ -126,7 +159,7 @@ export const renderStatus = (
     .filter(Boolean)
     .join(s.dim(" · "));
 
-  const lines = [`${s.bold(`Captain · ${fleetId}`)}    ${summary}`, ""];
+  const lines = [`${head}    ${summary}`, ""];
 
   for (const section of SECTIONS) {
     const rows = worktrees
@@ -138,19 +171,15 @@ export const renderStatus = (
     lines.push(s.dim(section.heading));
     for (const wt of rows) {
       lines.push(row(wt, s, width));
+      if (wt.note) {
+        lines.push(`      ${s.dim(wt.note)}`);
+      }
+      lines.push(...actionLines(wt, s));
     }
     lines.push("");
   }
 
-  if (needs > 0) {
-    lines.push(
-      `${s.yellow("→")} ${needs} need you · ${s.bold(`captain gates --fleet ${fleetId}`)}`
-    );
-  } else if (ready > 0) {
-    lines.push(
-      `${s.green("→")} ${ready} ready · ${s.bold(`captain ready --fleet ${fleetId}`)}`
-    );
-  } else {
+  if (needs === 0 && ready === 0) {
     lines.push(s.dim("→ all worktrees flowing; nothing needs you."));
   }
   return `${lines.join("\n")}\n`;

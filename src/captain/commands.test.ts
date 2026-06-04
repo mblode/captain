@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveTargets } from "./commands.js";
-import type { FleetState, Stage } from "./types.js";
+import { resolveTargets } from "./commands";
+import type { FleetState, Stage } from "./types";
 
 const state = (...rows: [string, string, Stage][]): FleetState => ({
   fleetId: "f1",

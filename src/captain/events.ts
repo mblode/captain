@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 
-import type { HookEvent } from "./types.js";
+import type { HookEvent } from "./types";
 
 const AGENT_EVENT = "agent.hook.";
 

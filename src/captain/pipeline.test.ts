@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { isHumanGated, onPlanApproved, transition } from "./pipeline.js";
-import type { HookEvent, Stage, Worktree } from "./types.js";
+import { isHumanGated, onPlanApproved, transition } from "./pipeline";
+import type { HookEvent, Stage, Worktree } from "./types";
 
 const wt = (stage: Stage): Worktree => ({
   agent: "claude",

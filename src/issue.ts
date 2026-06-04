@@ -1,5 +1,5 @@
-import { CliError } from "./errors.js";
-import type { ParsedIssue } from "./types.js";
+import { CliError } from "./errors";
+import type { ParsedIssue } from "./types";
 
 export const issueIdPattern = "[A-Za-z][A-Za-z0-9_]*-[0-9]+";
 export const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");

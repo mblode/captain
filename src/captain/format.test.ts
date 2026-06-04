@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { fmtAge, groupOf, renderStatus, style } from "./format.js";
-import type { Stage, Worktree } from "./types.js";
+import { fmtAge, groupOf, renderStatus, style } from "./format";
+import type { Stage, Worktree } from "./types";
 
 const plain = style(false);
 const wt = (name: string, stage: Stage, since = 0): Worktree => ({
@@ -38,25 +38,61 @@ describe("groupOf", () => {
 
 describe("renderStatus", () => {
   it("guides the user when the fleet is empty", () => {
-    const out = renderStatus("f1", [], plain);
+    const out = renderStatus([], plain, "not running");
     expect(out).toContain("no worktrees tracked yet");
+    expect(out).toContain("watcher: not running");
   });
 
-  it("leads with NEEDS YOU and surfaces the next action", () => {
+  it("leads with NEEDS YOU and inlines the resolve command", () => {
     const out = renderStatus(
-      "f1",
-      [wt("tig-1", "IMPLEMENTING"), wt("tig-2", "PLAN_READY")],
-      plain
+      [
+        wt("frontyard-tig-1", "IMPLEMENTING"),
+        wt("frontyard-tig-2", "PLAN_READY"),
+      ],
+      plain,
+      "running (pid 42)"
     );
     expect(out).toContain("2 worktrees");
     expect(out).toContain("1 need you");
+    expect(out).toContain("watcher: running (pid 42)");
     // NEEDS YOU section comes before IN FLIGHT.
     expect(out.indexOf("NEEDS YOU")).toBeLessThan(out.indexOf("IN FLIGHT"));
-    expect(out).toContain("captain gates --fleet f1");
+    // The gate carries its own resolve command — no separate `gates` command.
+    expect(out).toContain("captain approve --plans tig-2");
   });
 
-  it("points at merge when everything is ready", () => {
-    const out = renderStatus("f1", [wt("tig-1", "READY_TO_MERGE")], plain);
-    expect(out).toContain("captain ready --fleet f1");
+  it("inlines a merge hint when a worktree is ready", () => {
+    const ready = {
+      ...wt("frontyard-tig-1", "READY_TO_MERGE"),
+      prUrl: "https://x/pr/1",
+    };
+    const out = renderStatus([ready], plain, "running (pid 42)");
+    expect(out).toContain("gh pr merge https://x/pr/1 --squash");
+  });
+
+  it("shows a pending placeholder for a ready worktree without a PR url", () => {
+    const out = renderStatus(
+      [wt("frontyard-tig-1", "READY_TO_MERGE")],
+      plain,
+      "running (pid 42)"
+    );
+    expect(out).toContain("(PR url pending)");
+    expect(out).not.toContain("gh pr merge");
+  });
+
+  it("inlines an answer hint for a blocked worktree, with its note", () => {
+    const blocked = { ...wt("frontyard-tig-1", "BLOCKED"), note: "which db?" };
+    const out = renderStatus([blocked], plain, "running (pid 42)");
+    expect(out).toContain("cmux send --workspace frontyard-tig-1");
+    expect(out).toContain("which db?");
+  });
+
+  it("reassures when nothing needs you and nothing is ready", () => {
+    const out = renderStatus(
+      [wt("frontyard-tig-1", "IMPLEMENTING")],
+      plain,
+      "running (pid 42)"
+    );
+    expect(out).toContain("all worktrees flowing");
   });
 });

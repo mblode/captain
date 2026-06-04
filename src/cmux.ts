@@ -1,5 +1,5 @@
-import { isIssueId } from "./issue.js";
-import { commandExists, run, runRequired, shellQuote } from "./shell.js";
+import { isIssueId } from "./issue";
+import { commandExists, run, runRequired, shellQuote } from "./shell";
 
 interface OpenWorkspaceOptions {
   branch: string;

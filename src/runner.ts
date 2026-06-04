@@ -1,20 +1,22 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux.js";
-import { CliError } from "./errors.js";
-import { ensureWorktree, fetchOrigin } from "./git.js";
-import { downloadIssueImages } from "./images.js";
-import { parseIssueInput, slugify } from "./issue.js";
-import { copyCommand, launchPlanMode } from "./launch.js";
-import { fetchLinearIssue } from "./linear.js";
-import { createProgress, withPrefix } from "./progress.js";
-import type { Progress } from "./progress.js";
-import { renderPrompt } from "./prompt.js";
-import { resolveRepo } from "./repo.js";
-import { commandExists } from "./shell.js";
-import type { CliOptions, WorktreeResult } from "./types.js";
+import { ensureDaemon } from "./captain/daemon";
+import { DEFAULT_FLEET, loadState } from "./captain/state";
+import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
+import { CliError } from "./errors";
+import { ensureWorktree, fetchOrigin } from "./git";
+import { downloadIssueImages } from "./images";
+import { parseIssueInput, slugify } from "./issue";
+import { copyCommand, launchPlanMode } from "./launch";
+import { fetchLinearIssue } from "./linear";
+import { createProgress, withPrefix } from "./progress";
+import type { Progress } from "./progress";
+import { renderPrompt } from "./prompt";
+import { resolveRepo } from "./repo";
+import { commandExists } from "./shell";
+import type { CliOptions, WorktreeResult } from "./types";
 
 interface PreparedIssue {
   displayId: string;
@@ -37,6 +39,63 @@ interface DispatchArgs {
   stdout: NodeJS.WritableStream;
   tokens: string[];
 }
+
+// The longest path all inputs share, segment by segment.
+const commonDirPrefix = (paths: string[]): string => {
+  if (paths.length === 0) {
+    return "";
+  }
+  const split = paths.map((p) => p.split("/"));
+  const [first] = split;
+  let i = 0;
+  while (i < first.length && split.every((parts) => parts[i] === first[i])) {
+    i += 1;
+  }
+  return first.slice(0, i).join("/");
+};
+
+// The shared parent directory of the fanned-out worktrees, handed to the watcher
+// as its `match`. Scoping to the parent (not the leaf) keeps a single-issue fanout
+// in the same scope as a batch one. Disjoint trees share no parent → undefined
+// ("don't narrow").
+export const worktreeMatch = (paths: string[]): string | undefined =>
+  commonDirPrefix(paths.map(dirname)) || undefined;
+
+const watcherNote = (pid: number, started: boolean): string => {
+  if (started) {
+    return `started (pid ${pid})`;
+  }
+  return pid ? `already running (pid ${pid})` : "could not start";
+};
+
+// Make sure exactly one watcher is running, scoped to these worktrees. The match
+// is passed to the watcher (which owns state.json) rather than written here.
+// Set CAPTAIN_NO_WATCH=1 to create the worktrees without auto-driving them.
+const armWatcher = (
+  worktreePaths: string[],
+  env: NodeJS.ProcessEnv,
+  stdout: NodeJS.WritableStream
+): void => {
+  if (env.CAPTAIN_NO_WATCH) {
+    return;
+  }
+  const match = worktreeMatch(worktreePaths);
+  const { pid, started } = ensureDaemon(DEFAULT_FLEET, env, match);
+  stdout.write(`watcher: ${watcherNote(pid, started)} · captain status\n`);
+
+  // A watcher already running keeps its original scope (it reads match once at
+  // boot). If these worktrees fall outside it, it won't adopt them — say so
+  // rather than silently dropping them.
+  if (!started && pid) {
+    const scope = loadState(DEFAULT_FLEET).match;
+    const covered = worktreePaths.every((p) => !scope || p.includes(scope));
+    if (!covered) {
+      stdout.write(
+        "  note: outside the running watcher's scope — `captain stop` then re-run to track these\n"
+      );
+    }
+  }
+};
 
 const readStdinTokens = (): string[] => {
   if (process.stdin.isTTY) {
@@ -144,6 +203,7 @@ const dispatch = async ({
       throw new CliError("claude is not on PATH");
     }
 
+    const worktreePaths: string[] = [];
     let index = 0;
     for (const token of tokens) {
       index += 1;
@@ -155,6 +215,7 @@ const dispatch = async ({
         ...context,
         progress: scoped,
       });
+      worktreePaths.push(prepared.worktree.worktreePath);
       await launchViaCmux(prepared, env, false, scoped);
       progress.done(
         `opened ${prepared.worktree.branch} (${index}/${tokens.length})`
@@ -164,6 +225,7 @@ const dispatch = async ({
     stdout.write(
       `spawned ${tokens.length} workspaces - each running claude in plan mode from its worktree\n`
     );
+    armWatcher(worktreePaths, env, stdout);
     return 0;
   }
 
@@ -183,6 +245,7 @@ const dispatch = async ({
     try {
       await launchViaCmux(prepared, env, true, progress);
       progress.done(`opened cmux workspace ${prepared.worktree.branch}`);
+      armWatcher([prepared.worktree.worktreePath], env, stdout);
       return 0;
     } catch {
       // fall through to inline launch if cmux refuses the workspace

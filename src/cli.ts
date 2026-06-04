@@ -4,10 +4,12 @@ import { join } from "node:path";
 
 import { Command } from "commander";
 
-import { approve, gates, ready, reject, status } from "./captain/commands.js";
-import { watch } from "./captain/watch.js";
-import { CliError } from "./errors.js";
-import { runLinearWorktree } from "./runner.js";
+import { approve, reject, status } from "./captain/commands";
+import { stopDaemon } from "./captain/daemon";
+import { DEFAULT_FLEET } from "./captain/state";
+import { watch } from "./captain/watch";
+import { CliError } from "./errors";
+import { runLinearWorktree } from "./runner";
 
 const packageJson = JSON.parse(
   readFileSync(join(import.meta.dirname, "..", "package.json"), "utf-8")
@@ -23,17 +25,16 @@ program
     "after",
     `
 Workflow:
-  $ captain fanout TIG-430 TIG-431          worktree + plan-mode agent per issue
-  $ CMUX_CAPTAIN=1 captain watch --fleet qa --match frontyard
-                                              live daemon — run in its own workspace
-  $ captain status  --fleet qa              glanceable fleet view
-  $ captain gates   --fleet qa              pending decisions + how to resolve each
-  $ captain approve --fleet qa --plans tig-430,tig-431      (or: --plans all)
-  $ captain ready   --fleet qa              PR-ready worktrees to merge
+  $ captain fanout TIG-430 TIG-431     worktrees + agents, and starts the watcher
+  $ captain status                     one view: NEEDS YOU / IN FLIGHT / READY
+  $ captain approve --plans tig-430    approve plan(s)  (or: --plans all)
+  $ captain reject  --ref tig-430 --note "…"            send a plan back
+  $ captain stop                       stop the watcher
 
-The watcher reacts to cmux agent events live, auto-advances each worktree
-(simplify → review → PR → babysit) and stops at PR-ready. You only make the
-gated decisions: approve plans, answer questions, merge.`
+fanout starts a background watcher that reacts to cmux agent events live,
+auto-advances each worktree (simplify → review → PR → babysit) and stops at
+PR-ready. You only make the gated decisions: approve plans, answer questions,
+merge. Everything runs on one fleet; status shows how to resolve each gate.`
   );
 
 // Inherited: create a worktree + cmux workspace per Linear issue (fan-out).
@@ -56,72 +57,51 @@ program
     }
   );
 
-// The live daemon — run this in its own cmux workspace.
+// The live daemon. Normally auto-started by `fanout`; exposed for a manual restart.
 program
   .command("watch")
   .description("live: hold the cmux event stream open and drive the fleet")
-  .requiredOption(
-    "--fleet <id>",
-    "fleet id (namespaces state under ~/.claude/captain)"
-  )
-  .option("--match <substring>", "only track worktrees whose cwd contains this")
-  .action((options: { fleet: string; match?: string }) => {
+  .action(() => {
     watch({
       env: process.env,
-      fleetId: options.fleet,
       log: (m) => process.stderr.write(`[captain] ${m}\n`),
-      match: options.match,
     });
   });
 
 program
   .command("status")
-  .description("render the fleet table")
-  .requiredOption("--fleet <id>", "fleet id")
+  .description(
+    "the one view: NEEDS YOU / IN FLIGHT / READY, with resolve commands"
+  )
   .option("--json", "emit JSON")
-  .action((options: { fleet: string; json?: boolean }) => {
-    status(options.fleet, Boolean(options.json), process.stdout);
-  });
-
-program
-  .command("gates")
-  .description("pending decisions (plans / blocks), batched")
-  .requiredOption("--fleet <id>", "fleet id")
-  .option("--json", "emit JSON")
-  .action((options: { fleet: string; json?: boolean }) => {
-    gates(options.fleet, Boolean(options.json), process.stdout);
-  });
-
-program
-  .command("ready")
-  .description("worktrees parked at PR-ready, awaiting your merge")
-  .requiredOption("--fleet <id>", "fleet id")
-  .action((options: { fleet: string }) => {
-    ready(options.fleet, process.stdout);
+  .action((options: { json?: boolean }) => {
+    status(Boolean(options.json), process.stdout);
   });
 
 program
   .command("approve")
-  .description("approve plan(s): all, or comma-separated workspace ids")
-  .requiredOption("--fleet <id>", "fleet id")
-  .requiredOption("--plans <refs>", 'workspace ids, or "all"')
-  .action((options: { fleet: string; plans: string }) => {
-    approve(options.fleet, options.plans, process.env, process.stdout);
+  .description("approve plan(s): all, or comma-separated ticket names")
+  .requiredOption("--plans <refs>", 'ticket names, or "all"')
+  .action((options: { plans: string }) => {
+    approve(options.plans, process.env, process.stdout);
   });
 
 program
   .command("reject")
   .description("send a plan back to planning with feedback")
-  .requiredOption("--fleet <id>", "fleet id")
-  .requiredOption("--ref <workspaceId>", "the worktree's workspace id")
+  .requiredOption("--ref <ticket>", "the worktree's ticket name")
   .requiredOption("--note <text>", "what to change")
-  .action((options: { fleet: string; note: string; ref: string }) => {
-    reject(
-      options.fleet,
-      options.ref,
-      options.note,
-      process.env,
-      process.stdout
+  .action((options: { note: string; ref: string }) => {
+    reject(options.ref, options.note, process.env, process.stdout);
+  });
+
+program
+  .command("stop")
+  .description("stop the background watcher")
+  .action(() => {
+    const pid = stopDaemon(DEFAULT_FLEET);
+    process.stdout.write(
+      pid ? `stopped watcher (pid ${pid})\n` : "no watcher was running\n"
     );
   });
 

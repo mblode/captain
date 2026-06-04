@@ -36,6 +36,8 @@ export interface FleetState {
   fleetId: string;
   // never drive/notify this one
   captainWorkspaceId?: string;
+  // only track worktrees whose cwd contains this (set by `fanout`)
+  match?: string;
   updatedAt: number;
   // keyed by workspaceId
   worktrees: Record<string, Worktree>;

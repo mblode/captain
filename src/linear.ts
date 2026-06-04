@@ -1,4 +1,4 @@
-import type { LinearGraphqlResponse, LinearIssue } from "./types.js";
+import type { LinearGraphqlResponse, LinearIssue } from "./types";
 
 const issueQuery =
   "query($id:String!){issue(id:$id){identifier title description team{name} labels{nodes{name}} project{name} parent{identifier id title description} children(first:50){nodes{identifier id title description}}}}";

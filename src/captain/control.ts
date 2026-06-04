@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 
-import { run, runRequired } from "../shell.js";
+import { run, runRequired } from "../shell";
 
 // Thin wrappers over the cmux CLI for the captain's "hands". Each reuses the
 // shared spawn helpers so behaviour matches the rest of the tool.
