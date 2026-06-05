@@ -1,10 +1,18 @@
 import { feedList, replyExitPlan } from "./control";
 import { watcherHealth } from "./daemon";
-import { renderStatus, style, useColor } from "./format";
+import {
+  renderAudit,
+  renderMetrics,
+  renderStatus,
+  style,
+  useColor,
+} from "./format";
 import type { Style } from "./format";
+import { appendHistory, readHistory } from "./history";
+import { computeMetrics } from "./metrics";
 import { onPlanApproved } from "./pipeline";
 import { DEFAULT_FLEET, loadState, now, saveState } from "./state";
-import type { FleetState, Worktree } from "./types";
+import type { FleetState, HistoryRecord, Worktree } from "./types";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
 
@@ -53,6 +61,81 @@ export const status = (json: boolean, out: NodeJS.WritableStream): void => {
   out.write(renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET)));
 };
 
+// The measurement view: velocity, autonomy, intervention rate, and per-stage
+// timings — derived purely from the audit log + live state.
+export const metrics = (json: boolean, out: NodeJS.WritableStream): void => {
+  const state = loadState(DEFAULT_FLEET);
+  const m = computeMetrics(
+    readHistory(DEFAULT_FLEET),
+    Object.values(state.worktrees),
+    now()
+  );
+  if (json) {
+    out.write(`${JSON.stringify(m, null, 2)}\n`);
+    return;
+  }
+  out.write(renderMetrics(m, styleFor(out)));
+};
+
+// Parse a coarse duration like "90m", "2h", "1d", "1h30m" → seconds
+// (undefined if nothing parses, so a typo'd --since is a no-op, not a crash).
+const parseSince = (spec: string): number | undefined => {
+  const units: Record<string, number> = { d: 86_400, h: 3600, m: 60, s: 1 };
+  let total = 0;
+  let matched = false;
+  for (const m of spec.matchAll(/(\d+)\s*([dhms])/giu)) {
+    total += Number(m[1]) * units[m[2].toLowerCase()];
+    matched = true;
+  }
+  return matched ? total : undefined;
+};
+
+export interface AuditFilter {
+  since?: string;
+  ref?: string;
+}
+
+// Pure filter for the audit trail: recency window (--since) and/or a worktree
+// (--ref, by friendly ticket substring or workspace id). Kept pure of fs/clock so
+// the slicing is unit-testable; `audit` feeds it the real log + clock.
+export const filterHistory = (
+  records: HistoryRecord[],
+  filter: AuditFilter,
+  nowSec: number
+): HistoryRecord[] => {
+  let out = records;
+  if (filter.since) {
+    const secs = parseSince(filter.since);
+    if (secs !== undefined) {
+      const cutoff = nowSec - secs;
+      out = out.filter((r) => r.ts >= cutoff);
+    }
+  }
+  if (filter.ref) {
+    const token = filter.ref.trim().toLowerCase();
+    out = out.filter(
+      (r) =>
+        r.workspaceId.toLowerCase() === token ||
+        r.name.toLowerCase().includes(token)
+    );
+  }
+  return out;
+};
+
+// The governance trail: the append-only history rendered chronologically,
+// optionally narrowed to a recency window or a single worktree.
+export const audit = (
+  filter: AuditFilter & { json?: boolean },
+  out: NodeJS.WritableStream
+): void => {
+  const records = filterHistory(readHistory(DEFAULT_FLEET), filter, now());
+  if (filter.json) {
+    out.write(`${JSON.stringify(records, null, 2)}\n`);
+    return;
+  }
+  out.write(renderAudit(records, styleFor(out)));
+};
+
 // Approve plan(s): reply to the cmux exit-plan feed item, then mark IMPLEMENTING
 // so the next Stop auto-advances. `spec` = "all" or ticket names / ids.
 export const approve = (
@@ -80,6 +163,16 @@ export const approve = (
     wt.gate = undefined;
     wt.note = undefined;
     wt.since = now();
+    appendHistory(DEFAULT_FLEET, {
+      event: "approve",
+      from: "PLAN_READY",
+      kind: "approve",
+      name: wt.name,
+      seq: 0,
+      to: wt.stage,
+      ts: now(),
+      workspaceId: wt.workspaceId,
+    });
     out.write(`${s.green("✓")} approved ${s.bold(wt.name)} → implementing\n`);
   }
   saveState(state);
@@ -108,6 +201,16 @@ export const reject = (
   wt.gate = undefined;
   wt.note = note;
   wt.since = now();
+  appendHistory(DEFAULT_FLEET, {
+    event: "reject",
+    from: "PLAN_READY",
+    kind: "reject",
+    name: wt.name,
+    seq: 0,
+    to: "PLANNING",
+    ts: now(),
+    workspaceId: wt.workspaceId,
+  });
   saveState(state);
   out.write(`${s.yellow("↩")} ${s.bold(wt.name)} back to planning: ${note}\n`);
 };

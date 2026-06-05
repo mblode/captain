@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveTargets } from "./commands";
-import type { FleetState, Stage } from "./types";
+import { filterHistory, resolveTargets } from "./commands";
+import type { FleetState, HistoryRecord, Stage } from "./types";
 
 const state = (...rows: [string, string, Stage][]): FleetState => ({
   fleetId: "f1",
@@ -73,5 +73,58 @@ describe("resolveTargets", () => {
       "PLAN_READY"
     );
     expect(matched).toHaveLength(1);
+  });
+});
+
+const rec = (name: string, ts: number, workspaceId = name): HistoryRecord => ({
+  event: "Stop",
+  from: "IMPLEMENTING",
+  kind: "advance",
+  name,
+  seq: ts,
+  to: "SIMPLIFY",
+  ts,
+  workspaceId,
+});
+
+describe("filterHistory", () => {
+  const log = [
+    rec("frontyard-tig-430", 100, "ws-a"),
+    rec("frontyard-tig-431", 200, "ws-b"),
+    rec("frontyard-tig-430", 300, "ws-a"),
+  ];
+
+  it("returns the whole log when no filter is given", () => {
+    expect(filterHistory(log, {}, 1000)).toHaveLength(3);
+  });
+
+  it("keeps only events newer than the --since window", () => {
+    // now=1000, since 800s → cutoff 200, so ts 100 drops out.
+    const out = filterHistory(log, { since: "800s" }, 1000);
+    expect(out.map((r) => r.ts)).toEqual([200, 300]);
+  });
+
+  it("supports compound durations like 1h30m", () => {
+    // 1h30m = 5400s; now=5500 → cutoff 100, so all three remain.
+    expect(filterHistory(log, { since: "1h30m" }, 5500)).toHaveLength(3);
+  });
+
+  it("ignores an unparseable --since rather than dropping everything", () => {
+    expect(filterHistory(log, { since: "soon" }, 1000)).toHaveLength(3);
+  });
+
+  it("narrows to a worktree by friendly substring", () => {
+    const out = filterHistory(log, { ref: "tig-430" }, 1000);
+    expect(out).toHaveLength(2);
+    expect(out.every((r) => r.name === "frontyard-tig-430")).toBe(true);
+  });
+
+  it("narrows to a worktree by exact workspace id", () => {
+    expect(filterHistory(log, { ref: "ws-b" }, 1000)).toHaveLength(1);
+  });
+
+  it("combines --since and --ref", () => {
+    const out = filterHistory(log, { ref: "tig-430", since: "800s" }, 1000);
+    expect(out.map((r) => r.ts)).toEqual([300]);
   });
 });

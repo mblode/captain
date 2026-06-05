@@ -52,6 +52,36 @@ describe("transition", () => {
     expect(transition(wt("READY_TO_MERGE"), ev("Stop"))).toBeNull();
   });
 
+  it("advances normally with no tuning or an empty policy (parity)", () => {
+    // Even with retries piled up, an uncapped stage keeps advancing — exactly
+    // as it did before self-tuning existed.
+    const busy = { ...wt("SIMPLIFY"), retries: 99 };
+    expect(transition(busy, ev("Stop"))).toMatchObject({
+      nextStage: "REVIEW",
+      send: "/pr-reviewer",
+    });
+    expect(transition(busy, ev("Stop"), { maxRetries: {} })).toMatchObject({
+      nextStage: "REVIEW",
+    });
+  });
+
+  it("escalates to a human gate once retries exhaust the learned budget", () => {
+    const tuning = { maxRetries: { SIMPLIFY: 2 } };
+    // Under budget: still advances.
+    expect(
+      transition({ ...wt("SIMPLIFY"), retries: 1 }, ev("Stop"), tuning)
+    ).toMatchObject({ nextStage: "REVIEW", send: "/pr-reviewer" });
+    // At/over budget: routes to BLOCKED instead of retrying forever.
+    const stuck = transition(
+      { ...wt("SIMPLIFY"), retries: 2 },
+      ev("Stop"),
+      tuning
+    );
+    expect(stuck?.nextStage).toBe("BLOCKED");
+    expect(stuck?.gate).toBe("needs-input");
+    expect(stuck?.send).toBeUndefined();
+  });
+
   it("routes AskUserQuestion to BLOCKED", () => {
     expect(
       transition(wt("IMPLEMENTING"), ev("AskUserQuestion"))?.nextStage

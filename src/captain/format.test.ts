@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { fmtAge, groupOf, renderStatus, style } from "./format";
-import type { Stage, Worktree } from "./types";
+import {
+  fmtAge,
+  fmtDuration,
+  groupOf,
+  renderAudit,
+  renderMetrics,
+  renderStatus,
+  style,
+} from "./format";
+import { computeMetrics } from "./metrics";
+import type { HistoryRecord, Stage, Worktree } from "./types";
 
 const plain = style(false);
 const wt = (name: string, stage: Stage, since = 0): Worktree => ({
@@ -12,6 +21,22 @@ const wt = (name: string, stage: Stage, since = 0): Worktree => ({
   since,
   stage,
   workspaceId: name,
+});
+
+const adv = (
+  id: string,
+  ts: number,
+  from: Stage,
+  to: Stage
+): HistoryRecord => ({
+  event: "Stop",
+  from,
+  kind: "advance",
+  name: id,
+  seq: ts,
+  to,
+  ts,
+  workspaceId: id,
 });
 
 describe("fmtAge", () => {
@@ -94,5 +119,77 @@ describe("renderStatus", () => {
       "running (pid 42)"
     );
     expect(out).toContain("all worktrees flowing");
+  });
+});
+
+describe("fmtDuration", () => {
+  it("formats bare seconds without the age framing", () => {
+    expect(fmtDuration(30)).toBe("<1m");
+    expect(fmtDuration(5 * 60)).toBe("5m");
+    expect(fmtDuration((2 * 60 + 5) * 60)).toBe("2h5m");
+  });
+});
+
+describe("renderMetrics", () => {
+  it("guides the user when nothing is recorded yet", () => {
+    const out = renderMetrics(computeMetrics([], [], 100), plain);
+    expect(out).toContain("no runs recorded yet");
+  });
+
+  it("renders fleet totals and a per-stage table", () => {
+    const history = [
+      adv("ws-1", 100, "IMPLEMENTING", "SIMPLIFY"),
+      adv("ws-1", 160, "SIMPLIFY", "REVIEW"),
+      adv("ws-1", 200, "REVIEW", "PR_OPEN"),
+      adv("ws-1", 220, "PR_OPEN", "BABYSITTING"),
+    ];
+    const out = renderMetrics(computeMetrics(history, [], 300), plain);
+    expect(out).toContain("PR-ready");
+    expect(out).toContain("STAGES");
+    expect(out).toContain("implementing");
+    expect(out).toContain("advance");
+  });
+});
+
+describe("renderAudit", () => {
+  it("guides the user when nothing is recorded yet", () => {
+    const out = renderAudit([], plain);
+    expect(out).toContain("no audit records yet");
+  });
+
+  it("renders each record with actor, stage flow, and the action", () => {
+    // 2026-06-09T10:00:00Z = 1780999200
+    const ts = 1_780_999_200;
+    const records: HistoryRecord[] = [
+      {
+        action: "/simplify",
+        event: "Stop",
+        from: "IMPLEMENTING",
+        kind: "advance",
+        name: "frontyard-tig-430",
+        seq: 1,
+        to: "SIMPLIFY",
+        ts,
+        workspaceId: "ws-1",
+      },
+      {
+        event: "approve",
+        from: "PLAN_READY",
+        kind: "approve",
+        name: "frontyard-tig-430",
+        seq: 0,
+        to: "IMPLEMENTING",
+        ts: ts + 60,
+        workspaceId: "ws-1",
+      },
+    ];
+    const out = renderAudit(records, plain);
+    expect(out).toContain("2 events");
+    // A timezone-stable stamp, the actor, the slash command, and the human action.
+    expect(out).toContain("06-09 10:00:00");
+    expect(out).toContain("watcher");
+    expect(out).toContain("/simplify");
+    expect(out).toContain("you");
+    expect(out).toContain("plan ready → implementing");
   });
 });
