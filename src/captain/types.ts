@@ -41,6 +41,21 @@ export interface FleetState {
   updatedAt: number;
   // keyed by workspaceId
   worktrees: Record<string, Worktree>;
+  // byte offset into intents.jsonl the watcher has already applied — its cursor
+  // over the append-only intent log, so each human action is applied exactly once.
+  intentsOffset?: number;
+}
+
+// A human decision (`approve`/`reject`) handed from the CLI to the watcher via the
+// append-only intent log. The watcher is the sole writer of state.json, so the CLI
+// never mutates it directly — it appends one of these and the watcher applies it.
+export interface Intent {
+  ts: number;
+  kind: "approve" | "reject";
+  // cmux workspace uuid the decision targets
+  workspaceId: string;
+  // revision feedback (reject only)
+  note?: string;
 }
 
 // The subset of a cmux event frame the watcher cares about.

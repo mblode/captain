@@ -27,19 +27,30 @@ describe("transition", () => {
     expect(t?.gate).toBe("plan");
   });
 
-  it("auto-advances the pipeline on Stop in the real cadence order", () => {
+  it("ignores a re-emitted ExitPlanMode once a worktree is past approval", () => {
+    // cmux re-emits frames and bypass-mode agents re-present plans mid-implement;
+    // neither may regress an implementing (or later) worktree back to PLAN_READY.
+    expect(transition(wt("IMPLEMENTING"), ev("ExitPlanMode"))).toBeNull();
+    expect(transition(wt("SIMPLIFY"), ev("ExitPlanMode"))).toBeNull();
+    expect(transition(wt("PR_OPEN"), ev("ExitPlanMode"))).toBeNull();
+    // ...but a re-emit while still parked at the gate stays idempotently gated.
+    expect(transition(wt("PLAN_READY"), ev("ExitPlanMode"))?.nextStage).toBe(
+      "PLAN_READY"
+    );
+  });
+
+  it("auto-advances the pipeline on Stop: review → simplify → ship", () => {
     expect(transition(wt("IMPLEMENTING"), ev("Stop"))).toMatchObject({
-      nextStage: "SIMPLIFY",
-      send: "/simplify",
-    });
-    expect(transition(wt("SIMPLIFY"), ev("Stop"))).toMatchObject({
       nextStage: "REVIEW",
       send: "/pr-reviewer",
     });
     expect(transition(wt("REVIEW"), ev("Stop"))).toMatchObject({
-      nextStage: "PR_OPEN",
-      send: "/pr-creator",
+      nextStage: "SIMPLIFY",
+      send: "/simplify",
     });
+    const ship = transition(wt("SIMPLIFY"), ev("Stop"));
+    expect(ship?.nextStage).toBe("PR_OPEN");
+    expect(ship?.send).toContain("/pr-creator");
     expect(transition(wt("PR_OPEN"), ev("Stop"))).toMatchObject({
       nextStage: "BABYSITTING",
       send: "/pr-babysitter",
@@ -57,11 +68,10 @@ describe("transition", () => {
     // as it did before self-tuning existed.
     const busy = { ...wt("SIMPLIFY"), retries: 99 };
     expect(transition(busy, ev("Stop"))).toMatchObject({
-      nextStage: "REVIEW",
-      send: "/pr-reviewer",
+      nextStage: "PR_OPEN",
     });
     expect(transition(busy, ev("Stop"), { maxRetries: {} })).toMatchObject({
-      nextStage: "REVIEW",
+      nextStage: "PR_OPEN",
     });
   });
 
@@ -70,7 +80,7 @@ describe("transition", () => {
     // Under budget: still advances.
     expect(
       transition({ ...wt("SIMPLIFY"), retries: 1 }, ev("Stop"), tuning)
-    ).toMatchObject({ nextStage: "REVIEW", send: "/pr-reviewer" });
+    ).toMatchObject({ nextStage: "PR_OPEN" });
     // At/over budget: routes to BLOCKED instead of retrying forever.
     const stuck = transition(
       { ...wt("SIMPLIFY"), retries: 2 },

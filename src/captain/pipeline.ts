@@ -6,20 +6,31 @@ import type {
   Worktree,
 } from "./types";
 
+// The slash command sent at PR-creation: commit + push first, then open the PR.
+// pr-creator handles the staging/title/description, but we say it explicitly so an
+// agent with uncommitted working-tree changes always commits and pushes them.
+const FINISH_SEND =
+  "Commit and push all changes, then create a GitHub PR with a short, natural title and description. /pr-creator";
+
 // The auto-advance pipeline: when a worktree in `stage` finishes a turn (Stop),
 // send the slash command and move to the next stage. The flow is:
-//   IMPLEMENTING → /simplify → SIMPLIFY → /pr-reviewer → REVIEW
-//                → /pr-creator → PR_OPEN → /pr-babysitter → BABYSITTING
-// derived from the developer's real cadence history (simplify 96 > pr-reviewer 36
-// > pr-creator 12 > pr-babysitter 29) — not an invented sequence. Keys are sorted
-// for the linter; the `next` field documents the actual order.
+//   IMPLEMENTING → /pr-reviewer → REVIEW → /simplify → SIMPLIFY
+//                → (commit+push) /pr-creator → PR_OPEN → /pr-babysitter → BABYSITTING
+// Review-then-simplify-then-ship, per the driver's preferred finish order. Keys are
+// sorted for the linter; the `next` field documents the actual order.
 const NEXT_ON_STOP: Partial<Record<Stage, { next: Stage; send: string }>> = {
-  IMPLEMENTING: { next: "SIMPLIFY", send: "/simplify" },
+  IMPLEMENTING: { next: "REVIEW", send: "/pr-reviewer" },
   PR_OPEN: { next: "BABYSITTING", send: "/pr-babysitter" },
-  // v1 advances REVIEW linearly; verdict-based retry (blockers → IMPLEMENTING) is v2.
-  REVIEW: { next: "PR_OPEN", send: "/pr-creator" },
-  SIMPLIFY: { next: "REVIEW", send: "/pr-reviewer" },
+  // v1 advances SIMPLIFY linearly; verdict-based retry (blockers → IMPLEMENTING) is v2.
+  REVIEW: { next: "SIMPLIFY", send: "/simplify" },
+  SIMPLIFY: { next: "PR_OPEN", send: FINISH_SEND },
 };
+
+// ExitPlanMode only legitimately gates BEFORE a plan is approved. cmux re-emits
+// ExitPlanMode frames, and bypass-permissions agents re-present their plan while
+// already implementing — neither must regress a worktree past approval back to a
+// plan gate (which would strand it: a later Stop at PLAN_READY never auto-advances).
+const PLANNABLE_FROM = new Set<Stage>(["ADOPTED", "PLANNING", "PLAN_READY"]);
 
 // Stages where a generic Notification means the agent is genuinely blocked on us,
 // rather than an incidental cue mid-work.
@@ -45,6 +56,11 @@ export const transition = (
 ): Transition | null => {
   switch (ev.hookEventName) {
     case "ExitPlanMode": {
+      // A re-emitted frame (or a bypass-mode re-plan) on an already-approved
+      // worktree is noise — ignore it so it can't knock the worktree back to a gate.
+      if (!PLANNABLE_FROM.has(wt.stage)) {
+        return null;
+      }
       return {
         gate: "plan",
         nextStage: "PLAN_READY",

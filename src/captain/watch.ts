@@ -1,10 +1,20 @@
-import { listWorkspaces, notify, readScreen, send } from "./control";
+import { basename } from "node:path";
+
+import {
+  feedList,
+  listWorkspaces,
+  notify,
+  readScreen,
+  replyExitPlan,
+  send,
+} from "./control";
 import type { CmuxWorkspace } from "./control";
 import { streamAgentEvents } from "./events";
 import { groupOf } from "./format";
 import { appendHistory, readHistory } from "./history";
+import { readIntentsFrom } from "./intents";
 import { computeMetrics } from "./metrics";
-import { transition } from "./pipeline";
+import { onPlanApproved, transition } from "./pipeline";
 import { cursorPath, DEFAULT_FLEET, loadState, now, saveState } from "./state";
 import { deriveTuning } from "./tuning";
 import type {
@@ -12,6 +22,7 @@ import type {
   GateKind,
   HookEvent,
   HistoryKind,
+  Intent,
   PipelineTuning,
   Stage,
   Worktree,
@@ -74,6 +85,12 @@ const reconcile = (
   workspaces: CmuxWorkspace[],
   match?: string
 ): void => {
+  // A failed or empty `workspace.list` (the cmux RPC is unreliable from a
+  // detached daemon) must NOT wipe the tracked fleet — treat it as "no data this
+  // tick" and leave existing worktrees intact. The event stream re-adopts anyway.
+  if (workspaces.length === 0) {
+    return;
+  }
   const selfId = state.captainWorkspaceId;
   const live = new Set<string>();
   for (const w of workspaces) {
@@ -117,6 +134,68 @@ const setStage = (wt: Worktree, stage: Stage): void => {
   }
 };
 
+// Apply one queued human decision from the intent log. `approve`/`reject` run in
+// a separate CLI process and only ever APPEND intents — the watcher (sole writer of
+// state.json) is what actually replies to the cmux plan gate and moves the stage,
+// so the two never race. Guarded on PLAN_READY so a duplicate or stale intent is a
+// no-op rather than yanking an already-implementing worktree backward.
+const applyIntent = (
+  state: FleetState,
+  intent: Intent,
+  opts: WatchOptions
+): void => {
+  const wt = state.worktrees[intent.workspaceId];
+  if (!wt || wt.stage !== "PLAN_READY") {
+    return;
+  }
+  const from = wt.stage;
+  const item = feedList(opts.env).find((f) => f.cwd === wt.cwd);
+  if (intent.kind === "approve") {
+    if (item) {
+      replyExitPlan(item.id, true, opts.env);
+    }
+    setStage(wt, onPlanApproved());
+    wt.gate = undefined;
+    wt.note = undefined;
+    record(wt.workspaceId, wt.name, {
+      event: "approve",
+      from,
+      kind: "approve",
+      to: wt.stage,
+    });
+    opts.log?.(`${wt.name} approved → implementing`);
+    return;
+  }
+  if (item) {
+    replyExitPlan(item.id, false, opts.env);
+  }
+  setStage(wt, "PLANNING");
+  wt.gate = undefined;
+  wt.note = intent.note;
+  record(wt.workspaceId, wt.name, {
+    event: "reject",
+    from,
+    kind: "reject",
+    to: "PLANNING",
+  });
+  opts.log?.(`${wt.name} rejected → planning: ${intent.note ?? ""}`);
+};
+
+// Drain every intent appended since our cursor and persist the new cursor. Cheap
+// to call on the hot path: with nothing new it reads a small file and returns.
+const drainIntents = (state: FleetState, opts: WatchOptions): void => {
+  const start = state.intentsOffset ?? 0;
+  const { intents, offset } = readIntentsFrom(DEFAULT_FLEET, start);
+  if (offset === start && intents.length === 0) {
+    return;
+  }
+  for (const intent of intents) {
+    applyIntent(state, intent, opts);
+  }
+  state.intentsOffset = offset;
+  saveState(state);
+};
+
 // Best-effort: pull a one-line summary of what a gate is asking, so `status` can
 // show it without opening the workspace. Returns undefined when nothing reads cleanly.
 const gateHint = (
@@ -144,10 +223,34 @@ const handleEvent = (
   if (ev.workspaceId === state.captainWorkspaceId) {
     return;
   }
-  // Not a tracked fleet worktree.
-  const wt = state.worktrees[ev.workspaceId];
+  // Not yet tracked — adopt straight from the live event stream. The cmux RPC
+  // view is unreliable, so the agent.hook frames (which carry cwd + workspace_id)
+  // are the real source of truth. Only adopt in-scope worktrees; the captain
+  // itself is already excluded above. New worktrees enter as ADOPTED, so
+  // `transition` won't auto-drive them until their plan is approved.
+  let wt = state.worktrees[ev.workspaceId];
   if (!wt) {
-    return;
+    if (!ev.cwd || (opts.match && !ev.cwd.includes(opts.match))) {
+      return;
+    }
+    const adoptedName = basename(ev.cwd);
+    wt = {
+      agent: agentOf(adoptedName),
+      cwd: ev.cwd,
+      name: adoptedName,
+      retries: 0,
+      since: now(),
+      stage: "ADOPTED",
+      workspaceId: ev.workspaceId,
+    };
+    state.worktrees[ev.workspaceId] = wt;
+    record(ev.workspaceId, adoptedName, {
+      event: "adopt",
+      from: "ADOPTED",
+      kind: "adopt",
+      to: "ADOPTED",
+    });
+    opts.log?.(`adopted ${adoptedName} from event stream`);
   }
   const result = transition(wt, ev, tuning);
   if (!result) {
@@ -248,6 +351,9 @@ export const watch = (input: {
   const opts: WatchOptions = { env: input.env, log: input.log, match };
   reconcile(state, listWorkspaces(opts.env), opts.match);
   saveState(state);
+  // Apply any decisions queued while no watcher was running (e.g. `approve` before
+  // `fanout` finished spawning, or between a crash and this restart).
+  drainIntents(state, opts);
   banner(state, opts);
 
   // The learned driving policy, recomputed from the audit log. Refreshed on each
@@ -262,15 +368,20 @@ export const watch = (input: {
     );
   let tuning = refreshTuning();
 
-  // Periodic reconcile catches worktrees spawned/closed after startup.
+  // Periodic reconcile catches worktrees spawned/closed after startup, and is a
+  // backstop drain in case the event stream is briefly idle when an intent lands.
   const timer = setInterval(() => {
     reconcile(state, listWorkspaces(opts.env), opts.match);
     saveState(state);
+    drainIntents(state, opts);
     tuning = refreshTuning();
   }, RECONCILE_MS);
   timer.unref?.();
 
-  streamAgentEvents(cursorPath(DEFAULT_FLEET), opts.env, (ev) =>
-    handleEvent(state, ev, opts, tuning)
-  );
+  // Drain queued human decisions before each event so an approval applies promptly
+  // and the event is handled against the worktree's fresh stage.
+  streamAgentEvents(cursorPath(DEFAULT_FLEET), opts.env, (ev) => {
+    drainIntents(state, opts);
+    handleEvent(state, ev, opts, tuning);
+  });
 };

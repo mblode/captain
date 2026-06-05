@@ -1,5 +1,4 @@
-import { feedList, replyExitPlan } from "./control";
-import { watcherHealth } from "./daemon";
+import { runningPid, watcherHealth } from "./daemon";
 import {
   renderAudit,
   renderMetrics,
@@ -8,10 +7,10 @@ import {
   useColor,
 } from "./format";
 import type { Style } from "./format";
-import { appendHistory, readHistory } from "./history";
+import { readHistory } from "./history";
+import { appendIntent } from "./intents";
 import { computeMetrics } from "./metrics";
-import { onPlanApproved } from "./pipeline";
-import { DEFAULT_FLEET, loadState, now, saveState } from "./state";
+import { DEFAULT_FLEET, loadState, now } from "./state";
 import type { FleetState, HistoryRecord, Worktree } from "./types";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
@@ -137,12 +136,22 @@ export const audit = (
 };
 
 // Approve plan(s): reply to the cmux exit-plan feed item, then mark IMPLEMENTING
+// A queued intent only takes effect when a watcher drains it; warn if none is up.
+const warnIfNoWatcher = (out: NodeJS.WritableStream, s: Style): void => {
+  if (!runningPid(DEFAULT_FLEET)) {
+    out.write(
+      s.dim("  (no watcher running — queued; it applies when one starts)\n")
+    );
+  }
+};
+
 // so the next Stop auto-advances. `spec` = "all" or ticket names / ids.
-export const approve = (
-  spec: string,
-  env: NodeJS.ProcessEnv,
-  out: NodeJS.WritableStream
-): void => {
+//
+// The CLI never writes state.json — that's the watcher's job alone (no two-writer
+// race). It appends an `approve` intent per target; the watcher drains the log,
+// replies to the cmux plan gate, and advances the worktree to IMPLEMENTING. If no
+// watcher is running, the intent is queued and applied the moment one starts.
+export const approve = (spec: string, out: NodeJS.WritableStream): void => {
   const s = styleFor(out);
   const state = loadState(DEFAULT_FLEET);
   const { matched, unknown } = resolveTargets(state, spec, "PLAN_READY");
@@ -153,36 +162,22 @@ export const approve = (
     out.write(s.dim("nothing to approve.\n"));
     return;
   }
-  const feed = feedList(env);
   for (const wt of matched) {
-    const item = feed.find((f) => f.cwd === wt.cwd);
-    if (item) {
-      replyExitPlan(item.id, true, env);
-    }
-    wt.stage = onPlanApproved();
-    wt.gate = undefined;
-    wt.note = undefined;
-    wt.since = now();
-    appendHistory(DEFAULT_FLEET, {
-      event: "approve",
-      from: "PLAN_READY",
+    appendIntent(DEFAULT_FLEET, {
       kind: "approve",
-      name: wt.name,
-      seq: 0,
-      to: wt.stage,
       ts: now(),
       workspaceId: wt.workspaceId,
     });
     out.write(`${s.green("✓")} approved ${s.bold(wt.name)} → implementing\n`);
   }
-  saveState(state);
+  warnIfNoWatcher(out, s);
 };
 
-// Reject a plan: reply with revision feedback and send the worktree back to PLANNING.
+// Reject a plan: queue a `reject` intent with the revision feedback. The watcher
+// replies to the plan gate with the note and sends the worktree back to PLANNING.
 export const reject = (
   ref: string,
   note: string,
-  env: NodeJS.ProcessEnv,
   out: NodeJS.WritableStream
 ): void => {
   const s = styleFor(out);
@@ -193,24 +188,12 @@ export const reject = (
     out.write(s.yellow(`no PLAN_READY worktree matches "${ref}"\n`));
     return;
   }
-  const item = feedList(env).find((f) => f.cwd === wt.cwd);
-  if (item) {
-    replyExitPlan(item.id, false, env);
-  }
-  wt.stage = "PLANNING";
-  wt.gate = undefined;
-  wt.note = note;
-  wt.since = now();
-  appendHistory(DEFAULT_FLEET, {
-    event: "reject",
-    from: "PLAN_READY",
+  appendIntent(DEFAULT_FLEET, {
     kind: "reject",
-    name: wt.name,
-    seq: 0,
-    to: "PLANNING",
+    note,
     ts: now(),
     workspaceId: wt.workspaceId,
   });
-  saveState(state);
   out.write(`${s.yellow("↩")} ${s.bold(wt.name)} back to planning: ${note}\n`);
+  warnIfNoWatcher(out, s);
 };

@@ -30,6 +30,7 @@ src/
     types.ts        # Stage, Worktree, FleetState, HookEvent, Transition, HistoryRecord, FleetMetrics, PipelineTuning
     state.ts        # DEFAULT_FLEET + atomic load/save of ~/.claude/captain/default/state.json + cursor
     history.ts      # append-only audit log ~/.claude/captain/default/history.jsonl (appendHistory/readHistory)
+    intents.ts      # append-only intent log ~/.claude/captain/default/intents.jsonl: approve/reject hand decisions to the watcher (single-writer)
     metrics.ts      # PURE: roll history + live state into FleetMetrics (durations, autonomy, intervention rate)
     tuning.ts       # PURE: deriveTuning(metrics) -> per-stage retry budgets (the self-improvement loop)
     daemon.ts       # singleton watcher: pidfile guard, ensureDaemon (detached spawn), stopDaemon
@@ -82,8 +83,8 @@ planned follow-up; this ships the read-side audit first.)
 
 - **ESM, bundler resolution**: extensionless relative imports (`./state`, not `./state.js`); `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
 - **The pure core stays pure** (`pipeline.ts`, `metrics.ts`, `tuning.ts`) — keep I/O (cmux, fs) out so they stay unit-testable; `transition` takes `tuning` as plain input data, not a fs read.
-- **History is append-only** (`history.ts`): one JSON line per record, so it never races the `state.json` temp+rename and a truncated tail line is just skipped on read. Safe to write from both the watcher and the `approve`/`reject` CLI process.
-- **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (see `isNewGate` in `watch.ts`), never double-notify.
+- **Append-only logs, single state writer** (`history.ts`, `intents.ts`): each is one JSON line per record, so it never races the `state.json` temp+rename and a truncated tail line is just skipped on read — safe to append from any process. The **watcher is the sole writer of `state.json`**: `approve`/`reject` never mutate it (that would race the watcher's live saves), they append an `intent` to `intents.jsonl`, and the watcher drains it via a byte-offset cursor (`state.intentsOffset`) — at startup, before each event, and on the reconcile timer — replying to the cmux plan gate and moving the stage itself. Exactly-once: the cursor only advances past complete lines.
+- **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (see `isNewGate` in `watch.ts`), never double-notify. A re-emitted `ExitPlanMode` (and a bypass-permissions re-plan) must not regress an already-approved worktree — `transition` only gates from the pre-approval stages (`PLANNABLE_FROM` in `pipeline.ts`).
 - **Never trust cmux's built-in status** (it desyncs); derive state from the agent event stream.
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.

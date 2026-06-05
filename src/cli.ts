@@ -103,7 +103,7 @@ program
   .description("approve plan(s): all, or comma-separated ticket names")
   .requiredOption("--plans <refs>", 'ticket names, or "all"')
   .action((options: { plans: string }) => {
-    approve(options.plans, process.env, process.stdout);
+    approve(options.plans, process.stdout);
   });
 
 program
@@ -112,7 +112,7 @@ program
   .requiredOption("--ref <ticket>", "the worktree's ticket name")
   .requiredOption("--note <text>", "what to change")
   .action((options: { note: string; ref: string }) => {
-    reject(options.ref, options.note, process.env, process.stdout);
+    reject(options.ref, options.note, process.stdout);
   });
 
 program
