@@ -22,7 +22,7 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: fanout | status | metrics | approve | reject | stop | watch
+  cli.ts            # Commander entry: fanout | status | metrics | audit | approve | reject | stop | watch
   runner.ts         # the inherited fan-out + armWatcher (writes match, ensures the daemon)
   cmux.ts git.ts linear.ts repo.ts issue.ts prompt.ts images.ts launch.ts progress.ts shell.ts
   captain/
@@ -36,8 +36,8 @@ src/
     control.ts      # cmux wrappers: workspace.list, send, read-screen, notify, feed reply
     events.ts       # spawn `cmux events --category agent --reconnect`, parse agent.hook frames
     watch.ts        # the live daemon: adopt -> react to events -> advance / park gates; records history + applies tuning
-    commands.ts     # status + metrics (read views) + approve/reject + friendly-id resolution
-    format.ts       # TTY-aware colour, stage glyphs, grouped status + the metrics view
+    commands.ts     # status + metrics + audit (read views) + approve/reject + friendly-id resolution
+    format.ts       # TTY-aware colour, stage glyphs, grouped status + the metrics & audit views
 ```
 
 ## DX surface
@@ -70,6 +70,13 @@ to a human gate instead of retrying forever. **Cold-start parity**: with an empt
 stage is capped, so driving is identical to pre-tuning behaviour; it only adapts once real
 outcomes accrue. The dead `Worktree.retries` field is now wired (bumped on busy-defer, reset on a
 clean stage change in `setStage`).
+
+`captain audit` is the governance trail over that same log: every advance, gate, and human
+approve/reject rendered chronologically with the actor (watcher vs. you), the stage flow, and the
+slash command sent — `filterHistory` (PURE, in `commands.ts`) narrows it by recency (`--since 2h`)
+or worktree (`--ref tig-430`), and `--json` stays plain for piping. It reuses `readHistory`; no new
+state. (The scoped-permission/policy layer that _constrains_ what the watcher may do unattended is a
+planned follow-up; this ships the read-side audit first.)
 
 ## Gotchas
 

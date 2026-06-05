@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { Command } from "commander";
 
-import { approve, metrics, reject, status } from "./captain/commands";
+import { approve, audit, metrics, reject, status } from "./captain/commands";
 import { stopDaemon } from "./captain/daemon";
 import { DEFAULT_FLEET } from "./captain/state";
 import { watch } from "./captain/watch";
@@ -28,6 +28,7 @@ Workflow:
   $ captain fanout TIG-430 TIG-431     worktrees + agents, and starts the watcher
   $ captain status                     one view: NEEDS YOU / IN FLIGHT / READY
   $ captain metrics                    velocity, autonomy, intervention rate
+  $ captain audit                      the governance trail of every decision
   $ captain approve --plans tig-430    approve plan(s)  (or: --plans all)
   $ captain reject  --ref tig-430 --note "…"            send a plan back
   $ captain stop                       stop the watcher
@@ -85,6 +86,16 @@ program
   .option("--json", "emit JSON")
   .action((options: { json?: boolean }) => {
     metrics(Boolean(options.json), process.stdout);
+  });
+
+program
+  .command("audit")
+  .description("the governance trail: every advance, gate, and human decision")
+  .option("--json", "emit JSON")
+  .option("--since <dur>", "only events within a window, e.g. 2h or 1d")
+  .option("--ref <ticket>", "only events for one worktree (ticket name or id)")
+  .action((options: { json?: boolean; since?: string; ref?: string }) => {
+    audit(options, process.stdout);
   });
 
 program

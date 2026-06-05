@@ -1,5 +1,11 @@
 import { now } from "./state";
-import type { FleetMetrics, Stage, Worktree } from "./types";
+import type {
+  FleetMetrics,
+  HistoryKind,
+  HistoryRecord,
+  Stage,
+  Worktree,
+} from "./types";
 
 // ANSI styling that no-ops when output isn't a TTY or NO_COLOR is set, so piped
 // output (and the LLM reading it via `--json`) stays clean.
@@ -244,6 +250,69 @@ export const renderMetrics = (m: FleetMetrics, s: Style): string => {
         ? `  ${s.dim(`(${plural(sm.advances, "advance")} · ${plural(sm.reworks, "rework")})`)}`
         : "";
     lines.push(`  ${paint(meta.glyph)} ${paint(label)} ${timing}${flow}`);
+  }
+  lines.push("");
+  return `${lines.join("\n")}\n`;
+};
+
+// Per-kind glyph + actor (who caused the record): approve/reject are human
+// decisions; everything else is the watcher acting on the event stream.
+const KIND_META: Record<HistoryKind, { glyph: string; actor: string }> = {
+  adopt: { actor: "watcher", glyph: "+" },
+  advance: { actor: "watcher", glyph: "→" },
+  approve: { actor: "you", glyph: "✓" },
+  gate: { actor: "watcher", glyph: "◆" },
+  reject: { actor: "you", glyph: "↩" },
+  rework: { actor: "watcher", glyph: "↻" },
+};
+
+const paintKind = (s: Style, kind: HistoryKind): Paint => {
+  if (kind === "approve") {
+    return s.green;
+  }
+  if (kind === "reject" || kind === "gate" || kind === "rework") {
+    return s.yellow;
+  }
+  if (kind === "adopt") {
+    return s.dim;
+  }
+  return s.cyan;
+};
+
+// Absolute, timezone-stable stamp ("06-05 10:00:00") — an audit trail wants the
+// real time of each event, not a now-relative age, and UTC keeps it deterministic.
+const fmtStamp = (ts: number): string =>
+  new Date(ts * 1000).toISOString().slice(5, 19).replace("T", " ");
+
+// The governance trail: the append-only history rendered chronologically — every
+// advance, gate, and human decision, with who caused it and the stage it moved.
+// Plain when not a TTY (style no-ops), so `--json` and pipes stay parseable.
+export const renderAudit = (records: HistoryRecord[], s: Style): string => {
+  const head = `${s.bold("Captain")}  ${s.dim("audit")}`;
+  if (records.length === 0) {
+    return [head, s.dim("  no audit records yet."), ""].join("\n");
+  }
+
+  const width = Math.min(40, Math.max(...records.map((r) => r.name.length), 8));
+  const lines = [
+    `${head}  ${s.dim(`· ${plural(records.length, "event")}`)}`,
+    "",
+  ];
+
+  for (const r of records) {
+    const meta = KIND_META[r.kind];
+    const paint = paintKind(s, r.kind);
+    const name = s.bold(r.name.padEnd(width));
+    const flow = `${STAGE_META[r.from].label} → ${STAGE_META[r.to].label}`;
+    let tail = "";
+    if (r.action) {
+      tail = `  ${s.dim(r.action)}`;
+    } else if (r.gate) {
+      tail = `  ${s.dim(`· ${r.gate}`)}`;
+    }
+    lines.push(
+      `  ${s.dim(fmtStamp(r.ts))}  ${paint(meta.glyph)} ${name} ${s.dim(meta.actor.padEnd(7))} ${paint(r.event.padEnd(12))} ${flow}${tail}`
+    );
   }
   lines.push("");
   return `${lines.join("\n")}\n`;

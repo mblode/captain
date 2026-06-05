@@ -4,6 +4,7 @@ import {
   fmtAge,
   fmtDuration,
   groupOf,
+  renderAudit,
   renderMetrics,
   renderStatus,
   style,
@@ -147,5 +148,48 @@ describe("renderMetrics", () => {
     expect(out).toContain("STAGES");
     expect(out).toContain("implementing");
     expect(out).toContain("advance");
+  });
+});
+
+describe("renderAudit", () => {
+  it("guides the user when nothing is recorded yet", () => {
+    const out = renderAudit([], plain);
+    expect(out).toContain("no audit records yet");
+  });
+
+  it("renders each record with actor, stage flow, and the action", () => {
+    // 2026-06-09T10:00:00Z = 1780999200
+    const ts = 1_780_999_200;
+    const records: HistoryRecord[] = [
+      {
+        action: "/simplify",
+        event: "Stop",
+        from: "IMPLEMENTING",
+        kind: "advance",
+        name: "frontyard-tig-430",
+        seq: 1,
+        to: "SIMPLIFY",
+        ts,
+        workspaceId: "ws-1",
+      },
+      {
+        event: "approve",
+        from: "PLAN_READY",
+        kind: "approve",
+        name: "frontyard-tig-430",
+        seq: 0,
+        to: "IMPLEMENTING",
+        ts: ts + 60,
+        workspaceId: "ws-1",
+      },
+    ];
+    const out = renderAudit(records, plain);
+    expect(out).toContain("2 events");
+    // A timezone-stable stamp, the actor, the slash command, and the human action.
+    expect(out).toContain("06-09 10:00:00");
+    expect(out).toContain("watcher");
+    expect(out).toContain("/simplify");
+    expect(out).toContain("you");
+    expect(out).toContain("plan ready → implementing");
   });
 });
