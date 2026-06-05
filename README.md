@@ -52,14 +52,16 @@ auto-driving them.)
 
 ## Commands
 
-| Command                                    | What it does                                          |
-| ------------------------------------------ | ----------------------------------------------------- |
+| Command                                    | What it does                                              |
+| ------------------------------------------ | --------------------------------------------------------- |
 | `captain fanout <ISSUE-ID…>`               | worktree + agent per Linear issue, and starts the watcher |
 | `captain status [--json]`                  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline |
-| `captain approve --plans <tickets\|all>`   | approve plan(s) → implementing                        |
-| `captain reject --ref <ticket> --note "…"` | send a plan back to planning                          |
-| `captain stop`                             | stop the background watcher                            |
-| `captain watch`                            | (rarely needed) restart the watcher in the foreground |
+| `captain metrics [--json]`                 | velocity, autonomy, intervention rate, per-stage timings  |
+| `captain audit [--since <dur>] [--ref …]`  | the governance trail of every advance, gate, and decision |
+| `captain approve --plans <tickets\|all>`   | approve plan(s) → implementing                            |
+| `captain reject --ref <ticket> --note "…"` | send a plan back to planning                              |
+| `captain stop`                             | stop the background watcher                               |
+| `captain watch`                            | (rarely needed) restart the watcher in the foreground     |
 
 Targets accept friendly ticket names (`tig-430`), not UUIDs. Run `captain --help` for the full
 workflow.
