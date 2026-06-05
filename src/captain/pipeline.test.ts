@@ -39,18 +39,19 @@ describe("transition", () => {
     );
   });
 
-  it("auto-advances the pipeline on Stop: review → simplify → ship", () => {
+  it("auto-advances the pipeline on Stop in the real cadence order", () => {
     expect(transition(wt("IMPLEMENTING"), ev("Stop"))).toMatchObject({
+      nextStage: "SIMPLIFY",
+      send: "/simplify",
+    });
+    expect(transition(wt("SIMPLIFY"), ev("Stop"))).toMatchObject({
       nextStage: "REVIEW",
       send: "/pr-reviewer",
     });
     expect(transition(wt("REVIEW"), ev("Stop"))).toMatchObject({
-      nextStage: "SIMPLIFY",
-      send: "/simplify",
+      nextStage: "PR_OPEN",
+      send: "/pr-creator",
     });
-    const ship = transition(wt("SIMPLIFY"), ev("Stop"));
-    expect(ship?.nextStage).toBe("PR_OPEN");
-    expect(ship?.send).toContain("/pr-creator");
     expect(transition(wt("PR_OPEN"), ev("Stop"))).toMatchObject({
       nextStage: "BABYSITTING",
       send: "/pr-babysitter",
@@ -68,10 +69,11 @@ describe("transition", () => {
     // as it did before self-tuning existed.
     const busy = { ...wt("SIMPLIFY"), retries: 99 };
     expect(transition(busy, ev("Stop"))).toMatchObject({
-      nextStage: "PR_OPEN",
+      nextStage: "REVIEW",
+      send: "/pr-reviewer",
     });
     expect(transition(busy, ev("Stop"), { maxRetries: {} })).toMatchObject({
-      nextStage: "PR_OPEN",
+      nextStage: "REVIEW",
     });
   });
 
@@ -80,7 +82,7 @@ describe("transition", () => {
     // Under budget: still advances.
     expect(
       transition({ ...wt("SIMPLIFY"), retries: 1 }, ev("Stop"), tuning)
-    ).toMatchObject({ nextStage: "PR_OPEN" });
+    ).toMatchObject({ nextStage: "REVIEW", send: "/pr-reviewer" });
     // At/over budget: routes to BLOCKED instead of retrying forever.
     const stuck = transition(
       { ...wt("SIMPLIFY"), retries: 2 },

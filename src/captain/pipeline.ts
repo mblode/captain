@@ -6,24 +6,19 @@ import type {
   Worktree,
 } from "./types";
 
-// The slash command sent at PR-creation: commit + push first, then open the PR.
-// pr-creator handles the staging/title/description, but we say it explicitly so an
-// agent with uncommitted working-tree changes always commits and pushes them.
-const FINISH_SEND =
-  "Commit and push all changes, then create a GitHub PR with a short, natural title and description. /pr-creator";
-
 // The auto-advance pipeline: when a worktree in `stage` finishes a turn (Stop),
 // send the slash command and move to the next stage. The flow is:
-//   IMPLEMENTING → /pr-reviewer → REVIEW → /simplify → SIMPLIFY
-//                → (commit+push) /pr-creator → PR_OPEN → /pr-babysitter → BABYSITTING
-// Review-then-simplify-then-ship, per the driver's preferred finish order. Keys are
-// sorted for the linter; the `next` field documents the actual order.
+//   IMPLEMENTING → /simplify → SIMPLIFY → /pr-reviewer → REVIEW
+//                → /pr-creator → PR_OPEN → /pr-babysitter → BABYSITTING
+// derived from the developer's real cadence history (simplify 96 > pr-reviewer 36
+// > pr-creator 12 > pr-babysitter 29) — not an invented sequence. Keys are sorted
+// for the linter; the `next` field documents the actual order.
 const NEXT_ON_STOP: Partial<Record<Stage, { next: Stage; send: string }>> = {
-  IMPLEMENTING: { next: "REVIEW", send: "/pr-reviewer" },
+  IMPLEMENTING: { next: "SIMPLIFY", send: "/simplify" },
   PR_OPEN: { next: "BABYSITTING", send: "/pr-babysitter" },
-  // v1 advances SIMPLIFY linearly; verdict-based retry (blockers → IMPLEMENTING) is v2.
-  REVIEW: { next: "SIMPLIFY", send: "/simplify" },
-  SIMPLIFY: { next: "PR_OPEN", send: FINISH_SEND },
+  // v1 advances REVIEW linearly; verdict-based retry (blockers → IMPLEMENTING) is v2.
+  REVIEW: { next: "PR_OPEN", send: "/pr-creator" },
+  SIMPLIFY: { next: "REVIEW", send: "/pr-reviewer" },
 };
 
 // ExitPlanMode only legitimately gates BEFORE a plan is approved. cmux re-emits
