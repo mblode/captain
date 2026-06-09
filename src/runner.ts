@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { ensureDaemon } from "./captain/daemon";
@@ -11,10 +11,12 @@ import { downloadIssueImages } from "./images";
 import { parseIssueInput, slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
 import { fetchLinearIssue } from "./linear";
+import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
 import { createProgress, withPrefix } from "./progress";
 import type { Progress } from "./progress";
-import { renderPrompt } from "./prompt";
+import { renderPrompt, renderPromptExtras } from "./prompt";
 import { resolveRepo } from "./repo";
+import { renderRubric, RUBRIC_RELPATH } from "./rubric";
 import { commandExists } from "./shell";
 import type { CliOptions, WorktreeResult } from "./types";
 
@@ -135,6 +137,48 @@ const launchViaCmux = async (
   });
 };
 
+// Keep `.captain/` (rubric + verdict) out of every worktree's diff. Linked
+// worktrees share the main checkout's `.git/info/exclude`, so one append covers
+// the whole fleet; nothing is ever committed.
+const excludeCaptainDir = async (repoRoot: string): Promise<void> => {
+  const excludePath = join(repoRoot, ".git", "info", "exclude");
+  const current = await readFile(excludePath, "utf-8").catch(() => "");
+  if (current.split("\n").includes(".captain/")) {
+    return;
+  }
+  await mkdir(dirname(excludePath), { recursive: true });
+  await appendFile(
+    excludePath,
+    `${current.endsWith("\n") || current === "" ? "" : "\n"}.captain/\n`
+  );
+};
+
+// Close the two loops around the base prompt: write the worktree's definition
+// of done (`.captain/rubric.md`) and wire the per-repo fleet memory, then
+// append the finishing-protocol + fleet-memory sections.
+const withLoopExtras = async (
+  prompt: string,
+  worktreePath: string,
+  repoRoot: string,
+  issue: Parameters<typeof renderRubric>[0],
+  displayId: string,
+  env: NodeJS.ProcessEnv
+): Promise<string> => {
+  const { text } = renderRubric(issue, displayId);
+  await mkdir(join(worktreePath, ".captain"), { recursive: true });
+  await writeFile(join(worktreePath, RUBRIC_RELPATH), text);
+  await excludeCaptainDir(repoRoot);
+  const memoryPath = ensureMemoryFile(repoRoot, env);
+  return (
+    prompt +
+    renderPromptExtras({
+      memory: readMemoryExcerpt(repoRoot, env),
+      memoryPath,
+      rubricPath: RUBRIC_RELPATH,
+    })
+  );
+};
+
 const prepareIssue = async (
   token: string,
   context: PrepareContext
@@ -181,6 +225,15 @@ const prepareIssue = async (
     skipFetch: true,
     slug,
   });
+
+  prompt = await withLoopExtras(
+    prompt,
+    worktree.worktreePath,
+    repo.repoRoot,
+    issue,
+    parsedIssue.displayId,
+    env
+  );
 
   return { displayId: parsedIssue.displayId, prompt, worktree };
 };

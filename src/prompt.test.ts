@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderPrompt } from "./prompt";
+import { renderPrompt, renderPromptExtras } from "./prompt";
 import type { LinearIssue } from "./types";
 
 describe("prompt rendering", () => {
@@ -48,5 +48,41 @@ describe("prompt rendering", () => {
     expect(renderPrompt(undefined, "ENG-999")).toBe(
       "Work on Linear issue ENG-999."
     );
+  });
+});
+
+describe("prompt extras", () => {
+  it("is empty with no extras (the base prompt is byte-identical)", () => {
+    expect(renderPromptExtras({})).toBe("");
+  });
+
+  it("renders the finishing protocol around the rubric path", () => {
+    const out = renderPromptExtras({ rubricPath: ".captain/rubric.md" });
+    expect(out).toContain("<finishing-protocol>");
+    expect(out).toContain(".captain/rubric.md");
+    expect(out).toContain("fresh-context verifier");
+    expect(out).toContain("write the verdict file");
+    expect(out).not.toContain("<fleet-memory>");
+  });
+
+  it("renders the memory excerpt and the verified-only write rule", () => {
+    const out = renderPromptExtras({
+      memory: "- [TIG-1 2026-06-01] run yarn install first",
+      memoryPath: "/mem/repo/learnings.md",
+    });
+    expect(out).toContain("<fleet-memory>");
+    expect(out).toContain("run yarn install first");
+    expect(out).toContain("/mem/repo/learnings.md");
+    expect(out).toContain("VERIFIED this run");
+    expect(out).not.toContain("<finishing-protocol>");
+  });
+
+  it("omits the consult block when there is nothing learned yet", () => {
+    const out = renderPromptExtras({
+      memory: "",
+      memoryPath: "/mem/repo/learnings.md",
+    });
+    expect(out).not.toContain("consult these");
+    expect(out).toContain("append 1-3 distilled learnings");
   });
 });

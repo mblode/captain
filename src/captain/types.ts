@@ -12,7 +12,7 @@ export type Stage =
   | "READY_TO_MERGE"
   | "BLOCKED";
 
-export type GateKind = "plan" | "question" | "needs-input";
+export type GateKind = "plan" | "question" | "needs-input" | "pr-ready";
 
 export interface Worktree {
   // cmux workspace uuid (event payload.workspace_id)
@@ -34,6 +34,8 @@ export interface Worktree {
   // set while a human gate is pending
   gate?: GateKind;
   note?: string;
+  // outcome of the agent-side verifier run (.captain/verdict.json), once seen
+  verdict?: "pass" | "fail";
 }
 
 export interface FleetState {
@@ -60,6 +62,21 @@ export interface Intent {
   workspaceId: string;
   // revision feedback (reject only)
   note?: string;
+}
+
+// The agent-side verifier's report, written to <worktree>/.captain/verdict.json
+// per the finishing protocol. The watcher only reads pass/fail + hash; the
+// criteria array is evidence for the human reviewing the gate.
+export interface Verdict {
+  issue: string;
+  rubricHash: string;
+  verdict: "pass" | "fail";
+  criteria: { name: string; pass: boolean; evidence: string }[];
+  summary: string;
+  // the opened PR, when the agent includes it — wires Worktree.prUrl so the
+  // status merge hint is real
+  prUrl?: string;
+  ts: number;
 }
 
 // The subset of a cmux event frame the watcher cares about.
@@ -92,7 +109,8 @@ export type HistoryKind =
   | "approve"
   | "gate"
   | "reject"
-  | "rework";
+  | "rework"
+  | "verdict";
 
 export interface HistoryRecord {
   // epoch seconds
@@ -109,6 +127,9 @@ export interface HistoryRecord {
   // slash command injected on an advance
   action?: string;
   gate?: GateKind;
+  // the why behind a human/escalation record: reject feedback, gate hint, halt
+  // reason, or verdict summary — the substrate the memory distill reads
+  note?: string;
 }
 
 // Per-stage rollup: how long worktrees sit here, and how reliably the watcher

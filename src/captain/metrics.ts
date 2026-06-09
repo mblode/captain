@@ -32,9 +32,11 @@ const bump = (m: Map<Stage, number>, k: Stage): void => {
   m.set(k, (m.get(k) ?? 0) + 1);
 };
 
-// A block = the agent parked on a question/needs-input gate (not a routine plan gate).
+// A block = the agent parked on a question/needs-input gate (not a routine plan
+// gate). A failed verdict escalates to the same gate, so it counts too.
 const isBlock = (r: HistoryRecord): boolean =>
-  r.kind === "gate" && (r.gate === "question" || r.gate === "needs-input");
+  (r.kind === "gate" || r.kind === "verdict") &&
+  (r.gate === "question" || r.gate === "needs-input");
 
 // Group the log by worktree, each list sorted into chronological order.
 const groupByWs = (history: HistoryRecord[]): Map<string, HistoryRecord[]> => {

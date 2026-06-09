@@ -101,8 +101,9 @@ const row = (wt: Worktree, s: Style, width: number): string => {
   const name = wt.name.padEnd(width);
   const label = meta.label.padEnd(14);
   const detail = wt.gate ? s.dim(`· ${wt.gate}`) : "";
+  const verified = wt.verdict === "pass" ? ` ${s.green("✓ verified")}` : "";
   const pr = wt.prUrl ? `  ${s.dim(wt.prUrl)}` : "";
-  return `  ${paint(meta.glyph)} ${s.bold(name)} ${paint(label)} ${s.dim(fmtAge(wt.since).padStart(8))} ${detail}${pr}`;
+  return `  ${paint(meta.glyph)} ${s.bold(name)} ${paint(label)} ${s.dim(fmtAge(wt.since).padStart(8))} ${detail}${verified}${pr}`;
 };
 
 // The inline "how to resolve this" lines shown under a worktree that's parked at
@@ -264,10 +265,11 @@ const KIND_META: Record<HistoryKind, { glyph: string; actor: string }> = {
   gate: { actor: "watcher", glyph: "◆" },
   reject: { actor: "you", glyph: "↩" },
   rework: { actor: "watcher", glyph: "↻" },
+  verdict: { actor: "agent", glyph: "⚖" },
 };
 
 const paintKind = (s: Style, kind: HistoryKind): Paint => {
-  if (kind === "approve") {
+  if (kind === "approve" || kind === "verdict") {
     return s.green;
   }
   if (kind === "reject" || kind === "gate" || kind === "rework") {

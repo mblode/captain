@@ -18,13 +18,18 @@ import { runRequired } from "./shell";
 
 const cleanup: string[] = [];
 
+// Fleet-memory writes land here instead of the real ~/.claude/captain/memory.
+const memoryDir = join(tmpdir(), `lw-test-memory-${process.pid}`);
+
 afterEach(async () => {
+  cleanup.push(memoryDir);
   for (const path of cleanup.splice(0)) {
     await rm(path, { force: true, recursive: true });
   }
 });
 
 const safeEnv = (): NodeJS.ProcessEnv => ({
+  CAPTAIN_MEMORY_DIR: memoryDir,
   HOME: process.env.HOME,
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
 });
@@ -129,6 +134,43 @@ describe("runner integration", () => {
     ).toBe("tst-123");
     expect(output.value()).toContain("Work on Linear issue TST-123.");
     expect(output.value()).toContain(`cd ${worktree}`);
+  });
+
+  it("writes the rubric, wires memory, and injects both loop sections", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+    const env = safeEnv();
+
+    await runLinearWorktree({
+      cwd: repo,
+      env,
+      print: true,
+      stdout: output.stream,
+      tokens: ["TST-123"],
+    });
+
+    const worktree = join(root, "src-tst-123");
+    const rubric = await readFile(
+      join(worktree, ".captain", "rubric.md"),
+      "utf-8"
+    );
+    expect(rubric).toContain("# Definition of done — TST-123");
+    expect(rubric).toContain("## How to verify");
+    // The rubric must never show up in the worktree's diff.
+    expect(
+      await readFile(join(repo, ".git", "info", "exclude"), "utf-8")
+    ).toContain(".captain/");
+    // The fleet memory file exists and the prompt closes both loops.
+    const memory = join(
+      env.CAPTAIN_MEMORY_DIR as string,
+      "src",
+      "learnings.md"
+    );
+    expect(await readFile(memory, "utf-8")).toContain("## Inbox");
+    expect(output.value()).toContain("<finishing-protocol>");
+    expect(output.value()).toContain("<fleet-memory>");
+    expect(output.value()).toContain(memory);
   });
 
   it("errors when not in a git repo and no --repo is given", async () => {

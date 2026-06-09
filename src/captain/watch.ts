@@ -27,6 +27,12 @@ import type {
   Stage,
   Worktree,
 } from "./types";
+import {
+  checkVerdict,
+  expectedRubricHash,
+  readVerdict,
+  VERDICT_STAGES,
+} from "./verdict";
 
 const RECONCILE_MS = 30_000;
 const DEFAULT_STALL_SECS = 1800;
@@ -63,6 +69,7 @@ const record = (
     seq?: number;
     action?: string;
     gate?: GateKind;
+    note?: string;
   }
 ): void => {
   appendHistory(DEFAULT_FLEET, {
@@ -72,6 +79,7 @@ const record = (
     gate: rec.gate,
     kind: rec.kind,
     name,
+    note: rec.note,
     seq: rec.seq ?? 0,
     to: rec.to,
     ts: now(),
@@ -178,6 +186,7 @@ const applyIntent = (
     event: "reject",
     from,
     kind: "reject",
+    note: intent.note,
     to: "PLANNING",
   });
   opts.log?.(`${wt.name} rejected → planning: ${intent.note ?? ""}`);
@@ -251,11 +260,116 @@ const enforceHalts = (
       from,
       gate: result.gate,
       kind: "gate",
+      note: result.notify,
       to: result.nextStage,
     });
     opts.log?.(`⚑ ${result.notify}`);
     saveState(state);
   }
+};
+
+// Surface an agent-written verdict (<cwd>/.captain/verdict.json): a verified
+// pass parks the pr-ready gate (wiring READY_TO_MERGE), a fail escalates to
+// BLOCKED with the verifier's summary. checkVerdict is pure and idempotent
+// (null once a gate is set), so calling this from both the Stop path and the
+// reconcile sweep never double-fires. Returns true when the verdict moved the
+// worktree — the caller skips the normal advance for that event.
+const applyVerdictFor = (
+  state: FleetState,
+  wt: Worktree,
+  opts: WatchOptions,
+  seq = 0
+): boolean => {
+  if (!VERDICT_STAGES.has(wt.stage) || wt.gate) {
+    return false;
+  }
+  const verdict = readVerdict(wt.cwd);
+  const result = verdict
+    ? checkVerdict(wt, verdict, expectedRubricHash(wt.cwd))
+    : null;
+  if (!(verdict && result)) {
+    return false;
+  }
+  const from = wt.stage;
+  setStage(wt, result.nextStage);
+  wt.gate = result.gate;
+  wt.verdict = verdict.verdict;
+  wt.note = verdict.summary;
+  wt.prUrl = verdict.prUrl ?? wt.prUrl;
+  if (verdict.verdict === "pass") {
+    notify(
+      "Captain · ready to merge",
+      `${wt.name}: ${verdict.summary}`,
+      opts.env
+    );
+  } else {
+    const n = pendingCount(state);
+    notify(
+      `Captain · ${n} need${n === 1 ? "s" : ""} you`,
+      `${wt.name}: ${result.notify}`,
+      opts.env
+    );
+  }
+  record(wt.workspaceId, wt.name, {
+    event: "verdict",
+    from,
+    gate: result.gate,
+    kind: "verdict",
+    note: verdict.summary,
+    seq,
+    to: result.nextStage,
+  });
+  opts.log?.(
+    `${verdict.verdict === "pass" ? "✓" : "⚑"} ${wt.name}: ${result.notify}`
+  );
+  saveState(state);
+  return true;
+};
+
+// Reconcile-tick sweep: a verdict written after the final Stop (or under a
+// manually-driven agent that emits no events) still surfaces within one tick.
+const enforceVerdicts = (state: FleetState, opts: WatchOptions): void => {
+  for (const wt of Object.values(state.worktrees)) {
+    if (wt.workspaceId === state.captainWorkspaceId) {
+      continue;
+    }
+    applyVerdictFor(state, wt, opts);
+  }
+};
+
+// Adopt an untracked worktree straight from the live event stream. The cmux RPC
+// view is unreliable, so the agent.hook frames (which carry cwd + workspace_id)
+// are the real source of truth. Only adopts in-scope worktrees. New worktrees
+// enter as ADOPTED, so `transition` won't auto-drive them until their plan is
+// approved. Returns undefined for out-of-scope frames.
+const adoptFromEvent = (
+  state: FleetState,
+  ev: HookEvent,
+  opts: WatchOptions
+): Worktree | undefined => {
+  if (!ev.cwd || (opts.match && !ev.cwd.includes(opts.match))) {
+    return undefined;
+  }
+  const adoptedName = basename(ev.cwd);
+  const wt: Worktree = {
+    agent: agentOf(adoptedName),
+    cwd: ev.cwd,
+    lastSeen: now(),
+    name: adoptedName,
+    retries: 0,
+    since: now(),
+    stage: "ADOPTED",
+    workspaceId: ev.workspaceId,
+  };
+  state.worktrees[ev.workspaceId] = wt;
+  record(ev.workspaceId, adoptedName, {
+    event: "adopt",
+    from: "ADOPTED",
+    kind: "adopt",
+    to: "ADOPTED",
+  });
+  opts.log?.(`adopted ${adoptedName} from event stream`);
+  return wt;
 };
 
 const handleEvent = (
@@ -268,40 +382,19 @@ const handleEvent = (
   if (ev.workspaceId === state.captainWorkspaceId) {
     return;
   }
-  // Not yet tracked — adopt straight from the live event stream. The cmux RPC
-  // view is unreliable, so the agent.hook frames (which carry cwd + workspace_id)
-  // are the real source of truth. Only adopt in-scope worktrees; the captain
-  // itself is already excluded above. New worktrees enter as ADOPTED, so
-  // `transition` won't auto-drive them until their plan is approved.
-  let wt = state.worktrees[ev.workspaceId];
+  const wt = state.worktrees[ev.workspaceId] ?? adoptFromEvent(state, ev, opts);
   if (!wt) {
-    if (!ev.cwd || (opts.match && !ev.cwd.includes(opts.match))) {
-      return;
-    }
-    const adoptedName = basename(ev.cwd);
-    wt = {
-      agent: agentOf(adoptedName),
-      cwd: ev.cwd,
-      lastSeen: now(),
-      name: adoptedName,
-      retries: 0,
-      since: now(),
-      stage: "ADOPTED",
-      workspaceId: ev.workspaceId,
-    };
-    state.worktrees[ev.workspaceId] = wt;
-    record(ev.workspaceId, adoptedName, {
-      event: "adopt",
-      from: "ADOPTED",
-      kind: "adopt",
-      to: "ADOPTED",
-    });
-    opts.log?.(`adopted ${adoptedName} from event stream`);
+    return;
   }
   // Any event is a sign of life — reset the stall clock before the early-out so
   // even events that produce no transition still count as activity. Independent
   // of `since` (which setStage only resets on a stage change).
   wt.lastSeen = now();
+  // A finished turn is the moment to look for the agent's verdict file: a
+  // verified pass must win over blindly advancing (e.g. PR_OPEN → babysitter).
+  if (ev.hookEventName === "Stop" && applyVerdictFor(state, wt, opts, ev.seq)) {
+    return;
+  }
   const result = transition(wt, ev, tuning);
   if (!result) {
     return;
@@ -368,6 +461,7 @@ const handleEvent = (
       from,
       gate: result.gate,
       kind: "gate",
+      note: wt.note,
       seq: ev.seq,
       to: result.nextStage,
     });
@@ -430,6 +524,7 @@ export const watch = (input: {
     if (haltsEnabled) {
       enforceHalts(state, opts, stallSecs);
     }
+    enforceVerdicts(state, opts);
   }, RECONCILE_MS);
   timer.unref?.();
 

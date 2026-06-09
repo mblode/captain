@@ -22,6 +22,14 @@ skill is the steering wheel — the `captain` CLI is the engine. Pairs with the 
   answer "what's blocked" from it — **never re-read 20 screens**.
 - Human-gated stages: **PLAN_READY** (mandatory — implementation never starts un-approved),
   **BLOCKED**, **READY_TO_MERGE**. Everything else flows on its own.
+- **The verdict gate.** Fan-out writes a definition of done into each worktree
+  (`.captain/rubric.md`); the agent must run a fresh-context verifier sub-agent against it and
+  write `.captain/verdict.json` before finishing. The watcher marks READY_TO_MERGE only on a
+  verified pass (`✓ verified` in status); a failed verdict parks BLOCKED with the verifier's
+  summary. No verdict = the worktree just stays at babysitting, same as before.
+- **Fleet memory.** `~/.claude/captain/memory/<repo>/learnings.md` is shared across every run on
+  a repo: fan-out injects its `## Rules` (curated) and recent `## Inbox` (raw) into each agent's
+  prompt, and agents append verified learnings to the Inbox at end of run.
 
 ## Setup
 
@@ -33,13 +41,15 @@ skill is the steering wheel — the `captain` CLI is the engine. Pairs with the 
 
 ## The loop (what you do)
 
-| You say | Run |
-|---|---|
-| "status" / "what's blocked" / "what's ready" | `captain status` (`--json` for parsing) — one view: NEEDS YOU / IN FLIGHT / READY, each gate carrying its inline resolve command and each PR its merge hint |
-| "show me the plans" | for each `PLAN_READY`, `cmux read-screen --workspace <id> --scrollback` once; summarize **all together** with each issue's `requirements-erosion` anchors so scope drift is spottable in one pass |
-| "approve all plans" | `captain approve --plans all` (or comma-separated ticket names) |
-| "send 404 back: don't touch auth" | `captain reject --ref tig-404 --note "…"` |
-| "stop the captain" | `captain stop` (tears down the watcher) |
+| You say                                      | Run                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "status" / "what's blocked" / "what's ready" | `captain status` (`--json` for parsing) — one view: NEEDS YOU / IN FLIGHT / READY, each gate carrying its inline resolve command and each PR its merge hint                                                                                                                                                    |
+| "show me the plans"                          | for each `PLAN_READY`, `cmux read-screen --workspace <id> --scrollback` once; summarize **all together** with each issue's `requirements-erosion` anchors so scope drift is spottable in one pass                                                                                                              |
+| "approve all plans"                          | `captain approve --plans all` (or comma-separated ticket names)                                                                                                                                                                                                                                                |
+| "send 404 back: don't touch auth"            | `captain reject --ref tig-404 --note "…"`                                                                                                                                                                                                                                                                      |
+| "what's verified"                            | `captain status` — READY rows carry `✓ verified` plus the verdict summary; spot-read `<worktree>/.captain/verdict.json`'s criteria array before merging                                                                                                                                                        |
+| "distill the fleet's learnings"              | open `~/.claude/captain/memory/<repo>/learnings.md`; promote Inbox bullets that held up into `## Rules` (rewrite them as general rules), delete slop and stale entries. `captain audit` shows the why behind rejects/blocks/verdicts (the `note` field) — use it to spot recurring failure causes worth a rule |
+| "stop the captain"                           | `captain stop` (tears down the watcher)                                                                                                                                                                                                                                                                        |
 
 ## Gotchas
 
@@ -50,6 +60,9 @@ skill is the steering wheel — the `captain` CLI is the engine. Pairs with the 
 - **Never guess off-script questions.** `BLOCKED` worktrees are surfaced verbatim — answer in that
   workspace with `cmux send --workspace <id> "…\n"`, or `reject` if it's a plan.
 - **Stops at PR-ready.** Merging and deploying stay with you (no auto-merge).
+- **Never trust a one-line verdict summary.** The verdict gates the _label_, not the merge — a
+  lazy agent can skip its verifier. Spot-read the verdict's per-criterion evidence before merging;
+  a suspiciously thin criteria array means the verifier run probably didn't happen.
 - **One watcher, auto-started by `fanout`.** It's a detached background process (not a cmux
   workspace), pidfile-guarded so re-running `fanout` never double-spawns, and self-excluding for
   free. Restart-safe — it resumes from the event cursor with no missed events. `captain stop` ends it.
