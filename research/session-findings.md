@@ -39,32 +39,32 @@ fleet of cmux worktrees Linear-ticket→PR-ready. Core pieces:
 2. **Fleet-wipe on a flaky `cmux rpc workspace.list`.** The watcher's periodic
    `reconcile` pruned EVERY tracked worktree whenever `listWorkspaces()` returned empty
    (the RPC intermittently returned empty from the detached daemon), and busy events
-   never re-adopted. One empty list = whole fleet gone from `status`. *(Fixed this
+   never re-adopted. One empty list = whole fleet gone from `status`. _(Fixed this
    session: adopt worktrees directly from the event-stream frames (cwd+workspace_id),
-   and never prune on an empty list.)*
+   and never prune on an empty list.)_
 
 3. **Re-emitted `ExitPlanMode` flapped IMPLEMENTING→PLAN_READY.** cmux re-emits hook
    frames, and bypass-permissions agents re-present plans mid-implement; the watcher
    `setStage(PLAN_READY)` on every one, knocking approved worktrees back to a gate and
-   stranding the pipeline (a later Stop at PLAN_READY never auto-advances). *(Fixed:
-   `ExitPlanMode` only gates from pre-approval stages.)*
+   stranding the pipeline (a later Stop at PLAN*READY never auto-advances). *(Fixed:
+   `ExitPlanMode` only gates from pre-approval stages.)\_
 
 4. **Two-writer `state.json` clobber.** `approve`/`reject` ran as a SEPARATE process and
    wrote `state.json`; the running watcher held stale in-memory state and clobbered the
    write on its next event-save, so **approvals didn't stick** (worktrees snapped back to
-   PLAN_READY). The `ensureDaemon` comment even claimed "sole writer… no race" — untrue.
+   PLAN*READY). The `ensureDaemon` comment even claimed "sole writer… no race" — untrue.
    *(Fixed this session: single-writer. approve/reject only append to `intents.jsonl`;
-   the watcher drains via a byte-offset cursor and is the sole state.json writer.)*
+   the watcher drains via a byte-offset cursor and is the sole state.json writer.)\_
 
 5. **`captain status` prints an unusable read command.** It shows
    `cmux read-screen --workspace frontyard-tig-368 …`, but `read-screen` needs a
-   `workspace:N` ref or UUID — the worktree *name* is rejected ("Invalid workspace
+   `workspace:N` ref or UUID — the worktree _name_ is rejected ("Invalid workspace
    handle"). Every "read the plan" copy-paste failed; had to map names→refs by hand.
 
 6. **Agents run in BYPASS-PERMISSIONS mode and self-drive.** They do NOT reliably wait
    at the ExitPlanMode gate — several blew past it and were already editing/implementing
-   while captain still showed PLAN_READY. So captain's central human-gate (plan approval)
-   is partly moot, and captain's per-Stop driving can *collide* with an agent that is
+   while captain still showed PLAN*READY. So captain's central human-gate (plan approval)
+   is partly moot, and captain's per-Stop driving can \_collide* with an agent that is
    already self-running the next step. This is arguably the biggest conceptual tension:
    **captain assumes it is the sole driver, but cmux agents in bypass mode drive
    themselves.**
@@ -72,7 +72,7 @@ fleet of cmux worktrees Linear-ticket→PR-ready. Core pieces:
 7. **Finished/idle worktrees look BLOCKED and can't be advanced.** An agent that
    finished implementing and printed "want me to commit and open a PR?" emits a
    `Notification` at idle → captain marks it BLOCKED (a false "needs you"). And captain
-   can only advance on a *Stop event*; an idle/done worktree emits no new Stop, so
+   can only advance on a _Stop event_; an idle/done worktree emits no new Stop, so
    captain can't nudge it forward without a manual `cmux send`.
 
 8. **Fresh worktrees have no `node_modules`.** Every agent hit "Couldn't find the
@@ -87,7 +87,7 @@ fleet of cmux worktrees Linear-ticket→PR-ready. Core pieces:
 
 10. **Heavy overlap with the `cmux` skill / CLI.** captain wraps `cmux workspace.list`,
     `cmux events`, `cmux read-screen`, `cmux send`, `cmux notify`, `cmux rpc
-    feed.list/exit_plan.reply`. cmux itself is a fleet-of-agents orchestrator with its
+feed.list/exit_plan.reply`. cmux itself is a fleet-of-agents orchestrator with its
     own skill ("god mode over your cmux sessions"). Unclear how much captain
     re-implements what cmux now does natively (esp. feed/gates and status).
 
@@ -108,7 +108,7 @@ fleet of cmux worktrees Linear-ticket→PR-ready. Core pieces:
     affordance for it.
 
 14. **Editing captain mid-flight is painful.** Every fix required: edit → `npm run
-    build` → kill watcher → relaunch → re-point pidfile. A long-lived compiled daemon is
+build` → kill watcher → relaunch → re-point pidfile. A long-lived compiled daemon is
     awkward to iterate on while a live fleet depends on it.
 
 ## Things that worked well (keep these)
@@ -142,4 +142,4 @@ fleet of cmux worktrees Linear-ticket→PR-ready. Core pieces:
 - Skill: the `captain` skill (SKILL.md) under the user's skills dir; pairs with the
   `cmux` and `linear-worktree` skills.
 - Stack: Node ≥22, tsdown, vitest, oxlint, ultracite (oxfmt). `npm run build/test/
-  typecheck/check/fix`.
+typecheck/check/fix`.
