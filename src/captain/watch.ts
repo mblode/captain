@@ -14,7 +14,7 @@ import { groupOf } from "./format";
 import { appendHistory, readHistory } from "./history";
 import { readIntentsFrom } from "./intents";
 import { computeMetrics } from "./metrics";
-import { onPlanApproved, transition } from "./pipeline";
+import { checkHalt, onPlanApproved, transition } from "./pipeline";
 import { cursorPath, DEFAULT_FLEET, loadState, now, saveState } from "./state";
 import { deriveTuning } from "./tuning";
 import type {
@@ -29,6 +29,7 @@ import type {
 } from "./types";
 
 const RECONCILE_MS = 30_000;
+const DEFAULT_STALL_SECS = 1800;
 const BUSY = /esc to interrupt/iu;
 // A line that reads like a real question/prompt (prose, not TUI chrome).
 const PROSE = /^[A-Za-z][\w ,'"()/-]{14,118}[.?]?$/u;
@@ -106,6 +107,7 @@ const reconcile = (
       state.worktrees[w.id] = {
         agent: agentOf(w.name),
         cwd: w.cwd,
+        lastSeen: now(),
         name: w.name,
         retries: 0,
         since: now(),
@@ -213,6 +215,49 @@ const pendingCount = (state: FleetState): number =>
   Object.values(state.worktrees).filter((w) => groupOf(w.stage) === "needs-you")
     .length;
 
+// Sweep every live worktree for a hung loop (a silently-stalled agent emits no
+// events, so handleEvent never fires for it). Routes a stall into the same human
+// BLOCKED gate path as any other escalation. Once a worktree is BLOCKED it's no
+// longer HALTABLE, so checkHalt returns null next sweep — no double-notify.
+const enforceHalts = (
+  state: FleetState,
+  opts: WatchOptions,
+  stallSecs: number
+): void => {
+  for (const wt of Object.values(state.worktrees)) {
+    if (wt.workspaceId === state.captainWorkspaceId) {
+      continue;
+    }
+    const result = checkHalt(wt, now(), stallSecs);
+    if (!result) {
+      continue;
+    }
+    const from = wt.stage;
+    setStage(wt, result.nextStage);
+    if (result.gate) {
+      wt.gate = result.gate;
+    }
+    // result.notify is the bare reason; the status row already shows the name, so
+    // keep the note clean and only prefix the name for the (context-free) toast.
+    wt.note = result.notify;
+    const n = pendingCount(state);
+    notify(
+      `Captain · ${n} need${n === 1 ? "s" : ""} you`,
+      `${wt.name}: ${result.notify}`,
+      opts.env
+    );
+    record(wt.workspaceId, wt.name, {
+      event: "halt",
+      from,
+      gate: result.gate,
+      kind: "gate",
+      to: result.nextStage,
+    });
+    opts.log?.(`⚑ ${result.notify}`);
+    saveState(state);
+  }
+};
+
 const handleEvent = (
   state: FleetState,
   ev: HookEvent,
@@ -237,6 +282,7 @@ const handleEvent = (
     wt = {
       agent: agentOf(adoptedName),
       cwd: ev.cwd,
+      lastSeen: now(),
       name: adoptedName,
       retries: 0,
       since: now(),
@@ -252,6 +298,10 @@ const handleEvent = (
     });
     opts.log?.(`adopted ${adoptedName} from event stream`);
   }
+  // Any event is a sign of life — reset the stall clock before the early-out so
+  // even events that produce no transition still count as activity. Independent
+  // of `since` (which setStage only resets on a stage change).
+  wt.lastSeen = now();
   const result = transition(wt, ev, tuning);
   if (!result) {
     return;
@@ -349,6 +399,8 @@ export const watch = (input: {
   const match = input.env.CAPTAIN_MATCH || state.match;
   state.match = match;
   const opts: WatchOptions = { env: input.env, log: input.log, match };
+  const stallSecs = Number(input.env.CAPTAIN_STALL_SECS) || DEFAULT_STALL_SECS;
+  const haltsEnabled = input.env.CAPTAIN_NO_HALT !== "1";
   reconcile(state, listWorkspaces(opts.env), opts.match);
   saveState(state);
   // Apply any decisions queued while no watcher was running (e.g. `approve` before
@@ -375,6 +427,9 @@ export const watch = (input: {
     saveState(state);
     drainIntents(state, opts);
     tuning = refreshTuning();
+    if (haltsEnabled) {
+      enforceHalts(state, opts, stallSecs);
+    }
   }, RECONCILE_MS);
   timer.unref?.();
 

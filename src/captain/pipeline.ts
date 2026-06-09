@@ -27,6 +27,18 @@ const NEXT_ON_STOP: Partial<Record<Stage, { next: Stage; send: string }>> = {
 // plan gate (which would strand it: a later Stop at PLAN_READY never auto-advances).
 const PLANNABLE_FROM = new Set<Stage>(["ADOPTED", "PLANNING", "PLAN_READY"]);
 
+// Working stages the watcher actively drives — a long event-silence here means a
+// hung agent. Excludes ADOPTED (transient), BABYSITTING (legitimately polls a PR
+// for a long time), and the human gates (PLAN_READY/READY_TO_MERGE/BLOCKED), which
+// idle by design and must not be auto-halted.
+const HALTABLE = new Set<Stage>([
+  "IMPLEMENTING",
+  "PLANNING",
+  "PR_OPEN",
+  "REVIEW",
+  "SIMPLIFY",
+]);
+
 // Stages where a generic Notification means the agent is genuinely blocked on us,
 // rather than an incidental cue mid-work.
 const GATED_FROM = new Set<Stage>([
@@ -106,6 +118,31 @@ export const transition = (
       return null;
     }
   }
+};
+
+// Pure: the watcher's reconcile-timer guard for a hung loop. A silently-hung agent
+// emits no events, so transition() never fires for it — this catches it off
+// wall-clock. The signal is event-silence (lastSeen), not time-in-stage (since), so
+// a long but healthy turn that keeps emitting events is never falsely halted.
+export const checkHalt = (
+  wt: Worktree,
+  nowSec: number,
+  stallSecs: number
+): Transition | null => {
+  if (!HALTABLE.has(wt.stage) || wt.gate) {
+    return null;
+  }
+  const idleSecs = nowSec - (wt.lastSeen ?? wt.since);
+  if (idleSecs < stallSecs) {
+    return null;
+  }
+  // `notify` is the bare reason (single source of truth): the watcher uses it
+  // verbatim as the status-row note and prefixes the worktree name for the toast.
+  return {
+    gate: "needs-input",
+    nextStage: "BLOCKED",
+    notify: `no activity for ${Math.round(idleSecs / 60)}m`,
+  };
 };
 
 // Approving a plan is a human action (not an event): the agent now implements.

@@ -59,6 +59,13 @@ watcher-health header. `stop` tears the daemon down. `CAPTAIN_NO_WATCH=1` opts o
 The advance pipeline (`NEXT_ON_STOP` in `pipeline.ts`) is derived from real cadence usage:
 `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`, stopping at PR-ready.
 
+Beyond event-driven advancement, the 30s reconcile timer sweeps for hung loops (`enforceHalts` +
+the pure `checkHalt` in `pipeline.ts`): a worktree event-silent past `CAPTAIN_STALL_SECS`
+(default 1800 = 30m) while in a working stage (PLANNING/IMPLEMENTING/SIMPLIFY/REVIEW/PR_OPEN) is a
+silently-hung agent — no events means `transition` never fires for it — so it's parked at a
+`BLOCKED` gate ("needs you"). BABYSITTING (legitimately long-polls a PR), ADOPTED (transient), and
+the human gates (PLAN_READY/READY_TO_MERGE/BLOCKED) idle by design and are exempt.
+
 ## Metrics & the self-improvement loop
 
 Every transition the watcher makes is appended to `history.jsonl` (`history.ts`) — advances,
@@ -90,4 +97,5 @@ planned follow-up; this ships the read-side audit first.)
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.
 - **Self-exclusion is free**: the auto-started watcher is a detached process, not a cmux workspace, so it never appears in `cmux workspace list` and can't drive itself (no `CMUX_CAPTAIN` needed). The `CMUX_WORKSPACE_ID` fallback in `watch.ts` only matters for a manual in-workspace `captain watch`.
 - **Singleton watcher**: `ensureDaemon` is pidfile-guarded — re-running `fanout` never double-spawns. Tests must set `CAPTAIN_NO_WATCH=1` to avoid spawning a real daemon / writing real `~/.claude` state.
+- **Stall halt keys off event-silence, not work time**: `checkHalt` measures `wt.lastSeen` (epoch secs of the last _handled event_), NOT `wt.since` (time-in-stage) — a long but healthy turn that keeps emitting hook events resets the clock and is never falsely halted; only a genuinely event-silent agent escalates. The sweep rides the existing 30s reconcile tick (no new timer). Cold-start parity holds the same way the self-tuning loop does: because it watches silence, not elapsed work, normal/fast runs are unchanged no matter how long a stage legitimately runs. Knobs mirror the watcher opt-outs: `CAPTAIN_STALL_SECS` (default 1800) tunes the threshold, `CAPTAIN_NO_HALT=1` disables the sweep (parallels `CAPTAIN_NO_WATCH=1`). The halt lands in `history.jsonl` as `kind:"gate"` / `gate:"needs-input"` / `event:"halt"`, so `audit` shows it and `metrics` counts it as an intervention/block.
 - **Behaviour parity**: preserve the inherited `fanout` modes (single-issue, fan-out, `--print`).

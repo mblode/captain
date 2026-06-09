@@ -26,6 +26,10 @@ export interface Worktree {
   since: number;
   // bounded REVIEW/QA loop guard
   retries: number;
+  // epoch seconds of the last hook event the watcher handled for this worktree —
+  // the stall clock (event-silence, not time-in-stage). Optional for back-compat
+  // with state.json written before this field existed.
+  lastSeen?: number;
   prUrl?: string;
   // set while a human gate is pending
   gate?: GateKind;

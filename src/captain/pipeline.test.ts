@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { isHumanGated, onPlanApproved, transition } from "./pipeline";
+import {
+  checkHalt,
+  isHumanGated,
+  onPlanApproved,
+  transition,
+} from "./pipeline";
 import type { HookEvent, Stage, Worktree } from "./types";
 
-const wt = (stage: Stage): Worktree => ({
+const wt = (stage: Stage, over: Partial<Worktree> = {}): Worktree => ({
   agent: "claude",
   cwd: "/repo/tig-1",
   name: "tig-1",
@@ -11,6 +16,7 @@ const wt = (stage: Stage): Worktree => ({
   since: 0,
   stage,
   workspaceId: "ws-1",
+  ...over,
 });
 
 const ev = (hookEventName: string): HookEvent => ({
@@ -117,6 +123,55 @@ describe("transition", () => {
   it("ignores SubagentStop and SessionStart", () => {
     expect(transition(wt("IMPLEMENTING"), ev("SubagentStop"))).toBeNull();
     expect(transition(wt("ADOPTED"), ev("SessionStart"))).toBeNull();
+  });
+});
+
+describe("checkHalt", () => {
+  const stallSecs = 1800;
+
+  it("halts a HALTABLE worktree quiet past the stall threshold", () => {
+    const t = checkHalt(wt("IMPLEMENTING", { lastSeen: 0 }), 2000, stallSecs);
+    expect(t?.nextStage).toBe("BLOCKED");
+    expect(t?.gate).toBe("needs-input");
+    expect(t?.send).toBeUndefined();
+  });
+
+  it("returns null when recent activity is within the threshold", () => {
+    expect(
+      checkHalt(wt("IMPLEMENTING", { lastSeen: 1900 }), 2000, stallSecs)
+    ).toBeNull();
+  });
+
+  it("returns null for non-HALTABLE stages even when long quiet", () => {
+    expect(
+      checkHalt(wt("ADOPTED", { lastSeen: 0 }), 9000, stallSecs)
+    ).toBeNull();
+    expect(
+      checkHalt(wt("BABYSITTING", { lastSeen: 0 }), 9000, stallSecs)
+    ).toBeNull();
+    expect(
+      checkHalt(wt("PLAN_READY", { lastSeen: 0 }), 9000, stallSecs)
+    ).toBeNull();
+  });
+
+  it("returns null when a gate is already set", () => {
+    expect(
+      checkHalt(
+        wt("IMPLEMENTING", { gate: "needs-input", lastSeen: 0 }),
+        9000,
+        stallSecs
+      )
+    ).toBeNull();
+  });
+
+  it("falls back to since when lastSeen is undefined", () => {
+    // No lastSeen on pre-field state: the stall clock reads `since`.
+    expect(
+      checkHalt(wt("REVIEW", { since: 0 }), 2000, stallSecs)?.nextStage
+    ).toBe("BLOCKED");
+    expect(
+      checkHalt(wt("REVIEW", { since: 1900 }), 2000, stallSecs)
+    ).toBeNull();
   });
 });
 
