@@ -6,7 +6,9 @@ import {
   groupOf,
   renderAudit,
   renderStatus,
+  repoOf,
   style,
+  ticketFrom,
 } from "./format";
 import type { HistoryRecord, Stage, Worktree } from "./types";
 
@@ -108,6 +110,84 @@ describe("fmtDuration", () => {
     expect(fmtDuration(30)).toBe("<1m");
     expect(fmtDuration(5 * 60)).toBe("5m");
     expect(fmtDuration((2 * 60 + 5) * 60)).toBe("2h5m");
+  });
+
+  it("switches to days past 48h so a week-old gate reads 7d, not 168h", () => {
+    expect(fmtDuration(47 * 3600)).toBe("47h0m");
+    expect(fmtDuration(5 * 86_400)).toBe("5d");
+  });
+});
+
+describe("ticketFrom / repoOf", () => {
+  it("extracts the canonical ticket id, lowercased", () => {
+    expect(ticketFrom("chat-tig-487")).toBe("tig-487");
+    expect(ticketFrom("TIG-488-c3-general-tool")).toBe("tig-488");
+    expect(ticketFrom("chat")).toBeUndefined();
+  });
+
+  it("prefers the persisted repo, deriving from the name only as fallback", () => {
+    expect(repoOf({ ...wt("x-tig-1", "PLANNING"), repo: "linkiq" })).toBe(
+      "linkiq"
+    );
+    expect(repoOf(wt("frontyard-tig-430", "PLANNING"))).toBe("frontyard");
+    // No ticket in the name → the name itself is the best label.
+    expect(repoOf(wt("chat", "PLANNING"))).toBe("chat");
+  });
+});
+
+describe("renderStatus — repo-aware view", () => {
+  const t = Math.floor(Date.now() / 1000);
+
+  it("addresses cmux hints by workspace UUID, not the display name", () => {
+    const gated = {
+      ...wt("chat-tig-487", "PLAN_READY"),
+      workspaceId: "ws-uuid-487",
+    };
+    const blocked = {
+      ...wt("chat-tig-488", "BLOCKED"),
+      workspaceId: "ws-uuid-488",
+    };
+    const out = renderStatus([gated, blocked], plain, "running (pid 1)");
+    expect(out).toContain("cmux read-screen --workspace ws-uuid-487");
+    expect(out).toContain("cmux send --workspace ws-uuid-488");
+    expect(out).not.toContain("--workspace chat-tig-487");
+  });
+
+  it("tags rows with their repo when the fleet spans more than one", () => {
+    const a = { ...wt("a-tig-1", "PLANNING"), repo: "linkiq" };
+    const b = { ...wt("b-tig-2", "PLANNING"), repo: "notifications" };
+    const out = renderStatus([a, b], plain, "running (pid 1)");
+    expect(out).toContain("linkiq");
+    expect(out).toContain("notifications");
+  });
+
+  it("folds long-parked gates into a stale count, unfolded by --all", () => {
+    const fresh = wt("linkiq-tig-494", "PLAN_READY", t - 60);
+    const old = wt("frontyard-tig-430", "PLAN_READY", t - 5 * 86_400);
+    const out = renderStatus([fresh, old], plain, "running (pid 1)");
+    expect(out).toContain("+1 stale — captain status --all");
+    expect(out).not.toContain("frontyard-tig-430");
+    expect(out).toContain("linkiq-tig-494");
+
+    const all = renderStatus([fresh, old], plain, "running (pid 1)", {
+      all: true,
+    });
+    expect(all).toContain("frontyard-tig-430");
+    expect(all).not.toContain("stale —");
+  });
+
+  it("cues how long a shown gate has been parked, from time-in-stage", () => {
+    const parked = wt("linkiq-tig-494", "PLAN_READY", t - 2 * 86_400);
+    const out = renderStatus([parked], plain, "running (pid 1)", {
+      staleSecs: 30 * 86_400,
+    });
+    expect(out).toContain("parked 2d");
+  });
+
+  it("never cues parked on a working stage", () => {
+    const working = wt("linkiq-tig-494", "IMPLEMENTING", t - 2 * 86_400);
+    const out = renderStatus([working], plain, "running (pid 1)");
+    expect(out).not.toContain("parked");
   });
 });
 

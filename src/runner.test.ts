@@ -13,7 +13,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { launchPlanMode } from "./launch";
-import { runLinearWorktree, worktreeMatch } from "./runner";
+import {
+  collapsedWorktreeNotes,
+  runLinearWorktree,
+  worktreeMatch,
+} from "./runner";
 import { runRequired } from "./shell";
 
 const cleanup: string[] = [];
@@ -399,5 +403,29 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
     expect(launchLog).toContain(
       "--permission-mode plan --allow-dangerously-skip-permissions prompt body"
     );
+  });
+});
+
+describe("collapsedWorktreeNotes", () => {
+  it("stays silent when the workspace list is empty (unreliable RPC)", () => {
+    expect(collapsedWorktreeNotes(["/wt/chat-tig-487"], [])).toEqual([]);
+  });
+
+  it("stays silent when every worktree owns a workspace", () => {
+    const notes = collapsedWorktreeNotes(
+      ["/wt/chat-tig-487", "/wt/chat-tig-488"],
+      [{ cwd: "/wt/chat-tig-487" }, { cwd: "/other/root/chat-tig-488" }]
+    );
+    expect(notes).toEqual([]);
+  });
+
+  it("names the ticket whose worktree got no dedicated workspace", () => {
+    const notes = collapsedWorktreeNotes(
+      ["/wt/chat-tig-487", "/wt/chat-tig-488"],
+      [{ cwd: "/wt/chat-tig-487" }, { cwd: "/wt/chat" }]
+    );
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("chat-tig-488");
+    expect(notes[0]).toContain("captain fanout TIG-488");
   });
 });

@@ -11,6 +11,7 @@ import {
   watcherHealth,
   watchLogPath,
 } from "./captain/daemon";
+import { msg, style, useColor } from "./captain/format";
 import { DEFAULT_FLEET, loadState } from "./captain/state";
 import { watch } from "./captain/watch";
 import { CliError } from "./errors";
@@ -30,18 +31,22 @@ program
     "after",
     `
 Workflow:
-  $ captain fanout TIG-430 TIG-431     worktrees + agents, and starts the watcher
-  $ captain status                     one view: NEEDS YOU / IN FLIGHT / READY
-  $ captain audit                      the governance trail of every decision
-  $ captain approve --plans tig-430    approve plan(s)  (or: --plans all)
-  $ captain reject  --ref tig-430 --note "…"            send a plan back
-  $ captain restart                    bounce the watcher (e.g. after a rebuild)
-  $ captain stop                       stop the watcher
+  $ captain fanout TIG-430 TIG-431       worktrees + agents, and starts the watcher
+  $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
+  $ captain status --repo linkiq         one repo's worktrees only
+  $ captain status --all                 include long-parked stale gates
+  $ captain audit --since 2h             the governance trail of every decision
+  $ captain audit --ref tig-430          one worktree's trail
+  $ captain approve --plans tig-430      approve plan(s)  (or a repo, or: all)
+  $ captain reject --ref tig-430 --note "…"   send a plan back
+  $ captain restart                      bounce the watcher (e.g. after a rebuild)
+  $ captain stop                         stop the watcher
 
 fanout starts a background watcher that reacts to cmux agent events live,
 auto-advances each worktree (simplify → review → PR → babysit) and stops at
 PR-ready. You only make the gated decisions: approve plans, answer questions,
-merge. Everything runs on one fleet; status shows how to resolve each gate.`
+merge. Everything runs on one fleet; status shows how to resolve each gate.
+Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
   );
 
 // Inherited: create a worktree + cmux workspace per Linear issue (fan-out).
@@ -81,9 +86,21 @@ program
     "the one view: NEEDS YOU / IN FLIGHT / READY, with resolve commands"
   )
   .option("--json", "emit JSON")
-  .action((options: { json?: boolean }) => {
-    status(Boolean(options.json), process.stdout);
-  });
+  .option("--repo <name>", "only one repo's worktrees, e.g. linkiq")
+  .option("--needs", "only the NEEDS YOU group")
+  .option("--ready", "only the READY group")
+  .option("--all", "include stale gates parked past CAPTAIN_STALE_SECS")
+  .action(
+    (options: {
+      json?: boolean;
+      repo?: string;
+      needs?: boolean;
+      ready?: boolean;
+      all?: boolean;
+    }) => {
+      status(options, process.stdout);
+    }
+  );
 
 program
   .command("audit")
@@ -117,8 +134,11 @@ program
   .description("stop the background watcher")
   .action(() => {
     const pid = stopDaemon(DEFAULT_FLEET);
+    const s = style(useColor(process.stdout));
     process.stdout.write(
-      pid ? `stopped watcher (pid ${pid})\n` : "no watcher was running\n"
+      pid
+        ? `${msg.ok(s, `stopped watcher (pid ${pid})`)}\n`
+        : "no watcher was running\n"
     );
   });
 
@@ -139,8 +159,9 @@ program
       loadState(DEFAULT_FLEET).match
     );
     if (!started) {
+      const s = style(useColor(process.stderr));
       process.stderr.write(
-        `watcher: could not start — check ${watchLogPath(DEFAULT_FLEET)}\n`
+        `${msg.err(s, "watcher could not start")}\n${msg.hint(s, `tail -20 ${watchLogPath(DEFAULT_FLEET)}`)}\n`
       );
       process.exitCode = 1;
       return;
@@ -152,12 +173,24 @@ const main = async (): Promise<void> => {
   try {
     await program.parseAsync();
   } catch (error) {
+    const s = style(useColor(process.stderr));
     if (error instanceof CliError) {
-      process.stderr.write(`${error.message}\n`);
+      process.stderr.write(`${msg.err(s, error.message)}\n`);
       process.exitCode = error.exitCode;
       return;
     }
-    throw error;
+    // An unexpected failure: one readable line, never a raw stack — unless
+    // CAPTAIN_DEBUG=1 asks for it.
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${msg.err(s, `unexpected error: ${detail}`)}\n`);
+    if (process.env.CAPTAIN_DEBUG) {
+      process.stderr.write(`${error instanceof Error ? error.stack : ""}\n`);
+    } else {
+      process.stderr.write(
+        `${msg.hint(s, "set CAPTAIN_DEBUG=1 for the stack")}\n`
+      );
+    }
+    process.exitCode = 1;
   }
 };
 

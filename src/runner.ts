@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
+import { realCmux } from "./captain/control";
 import { ensureDaemon } from "./captain/daemon";
+import { ticketFrom } from "./captain/format";
 import { DEFAULT_FLEET, loadState } from "./captain/state";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { CliError } from "./errors";
@@ -97,6 +99,31 @@ const armWatcher = async (
       );
     }
   }
+};
+
+// After a fan-out, every worktree we created should own a dedicated cmux
+// workspace (matched by cwd). One that doesn't has collapsed into an existing
+// window — its agent runs somewhere captain can't track as a distinct worktree.
+// Surface that at the moment it happens instead of silently dropping a ticket.
+// An empty workspace list is the cmux RPC being unreliable, not evidence of
+// collapse — no false alarms.
+export const collapsedWorktreeNotes = (
+  worktreePaths: string[],
+  workspaces: { cwd: string }[]
+): string[] => {
+  if (workspaces.length === 0) {
+    return [];
+  }
+  const owned = (path: string): boolean =>
+    workspaces.some(
+      (w) => w.cwd === path || w.cwd.endsWith(`/${basename(path)}`)
+    );
+  return worktreePaths
+    .filter((p) => !owned(p))
+    .map(
+      (p) =>
+        `note: ${basename(p)} has no dedicated cmux workspace — its agent likely attached to an existing window. Close that window, then re-run: captain fanout ${ticketFrom(basename(p))?.toUpperCase() ?? basename(p)}`
+    );
 };
 
 const readStdinTokens = (): string[] => {
@@ -278,6 +305,12 @@ const dispatch = async ({
     stdout.write(
       `spawned ${tokens.length} workspaces - each running claude in plan mode from its worktree\n`
     );
+    for (const note of collapsedWorktreeNotes(
+      worktreePaths,
+      realCmux(env).listWorkspaces()
+    )) {
+      stdout.write(`  ${note}\n`);
+    }
     await armWatcher(worktreePaths, env, stdout);
     return 0;
   }

@@ -1,6 +1,23 @@
-import { basename } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 
 import { run, runRequired } from "../shell";
+
+// Short repo label for a worktree path: a linked worktree's --git-common-dir
+// resolves to the main checkout's .git, whose parent dir name is the repo
+// ("linkiq"). Fail-soft: any git failure (not a repo, fake test path) →
+// undefined, so adoption never breaks on it.
+export const repoLabel = (
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined => {
+  const raw = run("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { env });
+  const common = raw.stdout.trim();
+  if (raw.status !== 0 || !common) {
+    return undefined;
+  }
+  const gitDir = isAbsolute(common) ? common : resolve(cwd, common);
+  return basename(dirname(gitDir)) || undefined;
+};
 
 // Thin wrappers over the cmux CLI for the captain's "hands". Each reuses the
 // shared spawn helpers so behaviour matches the rest of the tool.
@@ -93,7 +110,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     if (raw.status !== 0) {
       return [];
     }
-    const parsed = JSON.parse(raw.stdout) as {
+    let parsed: {
       workspaces?: {
         id: string;
         ref: string;
@@ -101,6 +118,13 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
         current_directory?: string | null;
       }[];
     };
+    try {
+      parsed = JSON.parse(raw.stdout) as typeof parsed;
+    } catch {
+      // garbage from an unreliable RPC reads as "no data this tick", the same
+      // contract reconcile() already assumes for an empty list.
+      return [];
+    }
     return (parsed.workspaces ?? []).map((w) => {
       const cwd = w.current_directory ?? "";
       return {

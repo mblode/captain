@@ -1,5 +1,14 @@
 import { runningPid, watcherHealth } from "./daemon";
-import { renderAudit, renderStatus, style, useColor } from "./format";
+import {
+  DEFAULT_STALE_SECS,
+  groupOf,
+  msg,
+  renderAudit,
+  renderStatus,
+  repoOf,
+  style,
+  useColor,
+} from "./format";
 import type { Style } from "./format";
 import { readHistory } from "./history";
 import { appendIntent } from "./intents";
@@ -8,9 +17,9 @@ import type { FleetState, HistoryRecord, Worktree } from "./types";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
 
-// Resolve a user-friendly target spec to worktrees. Accepts "all", or a
-// comma-separated list of ticket names ("tig-430"), substrings, or workspace ids
-// — so nobody has to paste a uuid.
+// Resolve a user-friendly target spec to worktrees. Accepts "all", a repo label
+// ("linkiq" → every gated worktree of that repo), or a comma-separated list of
+// ticket names ("tig-430"), substrings, or workspace ids — never a pasted uuid.
 export const resolveTargets = (
   state: FleetState,
   spec: string,
@@ -22,9 +31,22 @@ export const resolveTargets = (
   }
   const matched: Worktree[] = [];
   const unknown: string[] = [];
+  const push = (hit: Worktree): void => {
+    if (!matched.includes(hit)) {
+      matched.push(hit);
+    }
+  };
   for (const raw of spec.split(",")) {
     const token = raw.trim().toLowerCase();
     if (!token) {
+      continue;
+    }
+    // A repo label addresses the whole repo's gated batch at once.
+    const repoHits = pool.filter((w) => repoOf(w).toLowerCase() === token);
+    if (repoHits.length > 0) {
+      for (const hit of repoHits) {
+        push(hit);
+      }
       continue;
     }
     const hit = pool.find(
@@ -33,24 +55,59 @@ export const resolveTargets = (
         w.name.toLowerCase() === token ||
         w.name.toLowerCase().includes(token)
     );
-    if (hit && !matched.includes(hit)) {
-      matched.push(hit);
-    } else if (!hit) {
+    if (hit) {
+      push(hit);
+    } else {
       unknown.push(raw.trim());
     }
   }
   return { matched, unknown };
 };
 
+export interface StatusOptions {
+  json?: boolean;
+  // narrow to one repo's worktrees (label match, e.g. "linkiq")
+  repo?: string;
+  // only the NEEDS YOU group
+  needs?: boolean;
+  // only the READY group
+  ready?: boolean;
+  // include long-parked stale gates instead of folding them into a count
+  all?: boolean;
+}
+
+// How long a human gate sits unanswered before status folds it away as stale.
+const staleSecsFrom = (env: NodeJS.ProcessEnv): number =>
+  Number(env.CAPTAIN_STALE_SECS) || DEFAULT_STALE_SECS;
+
 // The one read surface: a watcher-health header, then worktrees grouped with the
 // few that need a decision on top — each carrying its inline resolve command.
-export const status = (json: boolean, out: NodeJS.WritableStream): void => {
-  const rows = Object.values(loadState(DEFAULT_FLEET).worktrees);
-  if (json) {
+// --repo/--needs/--ready narrow the view; --all unfolds stale gates.
+export const status = (
+  options: StatusOptions,
+  out: NodeJS.WritableStream
+): void => {
+  let rows = Object.values(loadState(DEFAULT_FLEET).worktrees);
+  if (options.repo) {
+    const token = options.repo.trim().toLowerCase();
+    rows = rows.filter((w) => repoOf(w).toLowerCase().includes(token));
+  }
+  if (options.needs) {
+    rows = rows.filter((w) => groupOf(w.stage) === "needs-you");
+  }
+  if (options.ready) {
+    rows = rows.filter((w) => groupOf(w.stage) === "ready");
+  }
+  if (options.json) {
     out.write(`${JSON.stringify(rows, null, 2)}\n`);
     return;
   }
-  out.write(renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET)));
+  out.write(
+    renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET), {
+      all: options.all,
+      staleSecs: staleSecsFrom(process.env),
+    })
+  );
 };
 
 // Parse a coarse duration like "90m", "2h", "1d", "1h30m" → seconds
@@ -133,7 +190,7 @@ export const approve = (spec: string, out: NodeJS.WritableStream): void => {
   const state = loadState(DEFAULT_FLEET);
   const { matched, unknown } = resolveTargets(state, spec, "PLAN_READY");
   for (const u of unknown) {
-    out.write(s.yellow(`  no PLAN_READY worktree matches "${u}"\n`));
+    out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
   }
   if (matched.length === 0) {
     out.write(s.dim("nothing to approve.\n"));
@@ -145,9 +202,10 @@ export const approve = (spec: string, out: NodeJS.WritableStream): void => {
       ts: now(),
       workspaceId: wt.workspaceId,
     });
-    out.write(`${s.green("✓")} approved ${s.bold(wt.name)} → implementing\n`);
+    out.write(`${msg.ok(s, `approved ${s.bold(wt.name)} → implementing`)}\n`);
   }
   warnIfNoWatcher(out, s);
+  out.write(`${msg.hint(s, "next: captain status")}\n`);
 };
 
 // Reject a plan: queue a `reject` intent with the revision feedback. The watcher
@@ -162,7 +220,7 @@ export const reject = (
   const { matched } = resolveTargets(state, ref, "PLAN_READY");
   const [wt] = matched;
   if (!wt) {
-    out.write(s.yellow(`no PLAN_READY worktree matches "${ref}"\n`));
+    out.write(`${msg.warn(s, `no plan-ready worktree matches "${ref}"`)}\n`);
     return;
   }
   appendIntent(DEFAULT_FLEET, {
@@ -173,4 +231,5 @@ export const reject = (
   });
   out.write(`${s.yellow("↩")} ${s.bold(wt.name)} back to planning: ${note}\n`);
   warnIfNoWatcher(out, s);
+  out.write(`${msg.hint(s, "next: captain status")}\n`);
 };

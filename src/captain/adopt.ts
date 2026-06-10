@@ -1,7 +1,9 @@
 import { basename } from "node:path";
 
 import { record } from "./commit";
+import { repoLabel } from "./control";
 import type { CmuxWorkspace } from "./control";
+import { ticketFrom } from "./format";
 import { now } from "./state";
 import type { FleetState, HookEvent, Worktree } from "./types";
 
@@ -13,6 +15,22 @@ const agentOf = (name: string): Worktree["agent"] => {
     return "claude";
   }
   return "unknown";
+};
+
+// Stable identity for a new worktree, derived once at adoption: repo label from
+// git (fail-soft), ticket from the worktree dir or the workspace name, and a
+// `${repo}-${ticket}` display name when both exist — so two worktrees of one
+// repo can never share a bare repo-root label like "chat", and every entry is
+// addressable by ticket. `fallback` is the pre-existing naming (basename(cwd)
+// for events, the workspace description for the RPC list).
+const identity = (
+  cwd: string,
+  fallback: string
+): Pick<Worktree, "name" | "repo" | "ticket"> => {
+  const repo = repoLabel(cwd);
+  const ticket = ticketFrom(basename(cwd)) ?? ticketFrom(fallback);
+  const name = repo && ticket ? `${repo}-${ticket}` : fallback;
+  return { name, repo, ticket };
 };
 
 // Adopt current cmux workspaces into the fleet (excluding the captain itself),
@@ -37,19 +55,21 @@ export const reconcile = (
     live.add(w.id);
     const existing = state.worktrees[w.id];
     if (existing) {
+      // Refresh the join key only. The name is identity — set once at adoption,
+      // never re-labelled mid-flight (it's what --ref/audit/intents resolve by).
       existing.cwd = w.cwd;
-      existing.name = w.name;
     } else {
+      const id = identity(w.cwd, w.name);
       state.worktrees[w.id] = {
         agent: agentOf(w.name),
         cwd: w.cwd,
         lastSeen: now(),
-        name: w.name,
         since: now(),
         stage: "ADOPTED",
         workspaceId: w.id,
+        ...id,
       };
-      record(w.id, w.name, {
+      record(w.id, id.name, {
         event: "adopt",
         from: "ADOPTED",
         kind: "adopt",
@@ -75,23 +95,24 @@ export const adoptFromEvent = (
   if (!ev.cwd || (opts.match && !ev.cwd.includes(opts.match))) {
     return undefined;
   }
-  const adoptedName = basename(ev.cwd);
+  const fallback = basename(ev.cwd);
+  const id = identity(ev.cwd, fallback);
   const wt: Worktree = {
-    agent: agentOf(adoptedName),
+    agent: agentOf(fallback),
     cwd: ev.cwd,
     lastSeen: now(),
-    name: adoptedName,
     since: now(),
     stage: "ADOPTED",
     workspaceId: ev.workspaceId,
+    ...id,
   };
   state.worktrees[ev.workspaceId] = wt;
-  record(ev.workspaceId, adoptedName, {
+  record(ev.workspaceId, id.name, {
     event: "adopt",
     from: "ADOPTED",
     kind: "adopt",
     to: "ADOPTED",
   });
-  opts.log?.(`adopted ${adoptedName} from event stream`);
+  opts.log?.(`adopted ${id.name} from event stream`);
   return wt;
 };

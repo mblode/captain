@@ -73,6 +73,29 @@ describe("resolveTargets", () => {
     );
     expect(matched).toHaveLength(1);
   });
+
+  it("a repo label matches the whole repo's gated batch", () => {
+    const { matched, unknown } = resolveTargets(s, "frontyard", "PLAN_READY");
+    expect(matched.map((w) => w.name).toSorted()).toEqual([
+      "frontyard-tig-430",
+      "frontyard-tig-431",
+    ]);
+    expect(unknown).toEqual([]);
+  });
+
+  it("prefers the persisted repo field for repo-batch matching", () => {
+    const tagged: FleetState = {
+      ...s,
+      worktrees: Object.fromEntries(
+        Object.entries(s.worktrees).map(([id, w]) => [
+          id,
+          { ...w, repo: "linkiq" },
+        ])
+      ),
+    };
+    const { matched } = resolveTargets(tagged, "linkiq", "PLAN_READY");
+    expect(matched).toHaveLength(2);
+  });
 });
 
 const rec = (name: string, ts: number, workspaceId = name): HistoryRecord => ({

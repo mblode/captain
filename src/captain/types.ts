@@ -20,6 +20,11 @@ export interface Worktree {
   // worktree path — the cross-channel join key
   cwd: string;
   name: string;
+  // short repo label ("linkiq") and canonical ticket ("tig-494"), set at
+  // adoption. Optional for back-compat with state.json written before they
+  // existed — readers derive from cwd/name when absent.
+  repo?: string;
+  ticket?: string;
   agent: "claude" | "codex" | "unknown";
   stage: Stage;
   // epoch seconds the worktree entered `stage`

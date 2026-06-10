@@ -29,6 +29,15 @@ export const style = (on: boolean): Style => ({
   yellow: wrap(on, "33"),
 });
 
+// The one message vocabulary for CLI feedback, so approve/reject/stop/restart
+// and the top-level error path all speak with the same glyphs.
+export const msg = {
+  err: (s: Style, text: string): string => `${s.red("✗")} ${text}`,
+  hint: (s: Style, text: string): string => s.dim(`→ ${text}`),
+  ok: (s: Style, text: string): string => `${s.green("✓")} ${text}`,
+  warn: (s: Style, text: string): string => `${s.yellow("!")} ${text}`,
+};
+
 type Group = "needs-you" | "in-flight" | "ready";
 
 interface StageMeta {
@@ -50,7 +59,9 @@ export const STAGE_META: Record<Stage, StageMeta> = {
   SIMPLIFY: { glyph: "◐", group: "in-flight", label: "simplify" },
 };
 
-// A bare duration in seconds → "5m" / "2h5m" (no "ago"/"just now" framing).
+// A bare duration in seconds → "5m" / "2h5m" / "5d" (no "ago"/"just now"
+// framing). Days kick in at 48h so a gate parked for a week reads "7d", not
+// "168h0m".
 export const fmtDuration = (sec: number): string => {
   const m = Math.floor(Math.max(0, sec) / 60);
   if (m < 1) {
@@ -59,7 +70,11 @@ export const fmtDuration = (sec: number): string => {
   if (m < 60) {
     return `${m}m`;
   }
-  return `${Math.floor(m / 60)}h${m % 60}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) {
+    return `${h}h${m % 60}m`;
+  }
+  return `${Math.floor(h / 24)}d`;
 };
 
 export const fmtAge = (since: number): string => {
@@ -82,30 +97,72 @@ const paintGroup = (s: Style, group: Group): Paint => {
   return s.cyan;
 };
 
-// A short, friendly handle for command examples (the ticket part of the name).
-export const shortName = (wt: Worktree): string => {
-  const m = wt.name.match(/([a-z]+-\d+)/iu);
-  return m ? m[1] : wt.name;
+// The canonical ticket id inside a name/path ("tig-494"), lowercased.
+export const ticketFrom = (text: string): string | undefined => {
+  const m = text.match(/([a-z]+-\d+)/iu);
+  return m ? m[1].toLowerCase() : undefined;
 };
 
-// One worktree line: "  ◆ frontyard-tig-431   plan ready   2m   <hint>"
-const row = (wt: Worktree, s: Style, width: number): string => {
+// A short, friendly handle for command examples (the ticket part of the name).
+export const shortName = (wt: Worktree): string =>
+  wt.ticket ?? ticketFrom(wt.name) ?? wt.name;
+
+// The worktree's repo label. Persisted by adoption since the field existed;
+// derived from the name for older state.json entries ("linkiq-tig-494" →
+// "linkiq") so repo grouping/filtering works on the live fleet unmigrated.
+export const repoOf = (wt: Worktree): string => {
+  if (wt.repo) {
+    return wt.repo;
+  }
+  const ticket = ticketFrom(wt.name);
+  if (ticket) {
+    const prefix = wt.name.toLowerCase().split(ticket)[0].replace(/-$/u, "");
+    if (prefix) {
+      return prefix;
+    }
+  }
+  return wt.name;
+};
+
+// A human gate the fleet is waiting on YOU for (vs. an agent working/idling).
+const HUMAN_GATES = new Set<Stage>(["PLAN_READY", "BLOCKED"]);
+
+// Surface the "parked Nd" cue once a gate has waited a full day.
+const PARKED_CUE_SECS = 86_400;
+
+// One worktree line: "  ◆ linkiq  frontyard-tig-431   plan ready   2m   <hint>"
+const row = (
+  wt: Worktree,
+  s: Style,
+  width: number,
+  repoPad: number
+): string => {
   const meta = STAGE_META[wt.stage];
   const paint = paintGroup(s, meta.group);
+  const repoTag = repoPad ? `${s.dim(repoOf(wt).padEnd(repoPad))} ` : "";
   const name = wt.name.padEnd(width);
   const label = meta.label.padEnd(14);
   const detail = wt.gate ? s.dim(`· ${wt.gate}`) : "";
   const verified = wt.verdict === "pass" ? ` ${s.green("✓ verified")}` : "";
   const pr = wt.prUrl ? `  ${s.dim(wt.prUrl)}` : "";
-  return `  ${paint(meta.glyph)} ${s.bold(name)} ${paint(label)} ${s.dim(fmtAge(wt.since).padStart(8))} ${detail}${verified}${pr}`;
+  // "this has been waiting on you for days" — time parked at the gate (since),
+  // not event-silence: checkHalt exempts human gates, so lastSeen never moves.
+  const parkedSecs = wt.since > 0 ? now() - wt.since : 0;
+  const parked =
+    HUMAN_GATES.has(wt.stage) && parkedSecs >= PARKED_CUE_SECS
+      ? ` ${s.dim(`parked ${fmtDuration(parkedSecs)}`)}`
+      : "";
+  return `  ${paint(meta.glyph)} ${repoTag}${s.bold(name)} ${paint(label)} ${s.dim(fmtAge(wt.since).padStart(8))} ${detail}${verified}${parked}${pr}`;
 };
 
 // The inline "how to resolve this" lines shown under a worktree that's parked at
 // a human gate or ready to merge — so the one status view is also the runbook.
+// cmux commands take the workspace UUID (the handle control.ts drives agents
+// with) — the display name is not a valid cmux handle.
 const actionLines = (wt: Worktree, s: Style): string[] => {
   if (wt.stage === "PLAN_READY") {
     return [
-      `      ${s.dim("read:")}    cmux read-screen --workspace ${wt.name} --scrollback`,
+      `      ${s.dim("read:")}    cmux read-screen --workspace ${wt.workspaceId} --scrollback`,
       `      ${s.dim("approve:")} captain approve --plans ${shortName(wt)}`,
       `      ${s.dim("reject:")}  captain reject --ref ${shortName(wt)} --note "…"`,
     ];
@@ -113,7 +170,7 @@ const actionLines = (wt: Worktree, s: Style): string[] => {
   // BLOCKED and any other needs-you stage: answer in the workspace.
   if (groupOf(wt.stage) === "needs-you") {
     return [
-      `      ${s.dim("answer:")}  cmux send --workspace ${wt.name} "<reply>\\n"  (or focus the workspace)`,
+      `      ${s.dim("answer:")}  cmux send --workspace ${wt.workspaceId} "<reply>\\n"  (or focus the workspace)`,
     ];
   }
   if (groupOf(wt.stage) === "ready") {
@@ -130,13 +187,29 @@ const SECTIONS: { group: Group; heading: string }[] = [
   { group: "ready", heading: "READY TO MERGE" },
 ];
 
+export const DEFAULT_STALE_SECS = 3 * 86_400;
+
+export interface StatusView {
+  // show stale gate-parked worktrees instead of folding them into a count
+  all?: boolean;
+  // how long a human gate sits unanswered before it counts as stale clutter
+  staleSecs?: number;
+}
+
+// A worktree parked at a human gate so long it's clutter, not a decision queue.
+const isStale = (wt: Worktree, staleSecs: number): boolean =>
+  HUMAN_GATES.has(wt.stage) && wt.since > 0 && now() - wt.since >= staleSecs;
+
 // The one glanceable fleet view: a watcher-health header, worktrees grouped so the
 // few that need a decision sit on top, each gated/ready one carrying the exact
 // command to resolve it. This is the whole read surface — there's no `gates`/`ready`.
+// Long-parked gates fold into a "+N stale" count (nothing silently hidden) unless
+// `all` is set; multi-repo fleets get a per-row repo tag.
 export const renderStatus = (
   worktrees: Worktree[],
   s: Style,
-  watcher: string
+  watcher: string,
+  view: StatusView = {}
 ): string => {
   const head = `${s.bold("Captain")}  ${s.dim(`watcher: ${watcher}`)}`;
   if (worktrees.length === 0) {
@@ -148,19 +221,23 @@ export const renderStatus = (
     ].join("\n");
   }
 
-  const width = Math.min(
-    40,
-    Math.max(...worktrees.map((w) => w.name.length), 8)
-  );
-  const needs = worktrees.filter(
-    (w) => groupOf(w.stage) === "needs-you"
-  ).length;
-  const ready = worktrees.filter((w) => groupOf(w.stage) === "ready").length;
+  const staleSecs = view.staleSecs ?? DEFAULT_STALE_SECS;
+  const stale = view.all ? [] : worktrees.filter((w) => isStale(w, staleSecs));
+  const shown = worktrees.filter((w) => !stale.includes(w));
+
+  const repos = new Set(worktrees.map(repoOf));
+  const repoPad =
+    repos.size > 1 ? Math.max(...[...repos].map((r) => r.length)) : 0;
+
+  const width = Math.min(40, Math.max(...shown.map((w) => w.name.length), 8));
+  const needs = shown.filter((w) => groupOf(w.stage) === "needs-you").length;
+  const ready = shown.filter((w) => groupOf(w.stage) === "ready").length;
 
   const summary = [
     `${worktrees.length} worktrees`,
     needs ? s.yellow(`${needs} need you`) : "",
     ready ? s.green(`${ready} ready`) : "",
+    stale.length ? s.dim(`+${stale.length} stale — captain status --all`) : "",
   ]
     .filter(Boolean)
     .join(s.dim(" · "));
@@ -168,15 +245,18 @@ export const renderStatus = (
   const lines = [`${head}    ${summary}`, ""];
 
   for (const section of SECTIONS) {
-    const rows = worktrees
+    const rows = shown
       .filter((w) => groupOf(w.stage) === section.group)
-      .toSorted((a, b) => a.name.localeCompare(b.name));
+      .toSorted(
+        (a, b) =>
+          repoOf(a).localeCompare(repoOf(b)) || a.name.localeCompare(b.name)
+      );
     if (rows.length === 0) {
       continue;
     }
     lines.push(s.dim(section.heading));
     for (const wt of rows) {
-      lines.push(row(wt, s, width));
+      lines.push(row(wt, s, width, repoPad));
       if (wt.note) {
         lines.push(`      ${s.dim(wt.note)}`);
       }
