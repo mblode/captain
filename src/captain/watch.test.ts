@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderRubric } from "../rubric";
 import { reconcile } from "./adopt";
-import type { CmuxFeedItem, CmuxPort, CmuxWorkspace } from "./control";
+import type {
+  CmuxFeedItem,
+  CmuxPort,
+  CmuxWorkspace,
+  RunState,
+} from "./control";
 import { readHistory } from "./history";
 import { appendIntent } from "./intents";
 import { drainIntents } from "./intents-drain";
@@ -43,6 +48,9 @@ const fakePort = (over: Partial<CmuxPort> = {}): FakePort => {
     replyExitPlan: (id, approve) => {
       replies.push({ approve, id });
     },
+    // Default "unknown" keeps the pre-slice-3 tests on the scrape fallback path
+    // (identical behaviour); the native-signal tests override it explicitly.
+    runState: (): RunState => "unknown",
     send: (workspaceId, text) => {
       sent.push({ text, workspaceId });
     },
@@ -74,6 +82,21 @@ const ev = (over: Partial<HookEvent> = {}): HookEvent => ({
   hookEventName: "Stop",
   seq: 1,
   workspaceId: "ws-1",
+  ...over,
+});
+
+// A readScreen that throws proves the native path never shells out to the
+// legacy scrape (slice 3: cmux-native run-state/feed are the primary sources).
+const noScrape = (): string => {
+  throw new Error("native path must not read the screen");
+};
+
+const question = (over: Partial<CmuxFeedItem> = {}): CmuxFeedItem => ({
+  cwd: "/wt/tig-1",
+  id: "feed-q",
+  kind: "question",
+  question_prompt: "Which migration order should the rollout use?",
+  status: "pending",
   ...over,
 });
 
@@ -195,9 +218,14 @@ describe("watcher orchestration", () => {
   });
 
   // Session bug 4: never type into a busy surface — defer, record a rework, and
-  // let the next Stop retry.
-  it("defers the advance when the screen looks busy", () => {
-    const port = fakePort({ readScreen: () => "… esc to interrupt …" });
+  // let the next Stop retry. Post-slice-3 this also pins the fallback contract:
+  // runState "unknown" (the fake's default) must drop back to the BUSY scrape,
+  // so a flaky `cmux top` can never break driving.
+  it("defers the advance via the scrape when runState is unknown", () => {
+    const port = fakePort({
+      readScreen: () => "… esc to interrupt …",
+      runState: () => "unknown",
+    });
     const w = wt({ since: 5, stage: "IMPLEMENTING" });
     const s = fleet(w);
     handleEvent(s, ev({ seq: 3 }), { port });
@@ -227,6 +255,100 @@ describe("watcher orchestration", () => {
       action: "/simplify",
       kind: "advance",
       to: "SIMPLIFY",
+    });
+  });
+
+  // Slice 3: the cmux-native signals (top run-state + feed items) are the
+  // primary busy/hint sources; the screen scrape is only the fallback.
+  describe("cmux-native signals", () => {
+    it("runState running defers the advance without reading the screen", () => {
+      const port = fakePort({
+        readScreen: noScrape,
+        runState: () => "running",
+      });
+      const w = wt({ stage: "IMPLEMENTING" });
+      handleEvent(fleet(w), ev({ seq: 3 }), { port });
+      expect(port.sent).toHaveLength(0);
+      expect(w.stage).toBe("IMPLEMENTING");
+      expect(readHistory(FLEET)[0]).toMatchObject({
+        action: "/simplify",
+        kind: "rework",
+        to: "IMPLEMENTING",
+      });
+    });
+
+    it("runState idle advances without reading the screen", () => {
+      const port = fakePort({ readScreen: noScrape, runState: () => "idle" });
+      const w = wt({ stage: "IMPLEMENTING" });
+      handleEvent(fleet(w), ev({ seq: 4 }), { port });
+      expect(port.sent).toEqual([{ text: "/simplify", workspaceId: "ws-1" }]);
+      expect(w.stage).toBe("SIMPLIFY");
+    });
+
+    it("the gate hint comes from the newest unresolved feed question", () => {
+      const port = fakePort({
+        feedList: () => [
+          // resolved (answered) — must be skipped even though it matches cwd
+          question({
+            id: "feed-old",
+            question_prompt: "An already answered question?",
+            resolved_at: "2026-06-10T00:00:00Z",
+            status: "expired",
+          }),
+          // another worktree's question — wrong cwd, must be skipped
+          question({
+            cwd: "/wt/tig-9",
+            id: "feed-other",
+            question_prompt: "Someone else's question entirely?",
+          }),
+          question(),
+        ],
+        readScreen: noScrape,
+      });
+      const w = wt({ stage: "IMPLEMENTING" });
+      handleEvent(fleet(w), ev({ hookEventName: "AskUserQuestion", seq: 5 }), {
+        port,
+      });
+      expect(w.stage).toBe("BLOCKED");
+      expect(w.note).toBe("Which migration order should the rollout use?");
+      expect(readHistory(FLEET)[0]).toMatchObject({
+        kind: "gate",
+        note: "Which migration order should the rollout use?",
+      });
+    });
+
+    it("an empty feed falls back to the screen scrape for the hint", () => {
+      const port = fakePort({
+        readScreen: () =>
+          "╭ chrome\nShould the legacy sync table be dropped first?\n╰ chrome",
+      });
+      const w = wt({ stage: "IMPLEMENTING" });
+      handleEvent(fleet(w), ev({ hookEventName: "AskUserQuestion", seq: 6 }), {
+        port,
+      });
+      expect(w.note).toBe("Should the legacy sync table be dropped first?");
+    });
+
+    it("CAPTAIN_SCRAPE busy-check ignores runState (scrape-only)", () => {
+      // runState screams "running", but the scraped screen is idle — with the
+      // escape hatch on, the scrape is authoritative and the advance goes out.
+      const port = fakePort({ runState: () => "running" });
+      const w = wt({ stage: "IMPLEMENTING" });
+      handleEvent(fleet(w), ev({ seq: 7 }), { port, scrape: true });
+      expect(port.sent).toEqual([{ text: "/simplify", workspaceId: "ws-1" }]);
+    });
+
+    it("CAPTAIN_SCRAPE gate hint ignores the feed (scrape-only)", () => {
+      const port = fakePort({
+        feedList: () => [question()],
+        readScreen: () => "The scraped prose line wins under the flag",
+      });
+      const w = wt({ stage: "IMPLEMENTING" });
+      handleEvent(fleet(w), ev({ hookEventName: "AskUserQuestion", seq: 8 }), {
+        port,
+        scrape: true,
+      });
+      expect(w.note).toBe("The scraped prose line wins under the flag");
     });
   });
 

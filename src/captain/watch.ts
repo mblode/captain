@@ -8,24 +8,77 @@ import { drainIntents } from "./intents-drain";
 import { transition } from "./pipeline";
 import { cursorPath, DEFAULT_FLEET, loadState, now } from "./state";
 import { applyVerdict, sweepHalts, sweepVerdicts } from "./sweeps";
-import type { FleetState, HookEvent } from "./types";
+import type { FleetState, HookEvent, Worktree } from "./types";
 
 const RECONCILE_MS = 30_000;
 const DEFAULT_STALL_SECS = 1800;
-// The busy-scrape (slice 3 replaces it with cmux-native run-state).
+
+// ── Legacy screen-scrape fallbacks ──────────────────────────────────────────
+// These regexes + readers are the CAPTAIN_SCRAPE=1 / unknown-run-state /
+// empty-feed fallback for the cmux-native signals (top run-state + feed items
+// below). Slated for deletion one release after the native path proves out.
 const BUSY = /esc to interrupt/iu;
 // A line that reads like a real question/prompt (prose, not TUI chrome).
 const PROSE = /^[A-Za-z][\w ,'"()/-]{14,118}[.?]?$/u;
 
-// Best-effort: pull a one-line summary of what a gate is asking, so `status` can
-// show it without opening the workspace. Returns undefined when nothing reads cleanly.
-const gateHint = (workspaceId: string, port: CmuxPort): string | undefined => {
+const screenBusy = (workspaceId: string, port: CmuxPort): boolean =>
+  BUSY.test(port.readScreen(workspaceId, 8));
+
+const screenHint = (
+  workspaceId: string,
+  port: CmuxPort
+): string | undefined => {
   const lines = port
     .readScreen(workspaceId, 30)
     .split("\n")
     .map((l) => l.replaceAll(/\[[0-9;]*m/gu, "").trim())
     .filter((l) => PROSE.test(l));
   return lines.at(-1);
+};
+
+// ── cmux-native signals ──────────────────────────────────────────────────────
+
+// Busy = the agent process is mid-turn. Primary signal is `cmux top`'s run-state
+// TAG — per-process accounting, so the "never trust cmux's built-in status" rule
+// (about the workspace status glyphs, which desync) does not apply to it. A
+// flaky `top` ("unknown") falls back to the screen scrape so it can never break
+// driving; CAPTAIN_SCRAPE=1 forces the scrape outright.
+const isBusy = (wt: Worktree, opts: WatchOptions): boolean => {
+  if (opts.scrape) {
+    return screenBusy(wt.workspaceId, opts.port);
+  }
+  const live = opts.port.runState(wt.workspaceId);
+  return live === "unknown"
+    ? screenBusy(wt.workspaceId, opts.port)
+    : live === "running";
+};
+
+// Feed kinds whose text describes what a gate is asking of the human.
+const HINT_KINDS = new Set(["question", "notification"]);
+
+// Primary gate hint: the workspace's newest unresolved question/notification
+// feed item, matched by cwd (the cross-channel join key — same matching as
+// applyIntent). `resolved_at` is set the moment an item is answered/expired,
+// so its absence is the pending marker (verified live on cmux 0.64.14).
+// feed.list is chronological, so the LAST match is the gating item.
+const feedHint = (cwd: string, port: CmuxPort): string | undefined => {
+  const item = port
+    .feedList()
+    .findLast((f) => HINT_KINDS.has(f.kind) && f.cwd === cwd && !f.resolved_at);
+  return item?.question_prompt || item?.text || undefined;
+};
+
+// Best-effort: a one-line summary of what a gate is asking, so `status` can
+// show it without opening the workspace. Feed first; an empty/unusable feed
+// falls back to the screen scrape automatically.
+const gateHint = (wt: Worktree, opts: WatchOptions): string | undefined => {
+  if (!opts.scrape) {
+    const hint = feedHint(wt.cwd, opts.port);
+    if (hint) {
+      return hint;
+    }
+  }
+  return screenHint(wt.workspaceId, opts.port);
 };
 
 // React to one agent.hook frame: adopt if untracked, mark liveness, surface a
@@ -57,10 +110,10 @@ export const handleEvent = (
     return;
   }
   if (result.send) {
-    // Verify before you send: only advance if the surface looks idle, otherwise
+    // Verify before you send: only advance if the agent is idle, otherwise
     // record a rework and let the next Stop retry. A genuinely hung loop is the
     // stall halt's job (checkHalt), not a retry budget's.
-    if (BUSY.test(opts.port.readScreen(wt.workspaceId, 8))) {
+    if (isBusy(wt, opts)) {
       commit(
         state,
         wt,
@@ -101,7 +154,7 @@ export const handleEvent = (
     result,
     {
       event: ev.hookEventName,
-      hint: () => gateHint(wt.workspaceId, opts.port),
+      hint: () => gateHint(wt, opts),
       kind: "gate",
       log: `⚑ ${result.notify}`,
       notice: { body: result.notify ?? wt.name, kind: "needs-you" },
@@ -136,7 +189,12 @@ export const watch = (input: {
   const match = input.env.CAPTAIN_MATCH || state.match;
   state.match = match;
   const port = input.port ?? realCmux(input.env);
-  const opts: WatchOptions = { log: input.log, match, port };
+  const opts: WatchOptions = {
+    log: input.log,
+    match,
+    port,
+    scrape: input.env.CAPTAIN_SCRAPE === "1",
+  };
   const stallSecs = Number(input.env.CAPTAIN_STALL_SECS) || DEFAULT_STALL_SECS;
   const haltsEnabled = input.env.CAPTAIN_NO_HALT !== "1";
   reconcile(state, port.listWorkspaces(), opts.match);

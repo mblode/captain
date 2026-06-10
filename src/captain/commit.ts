@@ -19,6 +19,10 @@ export interface WatchOptions {
   // only track worktrees whose cwd contains this substring
   match?: string;
   log?: (message: string) => void;
+  // CAPTAIN_SCRAPE=1: force the legacy screen-scrape paths (busy check + gate
+  // hint) instead of the cmux-native run-state/feed signals — the one-release
+  // escape hatch while the native path proves out.
+  scrape?: boolean;
 }
 
 // Persist a non-transition mutation (workspace adoption, the intents cursor).
@@ -90,8 +94,9 @@ export interface CommitMeta {
   // Explicit worktree field patches. A key PRESENT with value undefined CLEARS
   // the field (an advance/approve clears gate+note); absent keys are untouched.
   set?: Partial<Pick<Worktree, "gate" | "note" | "verdict" | "prUrl">>;
-  // Lazy gate hint (the read-screen scrape) — only evaluated when the gate is
-  // genuinely new, so re-emitted frames never cost a subprocess call.
+  // Lazy gate hint (feed lookup, read-screen scrape as fallback) — only
+  // evaluated when the gate is genuinely new, so re-emitted frames never cost
+  // a subprocess call.
   hint?: () => string | undefined;
   // Toast to raise: "needs-you" gets the pendingCount "N need you" title,
   // "pr-ready" the "ready to merge" title. Omit for silent commits (advances).
