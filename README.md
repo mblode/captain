@@ -56,35 +56,24 @@ npm install && npm run build && npm link
 ## Quick start
 
 ```bash
-# 1. Fan out: a worktree + self-driving agent per issue
+# 1. Start one worktree and agent per issue
 captain fanout TIG-430 TIG-431 TIG-449
 
-# 2. See what needs you, with the command to clear each gate inline
-captain status                          # NEEDS YOU first, then in flight, then ready
+# 2. See what needs you, then approve or reject each plan
+captain status                          # what's blocked, in flight, and ready
 captain approve --plans tig-430,tig-431 # or --plans all
 captain reject  --ref tig-449 --note "don't touch auth"
 
-# 3. Optional: toasts on new gates, fresh verdicts, and quiet worktrees
-captain notify                          # foreground; Ctrl-C stops. --once for a single pass
+# 3. Optional: get a desktop toast when something needs you
+captain notify                          # runs in the foreground; Ctrl-C stops it
 ```
 
 `status` reads everything fresh from cmux and the worktrees each run, so there's no daemon to
 start and nothing to keep in sync.
 
-## Commands
-
-| Command                                    | What it does                                                 |
-| ------------------------------------------ | ------------------------------------------------------------ |
-| `captain doctor`                           | check prerequisites: node, git, claude, cmux, key, skills    |
-| `captain fanout <ISSUE-ID…>`               | worktree + workspace + self-driving agent per Linear issue   |
-| `captain status [--json] [--repo <name>]`  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline    |
-| `captain approve --plans <tickets\|all>`   | reply to plan gate(s) so the agent starts implementing       |
-| `captain reject --ref <ticket> --note "…"` | reply false and type the feedback into the agent's workspace |
-| `captain notify [--once]`                  | foreground poller: toast on gates, verdicts, quiet worktrees |
-
-Use friendly ticket names (`tig-430`), not UUIDs. `fanout` also takes `--print` (preview the
-brief without launching) and `--base <ref>` (stack on a prerequisite branch). Run
-`captain --help` for everything.
+Use ticket names like `tig-430`, not UUIDs. `fanout` also takes `--print` (preview a brief
+without launching it) and `--base <ref>` (build on another branch). Run `captain --help` for the
+full list of commands and flags.
 
 ## How agents finish
 
