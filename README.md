@@ -1,76 +1,83 @@
 # captain
 
-Drive a fleet of [cmux](https://cmux.com/) worktrees through the SDLC — **live** — from Linear
-ticket to PR-ready. One watcher daemon holds the cmux event stream open, auto-advances every
-worktree (plan → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`), and parks each
-decision for you. You approve plans, answer questions, and merge. It does the rest.
+Dispatch a fleet of [cmux](https://cmux.com/) worktrees from Linear ticket to PR-ready, then
+surface the few decisions that are yours. `captain fanout` gives each agent a brief carrying the
+whole pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` →
+`/pr-babysitter` → verifier verdict) and the agent drives it itself. Captain keeps **no state**
+— `status` is derived live from cmux signals and per-worktree verdict files.
 
-- **Live, not polling** — reacts to cmux `agent.hook.*` events the instant they arrive.
+- **Agents self-drive** — the pipeline lives in each agent's brief; nothing puppeteers them.
+- **Stateless status** — derived fresh from cmux + the filesystem every call; it can never desync.
 - **Batched gates** — every plan approval and question is surfaced to you, never auto-decided.
-- **Stops at PR-ready** — no auto-merge; merging and deploying stay with you.
-- **Glanceable** — `status` leads with what needs you; restart-safe via an event cursor.
+- **Verified, then stops at PR-ready** — `✓ verified` requires a hash-checked verifier verdict;
+  merging and deploying stay with you (no auto-merge).
 
 Built on [`linear-worktree`](https://github.com/mblode/linear-worktree) — its fan-out is the
-`captain fanout` command; captain is the live driver layered on top.
+`captain fanout` command; captain is the dispatch-and-surface layer on top.
 
 ## Install
 
-Not yet published. From a checkout of this repo:
+Not yet published to npm. From a checkout of this repo:
 
 ```bash
 npm install && npm run build && npm link   # puts `captain` on your PATH
 ```
 
+To install the paired agent skill (teaches Claude Code and other agents to drive this CLI):
+
+```bash
+npx skills add mblode/captain -g
+```
+
 Requires Node ≥ 22 and `git`, `claude`, [`cmux`](https://cmux.com/) on your PATH. Set
-`LINEAR_API_KEY` to pull ticket details into each agent's prompt.
+`LINEAR_API_KEY` to pull ticket details into each agent's brief.
 
 ## Quick start
 
 ```bash
-# 1. Fan out — a worktree + plan-mode agent per issue, AND starts the watcher
+# 1. Fan out — a worktree + self-driving agent per issue
 captain fanout TIG-430 TIG-431 TIG-449
 
-# 2. Drive it from anywhere — one view, with the command to resolve each gate inline
+# 2. Surface what needs you — one view, with the command to resolve each gate inline
 captain status                          # NEEDS YOU first, then in-flight, then ready
 captain approve --plans tig-430,tig-431 # or --plans all
 captain reject  --ref tig-449 --note "don't touch auth"
-captain stop                            # stop the watcher when you're done
+
+# 3. Optional: toasts on new gates, fresh verdicts, and quiet worktrees
+captain notify                          # foreground; Ctrl-C stops. --once for a single pass
 ```
 
-`fanout` starts a single background watcher (no env vars, no extra steps) that reacts to cmux
-`agent.hook.*` events the instant they arrive:
+`status` derives everything live, so there is no daemon to start or restart:
 
-| Event                              | Captain does                              |
-| ---------------------------------- | ----------------------------------------- |
-| `Stop` (turn finished)             | auto-advance: send the next slash command |
-| `ExitPlanMode`                     | park a **plan-approval** gate, notify you |
-| `AskUserQuestion` / `Notification` | park a **blocked** gate, notify you       |
-
-State lives in `~/.claude/captain/default/state.json`; a restart resumes from the event cursor
-with no missed events. (`CAPTAIN_NO_WATCH=1 captain fanout …` creates the worktrees without
-auto-driving them.)
+| Signal                | Source                                                   |
+| --------------------- | -------------------------------------------------------- |
+| fleet membership      | cmux workspaces whose worktree has a `.captain/` dir     |
+| busy / idle           | `cmux top` per-workspace run-state tags                  |
+| gates (plan/question) | the newest unresolved `cmux` feed item per worktree      |
+| done (`✓ verified`)   | `.captain/verdict.json`, hash-checked against the rubric |
 
 ## Commands
 
-| Command                                    | What it does                                              |
-| ------------------------------------------ | --------------------------------------------------------- |
-| `captain fanout <ISSUE-ID…>`               | worktree + agent per Linear issue, and starts the watcher |
-| `captain status [--json]`                  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline |
-| `captain audit [--since <dur>] [--ref …]`  | the governance trail of every advance, gate, and decision |
-| `captain approve --plans <tickets\|all>`   | approve plan(s) → implementing                            |
-| `captain reject --ref <ticket> --note "…"` | send a plan back to planning                              |
-| `captain stop`                             | stop the background watcher                               |
-| `captain watch`                            | (rarely needed) restart the watcher in the foreground     |
+| Command                                    | What it does                                                 |
+| ------------------------------------------ | ------------------------------------------------------------ |
+| `captain fanout <ISSUE-ID…>`               | worktree + workspace + self-driving agent per Linear issue   |
+| `captain status [--json] [--repo <name>]`  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline    |
+| `captain approve --plans <tickets\|all>`   | reply to plan gate(s) → the agent implements                 |
+| `captain reject --ref <ticket> --note "…"` | reply false and type the feedback into the agent's workspace |
+| `captain notify [--once]`                  | foreground poller: toast on gates, verdicts, quiet worktrees |
 
 Targets accept friendly ticket names (`tig-430`), not UUIDs. Run `captain --help` for the full
 workflow.
 
-## Why a CLI, not a chat loop
+## How agents finish
 
-A chat turn can't hold a live event stream open. The deterministic plumbing — holding the stream,
-the state machine, sending slash commands — lives here in code; the judgment (which plan to
-approve, how to answer a question) stays with you, or with the paired `captain` agent skill that
-shells out to these commands.
+Fan-out writes a definition of done into each worktree (`.captain/rubric.md`, derived
+mechanically from the Linear issue). Before declaring a ticket done, the agent must run a
+fresh-context verifier sub-agent against it and write `.captain/verdict.json` citing the
+rubric's hash — editing the criteria after the fact voids the verdict. A valid pass shows the
+worktree as READY TO MERGE with the PR's merge command; a fail surfaces as NEEDS YOU with the
+verifier's summary. Per-repo fleet memory (`~/.claude/captain/memory/<repo>/learnings.md`)
+feeds verified learnings from past runs into every new brief.
 
 ## Development
 
