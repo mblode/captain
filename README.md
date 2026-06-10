@@ -2,13 +2,12 @@
 
 Run a fleet of [cmux](https://cmux.com/) worktrees, one per Linear ticket.
 
-`captain fanout` opens a worktree per issue and gives each agent a brief with the whole pipeline:
-plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verifier
-verdict. Each agent runs it on its own. `captain status` reads cmux to show what's blocked,
-in flight, and ready to merge. No daemon, no saved state.
+`captain fanout` opens a worktree per issue and gives each agent a brief covering the whole job:
+plan, implement, review, and open a PR. Each agent runs it on its own. `captain status` then
+shows what's blocked, in flight, and ready to merge.
 
-Captain never approves a plan, answers a question, or merges a PR for you. That's `captain
-approve`, `captain reject`, and your own `git`/`gh`.
+Captain never approves a plan, answers a question, or merges for you. You do that with `captain
+approve`, `captain reject`, and your usual `git`/`gh`.
 
 ## Requirements
 
@@ -69,14 +68,8 @@ captain reject  --ref tig-449 --note "don't touch auth"
 captain notify                          # foreground; Ctrl-C stops. --once for a single pass
 ```
 
-`status` reads its signals fresh each run, so there's no daemon to start or restart:
-
-| Signal                | Source                                                   |
-| --------------------- | -------------------------------------------------------- |
-| fleet membership      | cmux workspaces whose worktree has a `.captain/` dir     |
-| busy / idle           | `cmux top` per-workspace run-state tags                  |
-| gates (plan/question) | the newest unresolved `cmux` feed item per worktree      |
-| done (`✓ verified`)   | `.captain/verdict.json`, hash-checked against the rubric |
+`status` reads everything fresh from cmux and the worktrees each run, so there's no daemon to
+start and nothing to keep in sync.
 
 ## Commands
 
