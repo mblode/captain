@@ -1,13 +1,7 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-import {
-  RUBRIC_RELPATH,
-  rubricBody,
-  rubricHash,
-  VERDICT_RELPATH,
-} from "../rubric";
 import type { Stage, Transition, Verdict, Worktree } from "./types";
+
+// 100% pure (lint-enforced: oxlint bans node:fs here) — the verdict/rubric
+// FILE READERS live in sweeps.ts, the watcher feeds this module plain data.
 
 // The verdict only matters once a PR exists: PR_OPEN (just created) and
 // BABYSITTING (being kept green). Earlier stages can't be "done"; the human
@@ -83,28 +77,4 @@ export const checkVerdict = (
     nextStage: "BLOCKED",
     notify: `verifier failed: ${verdict.summary}`,
   };
-};
-
-// Thin fs edge: the agent-written verdict at <cwd>/.captain/verdict.json.
-// Missing or unreadable → null (no verdict yet).
-export const readVerdict = (cwd: string): Verdict | null => {
-  try {
-    return parseVerdict(readFileSync(join(cwd, VERDICT_RELPATH), "utf-8"));
-  } catch {
-    return null;
-  }
-};
-
-// Thin fs edge: recompute the hash a legitimate verdict must cite, from the
-// rubric file as it exists NOW — so editing the criteria after the fact breaks
-// the match. Undefined when no rubric was written (an adopted worktree): there
-// is nothing to check against, so the verdict's hash is accepted as-is.
-export const expectedRubricHash = (cwd: string): string | undefined => {
-  try {
-    return rubricHash(
-      rubricBody(readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8"))
-    );
-  } catch {
-    return undefined;
-  }
 };

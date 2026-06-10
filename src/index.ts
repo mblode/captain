@@ -6,7 +6,9 @@ export {
 } from "./cmux";
 export { approve, reject, status } from "./captain/commands";
 export { onPlanApproved, transition } from "./captain/pipeline";
-export { DEFAULT_FLEET, loadState, saveState } from "./captain/state";
+// saveState is deliberately NOT exported: the watcher is the sole writer of
+// state.json and every mutation goes through commit() (see captain/commit.ts).
+export { DEFAULT_FLEET, loadState } from "./captain/state";
 export type * from "./captain/types";
 export { watch } from "./captain/watch";
 export { CliError } from "./errors";

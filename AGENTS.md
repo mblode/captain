@@ -34,10 +34,14 @@ src/
     history.ts      # append-only audit log ~/.claude/captain/default/history.jsonl (appendHistory/readHistory)
     intents.ts      # append-only intent log ~/.claude/captain/default/intents.jsonl: approve/reject hand decisions to the watcher (single-writer)
     daemon.ts       # singleton watcher: pidfile guard, ensureDaemon (detached spawn), stopDaemon
-    control.ts      # cmux wrappers: workspace.list, send, read-screen, notify, feed reply
+    control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, send, read-screen, notify, feed reply); tests pass a fake port
     events.ts       # spawn `cmux events --category agent --reconnect`, parse agent.hook frames
-    verdict.ts      # PURE parse/checkVerdict (+ thin fs reads): the agent-written .captain/verdict.json -> pr-ready gate or BLOCKED
-    watch.ts        # the live daemon: adopt -> react to events -> advance / park gates / surface verdicts; records history
+    verdict.ts      # 100% PURE parse/checkVerdict (lint-enforced no-fs): verdict data -> pr-ready gate or BLOCKED
+    watch.ts        # wiring only: load state, boot reconcile/drain, the 30s timer, the event loop + a slim handleEvent
+    commit.ts       # THE single state mutator: stage/gate/note/verdict/prUrl + new-gate idempotency + notify + history + save; persist() for non-transition saves
+    adopt.ts        # adoptFromEvent + reconcile (workspace adoption/prune)
+    sweeps.ts       # sweepHalts + sweepVerdicts + applyVerdict (reconcile-tick passes) + the verdict/rubric fs readers
+    intents-drain.ts # drainIntents + applyIntent (the watcher's side of approve/reject)
     commands.ts     # status + audit (read views) + approve/reject + friendly-id resolution
     format.ts       # TTY-aware colour, stage glyphs, grouped status + the audit view
 ```
@@ -60,8 +64,8 @@ watcher-health header. `stop` tears the daemon down. `CAPTAIN_NO_WATCH=1` opts o
 The advance pipeline (`NEXT_ON_STOP` in `pipeline.ts`) is derived from real cadence usage:
 `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`, stopping at PR-ready.
 
-Beyond event-driven advancement, the 30s reconcile timer sweeps for hung loops (`enforceHalts` +
-the pure `checkHalt` in `pipeline.ts`): a worktree event-silent past `CAPTAIN_STALL_SECS`
+Beyond event-driven advancement, the 30s reconcile timer sweeps for hung loops (`sweepHalts` in
+`sweeps.ts` + the pure `checkHalt` in `pipeline.ts`): a worktree event-silent past `CAPTAIN_STALL_SECS`
 (default 1800 = 30m) while in a working stage (PLANNING/IMPLEMENTING/SIMPLIFY/REVIEW/PR_OPEN) is a
 silently-hung agent — no events means `transition` never fires for it — so it's parked at a
 `BLOCKED` gate ("needs you"). BABYSITTING (legitimately long-polls a PR), ADOPTED (transient), and
@@ -74,7 +78,7 @@ rationale in `research/loops-fable5.md`). **Verifier loop**: fan-out writes a de
 into each worktree (`.captain/rubric.md`, rendered by `rubric.ts` from the Linear issue — no LLM
 call) and the prompt's `<finishing-protocol>` section requires a fresh-context verifier sub-agent
 to pass it before the agent writes `.captain/verdict.json`. The watcher reads that file on `Stop`
-and on the reconcile tick (`applyVerdictFor`/`enforceVerdicts` in `watch.ts`, pure decision in
+and on the reconcile tick (`applyVerdict`/`sweepVerdicts` in `sweeps.ts`, pure decision in
 `verdict.ts`): a pass parks the `pr-ready` gate at `READY_TO_MERGE` (wiring the formerly dead
 stage, and assigning `prUrl` when the verdict carries it); a fail escalates to `BLOCKED` with the
 verifier's summary. The verdict must cite the sha256 of the rubric body _as it exists now_
@@ -107,7 +111,13 @@ planned follow-up; this ships the read-side audit first.)
 - **ESM, bundler resolution**: extensionless relative imports (`./state`, not `./state.js`); `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
 - **The pure core stays pure** (`pipeline.ts`, `verdict.ts`, `rubric.ts`) — keep I/O (cmux, fs) out so they stay unit-testable; decisions take plain input data, not fs reads.
 - **Append-only logs, single state writer** (`history.ts`, `intents.ts`): each is one JSON line per record, so it never races the `state.json` temp+rename and a truncated tail line is just skipped on read — safe to append from any process. The **watcher is the sole writer of `state.json`**: `approve`/`reject` never mutate it (that would race the watcher's live saves), they append an `intent` to `intents.jsonl`, and the watcher drains it via a byte-offset cursor (`state.intentsOffset`) — at startup, before each event, and on the reconcile timer — replying to the cmux plan gate and moving the stage itself. Exactly-once: the cursor only advances past complete lines.
-- **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (see `isNewGate` in `watch.ts`), never double-notify. A re-emitted `ExitPlanMode` (and a bypass-permissions re-plan) must not regress an already-approved worktree — `transition` only gates from the pre-approval stages (`PLANNABLE_FROM` in `pipeline.ts`).
+- **All state mutation goes through `commit()`** (`commit.ts`) — the one home for the
+  mutate → notify → record history → save invariant; `persist()` covers non-transition saves
+  (adoption, the intents cursor). Lint-enforced: `saveState` imports are banned outside
+  `commit.ts`/`state.ts` (oxlint `no-restricted-imports` in `oxlint.config.ts`; `*.test.ts` exempt
+  for the `fleetDir` spy pattern). The same config bans `node:fs`/`node:child_process` in the pure
+  domain (`pipeline.ts`, `verdict.ts`).
+- **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (`commit()` owns that decision), never double-notify. A re-emitted `ExitPlanMode` (and a bypass-permissions re-plan) must not regress an already-approved worktree — `transition` only gates from the pre-approval stages (`PLANNABLE_FROM` in `pipeline.ts`).
 - **Never trust cmux's built-in status** (it desyncs); derive state from the agent event stream.
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.

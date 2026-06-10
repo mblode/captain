@@ -55,9 +55,11 @@ The session already fixed 5 real bugs; lock them in before refactoring on top.
 
 - [ ] Commit the 5 in-flight fixes (event-stream adoption, no-prune-on-empty, ExitPlanMode
       regression guard, pipeline reorder, single-writer intent log) + AGENTS.md.
-- [ ] Add the missing regression tests for the bugs the session hit (they were ALL in
-      untested code): the "empty `workspace.list` must not prune" invariant (`watch.ts:91`),
+- [x] Add the missing regression tests for the bugs the session hit (they were ALL in
+      untested code): the "empty `workspace.list` must not prune" invariant,
       `drainIntents`/`applyIntent` ordering vs live events, and adoption-from-event-stream.
+      **Done in architecture.md slice 2** (`watch.test.ts` + `state.test.ts`, driven through
+      the real modules with a fake CmuxPort).
 
 ### Phase 1 — Make the plan gate REAL _(highest leverage, smallest change)_
 
@@ -141,8 +143,11 @@ The pure core is well-tested; every bug this session hit lived in untested `watc
 `daemon.ts` / `control.ts` / `events.ts`.
 
 - [ ] Add tests for daemon child survival + boot adoption (the actual death bug), and for
-      watch.ts adoption/prune/drain paths.
-- [ ] Split the `watch.ts` god-file (adoption · intents · gate-hinting · busy · event loop).
+      watch.ts adoption/prune/drain paths. _(Partially done in architecture.md slice 2:
+      adoption/prune/drain/busy/verdict paths are covered; daemon child survival remains.)_
+- [x] Split the `watch.ts` god-file (adoption · intents · gate-hinting · busy · event loop).
+      **Done in architecture.md slice 2**: `commit.ts` (single mutator) + `adopt.ts` +
+      `sweeps.ts` + `intents-drain.ts`; `watch.ts` is wiring only.
 
 ---
 

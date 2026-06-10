@@ -6,13 +6,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { renderRubric } from "../rubric";
+// The fs readers moved to sweeps.ts so verdict.ts stays pure.
+import { expectedRubricHash, readVerdict } from "./sweeps";
 import type { Stage, Verdict, Worktree } from "./types";
-import {
-  checkVerdict,
-  expectedRubricHash,
-  parseVerdict,
-  readVerdict,
-} from "./verdict";
+import { checkVerdict, parseVerdict } from "./verdict";
 
 const verdict = (over: Partial<Verdict> = {}): Verdict => ({
   criteria: [{ evidence: "src/x.ts:10", name: "implements", pass: true }],
