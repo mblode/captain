@@ -1,10 +1,11 @@
 # captain
 
-Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you, built
-on the `linear-worktree` fan-out. Each agent's brief carries the whole pipeline and the agent
-drives it itself; captain keeps **no state** — `status` is derived live from cmux-native signals
-and the per-worktree `.captain/` files. (The previous watcher-daemon/state-machine architecture
-was deleted June 2026 — see `research/` for the history.)
+Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. The
+worktree + Linear + prompt fan-out is captain-native (`runner.ts` + `git.ts`/`linear.ts`/
+`prompt.ts`); each agent's brief carries the whole pipeline and the agent drives it itself.
+Captain keeps **no state** — `status` is derived live from cmux-native signals and the
+per-worktree `.captain/` files. (The previous watcher-daemon/state-machine architecture was
+deleted June 2026 — see `research/` for the history.)
 
 ## Commands
 
@@ -24,7 +25,7 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: fanout | status | approve | reject | notify
+  cli.ts            # Commander entry: doctor | fanout | status | approve | reject | notify
   runner.ts         # the fan-out: worktree + workspace + the self-drive brief per issue
   cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts
   prompt.ts         # issue context + <workflow> (the self-drive pipeline) + <finishing-protocol> + <fleet-memory>
@@ -36,6 +37,7 @@ src/
     surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
     commands.ts     # stateless status/approve/reject + friendly-id resolution
+    doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + render; realDeps reads the world
     notify.ts       # optional foreground poller: diff the view per tick, toast on change, one quiet nudge
     format.ts       # TTY-aware colour + the grouped status renderer (display only)
     log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/toasts)

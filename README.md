@@ -12,25 +12,48 @@ whole pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-c
 - **Verified, then stops at PR-ready** — `✓ verified` requires a hash-checked verifier verdict;
   merging and deploying stay with you (no auto-merge).
 
-Built on [`linear-worktree`](https://github.com/mblode/linear-worktree) — its fan-out is the
-`captain fanout` command; captain is the dispatch-and-surface layer on top.
+## Requirements
+
+- **Node ≥ 22**
+- **`git`**, **`claude`** ([Claude Code](https://claude.com/claude-code)), and
+  **`cmux`** ([cmux](https://cmux.com/)) on your `PATH`
+- A **`LINEAR_API_KEY`** (optional, but it pulls ticket details and screenshots into each brief)
 
 ## Install
 
-Not yet published to npm. From a checkout of this repo:
-
 ```bash
-npm install && npm run build && npm link   # puts `captain` on your PATH
+npm i -g cmux-captain        # puts `captain` on your PATH
 ```
 
-To install the paired agent skill (teaches Claude Code and other agents to drive this CLI):
+Captain drives agents through a skill-based pipeline, so install the skills too:
 
 ```bash
+# the captain steering skill (teaches Claude Code to run this CLI)
 npx skills add mblode/captain -g
+
+# the pipeline skills each agent's brief invokes — /simplify, /pr-reviewer,
+# /pr-creator, /pr-babysitter. Without these, the agents' pipeline no-ops.
+npx skills add mblode/agent-skills -g
 ```
 
-Requires Node ≥ 22 and `git`, `claude`, [`cmux`](https://cmux.com/) on your PATH. Set
-`LINEAR_API_KEY` to pull ticket details into each agent's brief.
+Then confirm your environment is ready:
+
+```bash
+captain doctor               # checks node, git, claude, cmux, LINEAR_API_KEY, and the skills
+```
+
+`doctor` exits non-zero if a required tool is missing and prints the fix for each gap.
+
+<details>
+<summary>Install from source instead</summary>
+
+```bash
+git clone https://github.com/mblode/captain.git
+cd captain
+npm install && npm run build && npm link
+```
+
+</details>
 
 ## Quick start
 
@@ -60,14 +83,16 @@ captain notify                          # foreground; Ctrl-C stops. --once for a
 
 | Command                                    | What it does                                                 |
 | ------------------------------------------ | ------------------------------------------------------------ |
+| `captain doctor`                           | check prerequisites: node, git, claude, cmux, key, skills    |
 | `captain fanout <ISSUE-ID…>`               | worktree + workspace + self-driving agent per Linear issue   |
 | `captain status [--json] [--repo <name>]`  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline    |
 | `captain approve --plans <tickets\|all>`   | reply to plan gate(s) → the agent implements                 |
 | `captain reject --ref <ticket> --note "…"` | reply false and type the feedback into the agent's workspace |
 | `captain notify [--once]`                  | foreground poller: toast on gates, verdicts, quiet worktrees |
 
-Targets accept friendly ticket names (`tig-430`), not UUIDs. Run `captain --help` for the full
-workflow.
+Targets accept friendly ticket names (`tig-430`), not UUIDs. `fanout` also takes `--print`
+(preview the brief without launching) and `--base <ref>` (stack on a prerequisite branch). Run
+`captain --help` for the full workflow.
 
 ## How agents finish
 

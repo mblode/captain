@@ -1,6 +1,6 @@
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const INTERVAL_MS = 80;
-const LABEL = "linear-worktree";
+const LABEL = "captain";
 const CLEAR_LINE = "\r[2K";
 
 export interface Progress {

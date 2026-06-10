@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 
 import { approve, reject, status } from "./captain/commands";
+import { doctor } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
 import { notifyLoop } from "./captain/notify";
 import { CliError } from "./errors";
@@ -24,6 +25,7 @@ program
     "after",
     `
 Workflow:
+  $ captain doctor                       check prerequisites before your first fanout
   $ captain fanout TIG-430 TIG-431       worktrees + agents, each self-driving to PR-ready
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
   $ captain status --repo linkiq         one repo's worktrees only
@@ -65,6 +67,13 @@ program
       });
     }
   );
+
+program
+  .command("doctor")
+  .description("check prerequisites: node, git, claude, cmux, key, skills")
+  .action(() => {
+    process.exitCode = doctor(process.stdout);
+  });
 
 program
   .command("status")

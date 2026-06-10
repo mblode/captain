@@ -220,11 +220,13 @@ const dispatch = async ({
   if (isFanOutInput(tokens, Boolean(options.print))) {
     if (!cmuxReachable(env)) {
       throw new CliError(
-        "cmux is not reachable (needed for multi-issue fan-out)"
+        "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain doctor`"
       );
     }
     if (!commandExists("claude", env)) {
-      throw new CliError("claude is not on PATH");
+      throw new CliError(
+        "claude is not on PATH — install it, then `captain doctor`"
+      );
     }
 
     const worktreePaths: string[] = [];
@@ -296,7 +298,7 @@ export const runLinearWorktree = async (
 
   if (tokens.length === 0) {
     throw new CliError(
-      "usage: linear-worktree [--print] [--repo <path>] <issue-id|url> [more issue-ids...]",
+      "usage: captain fanout [--print] [--repo <path>] <issue-id|url> [more issue-ids...]",
       2
     );
   }

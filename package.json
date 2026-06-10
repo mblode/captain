@@ -1,5 +1,5 @@
 {
-  "name": "captain",
+  "name": "cmux-captain",
   "version": "0.2.0",
   "description": "Drive a fleet of cmux worktrees through the SDLC, live — from Linear ticket to PR-ready",
   "keywords": [
@@ -44,6 +44,7 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "changeset": "changeset",

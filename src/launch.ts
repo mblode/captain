@@ -21,7 +21,9 @@ export const launchPlanMode = (
   env: NodeJS.ProcessEnv
 ): number => {
   if (!commandExists("claude", env)) {
-    throw new CliError("claude is not on PATH (use --print to skip launching)");
+    throw new CliError(
+      "claude is not on PATH (use --print to skip launching, or run `captain doctor`)"
+    );
   }
 
   const previousCwd = process.cwd();

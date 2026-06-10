@@ -9,8 +9,8 @@ Dispatch a fleet of cmux worktrees from Linear ticket to PR-ready, then surface 
 decisions that are yours. Each agent's fan-out brief carries the **whole pipeline** and the
 agent self-drives it; Captain keeps **no state** — `status` is derived live from cmux-native
 signals and the per-worktree `.captain/` files. This skill is the steering wheel — the
-`captain` CLI is the engine. Pairs with the low-level [`cmux`](../cmux/SKILL.md) skill (the
-four verbs) and `linear-worktree` (fan-out).
+`captain` CLI is the engine (it owns the worktree + Linear + fan-out itself). Pairs with the
+low-level [`cmux`](../cmux/SKILL.md) skill (the four verbs).
 
 ## Mental model
 
@@ -34,12 +34,15 @@ four verbs) and `linear-worktree` (fan-out).
 
 ## Setup
 
-1. **Ensure the CLI is installed:** `captain --version`. If missing, build + link from the
-   repo: `cd ~/Code/mblode/captain && npm run build && npm link`.
-2. **Fan out work:** `captain fanout TIG-401 TIG-402 …` (worktree + workspace + self-driving
+1. **Check prerequisites:** `captain doctor` verifies node, git, claude, cmux, `LINEAR_API_KEY`,
+   and that the pipeline skills the brief invokes (`/simplify`, `/pr-reviewer`, `/pr-creator`,
+   `/pr-babysitter`) are installed. Required gaps exit non-zero; fix them first.
+2. **Ensure the CLI is installed:** `captain --version`. If missing: `npm i -g cmux-captain`
+   (or build + link from a checkout: `cd ~/Code/mblode/captain && npm run build && npm link`).
+3. **Fan out work:** `captain fanout TIG-401 TIG-402 …` (worktree + workspace + self-driving
    agent per issue). `--base <ref>` stacks on a prerequisite branch; `--print` previews the
    brief without launching.
-3. **Optional toasts:** run `captain notify` in a spare pane (foreground; Ctrl-C stops) for
+4. **Optional toasts:** run `captain notify` in a spare pane (foreground; Ctrl-C stops) for
    notifications on new gates, fresh verdicts, and quiet worktrees. `--once` does a single pass.
 
 ## The loop (what you do)
