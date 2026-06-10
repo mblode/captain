@@ -1,5 +1,0 @@
----
-"captain": minor
----
-
-Add the two agent-side loops from the Fable 5 loop-design playbook: a verifier gate and cross-session fleet memory. Fan-out now writes a per-worktree definition of done (`.captain/rubric.md`, derived from the Linear issue) whose embedded protocol requires the agent to pass a fresh-context verifier sub-agent before writing `.captain/verdict.json`; the watcher surfaces that file on Stop and on the reconcile tick — a verified pass parks the new `pr-ready` gate at `READY_TO_MERGE` (wiring the previously dead stage, and assigning `prUrl` when the verdict carries it), a fail escalates to `BLOCKED` with the verifier's summary, and a missing verdict changes nothing. The verdict must cite the sha256 of the rubric as it exists on disk, so after-the-fact edits void it. Fleet memory lives at `~/.claude/captain/memory/<repo>/learnings.md` (`## Rules` curated + `## Inbox` tail-capped): fan-out injects the excerpt into every agent prompt and instructs agents to append only verified learnings; reject/halt/verdict reasons now land in `history.jsonl` as `note` so `captain audit` shows the why worth distilling.
