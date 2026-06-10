@@ -1,23 +1,23 @@
 # captain
 
-Dispatch a fleet of [cmux](https://cmux.com/) worktrees from Linear ticket to PR-ready, then
-surface the few decisions that are yours. `captain fanout` gives each agent a brief carrying the
-whole pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` →
-`/pr-babysitter` → verifier verdict) and the agent drives it itself. Captain keeps **no state**
-— `status` is derived live from cmux signals and per-worktree verdict files.
+Run a fleet of [cmux](https://cmux.com/) worktrees, one per Linear ticket, and see only the
+decisions that need you.
 
-- **Agents self-drive** — the pipeline lives in each agent's brief; nothing puppeteers them.
-- **Stateless status** — derived fresh from cmux + the filesystem every call; it can never desync.
-- **Batched gates** — every plan approval and question is surfaced to you, never auto-decided.
-- **Verified, then stops at PR-ready** — `✓ verified` requires a hash-checked verifier verdict;
-  merging and deploying stay with you (no auto-merge).
+`captain fanout` opens a worktree per issue and hands each agent a brief with the whole pipeline:
+plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verifier
+verdict. The agent drives itself. `captain status` then shows you what's blocked, what's in
+flight, and what's ready to merge, derived live from cmux. There's no daemon and no saved state,
+so it can't desync.
+
+You still own the calls that matter: every plan and every question is surfaced to you, never
+auto-decided, and merging stays in your hands (no auto-merge).
 
 ## Requirements
 
-- **Node ≥ 22**
-- **`git`**, **`claude`** ([Claude Code](https://claude.com/claude-code)), and
-  **`cmux`** ([cmux](https://cmux.com/)) on your `PATH`
-- A **`LINEAR_API_KEY`** (optional, but it pulls ticket details and screenshots into each brief)
+- Node.js >= 22
+- `git`, `claude` ([Claude Code](https://claude.com/claude-code)), and
+  [`cmux`](https://cmux.com/) on your PATH
+- A `LINEAR_API_KEY` (optional, but it pulls ticket details and screenshots into each brief)
 
 ## Install
 
@@ -25,19 +25,19 @@ whole pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-c
 npm i -g cmux-captain        # puts `captain` on your PATH
 ```
 
-The agents' pipeline is built from skills, so install those too:
+The agents' pipeline runs on skills, so install those too:
 
 ```bash
-# the captain steering skill (teaches Claude Code to run this CLI)
+# the captain skill (teaches Claude Code to run this CLI)
 npx skills add mblode/captain -g
 
-# the review + PR skills the brief runs — /pr-reviewer, /pr-creator,
-# /pr-babysitter. Without them that stretch of the pipeline no-ops.
+# the PR skills the brief runs: /pr-reviewer, /pr-creator, /pr-babysitter.
+# Without them that part of the pipeline does nothing.
 # (/simplify ships with Claude Code, so there's nothing to install.)
 npx skills add mblode/agent-skills -g
 ```
 
-Then confirm your environment is ready:
+Then check your setup:
 
 ```bash
 captain doctor               # checks node, git, claude, cmux, LINEAR_API_KEY, and the skills
@@ -59,11 +59,11 @@ npm install && npm run build && npm link
 ## Quick start
 
 ```bash
-# 1. Fan out — a worktree + self-driving agent per issue
+# 1. Fan out: a worktree + self-driving agent per issue
 captain fanout TIG-430 TIG-431 TIG-449
 
-# 2. Surface what needs you — one view, with the command to resolve each gate inline
-captain status                          # NEEDS YOU first, then in-flight, then ready
+# 2. See what needs you, with the command to clear each gate inline
+captain status                          # NEEDS YOU first, then in flight, then ready
 captain approve --plans tig-430,tig-431 # or --plans all
 captain reject  --ref tig-449 --note "don't touch auth"
 
@@ -71,7 +71,7 @@ captain reject  --ref tig-449 --note "don't touch auth"
 captain notify                          # foreground; Ctrl-C stops. --once for a single pass
 ```
 
-`status` derives everything live, so there is no daemon to start or restart:
+`status` works out everything live, so there's no daemon to start or restart:
 
 | Signal                | Source                                                   |
 | --------------------- | -------------------------------------------------------- |
@@ -87,23 +87,23 @@ captain notify                          # foreground; Ctrl-C stops. --once for a
 | `captain doctor`                           | check prerequisites: node, git, claude, cmux, key, skills    |
 | `captain fanout <ISSUE-ID…>`               | worktree + workspace + self-driving agent per Linear issue   |
 | `captain status [--json] [--repo <name>]`  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline    |
-| `captain approve --plans <tickets\|all>`   | reply to plan gate(s) → the agent implements                 |
+| `captain approve --plans <tickets\|all>`   | reply to plan gate(s) so the agent starts implementing       |
 | `captain reject --ref <ticket> --note "…"` | reply false and type the feedback into the agent's workspace |
 | `captain notify [--once]`                  | foreground poller: toast on gates, verdicts, quiet worktrees |
 
-Targets accept friendly ticket names (`tig-430`), not UUIDs. `fanout` also takes `--print`
-(preview the brief without launching) and `--base <ref>` (stack on a prerequisite branch). Run
-`captain --help` for the full workflow.
+Use friendly ticket names (`tig-430`), not UUIDs. `fanout` also takes `--print` (preview the
+brief without launching) and `--base <ref>` (stack on a prerequisite branch). Run
+`captain --help` for everything.
 
 ## How agents finish
 
-Fan-out writes a definition of done into each worktree (`.captain/rubric.md`, derived
-mechanically from the Linear issue). Before declaring a ticket done, the agent must run a
-fresh-context verifier sub-agent against it and write `.captain/verdict.json` citing the
-rubric's hash — editing the criteria after the fact voids the verdict. A valid pass shows the
-worktree as READY TO MERGE with the PR's merge command; a fail surfaces as NEEDS YOU with the
-verifier's summary. Per-repo fleet memory (`~/.claude/captain/memory/<repo>/learnings.md`)
-feeds verified learnings from past runs into every new brief.
+Fan-out writes a definition of done into each worktree (`.captain/rubric.md`, built straight from
+the Linear issue). Before calling a ticket done, the agent runs a fresh-context verifier against
+that rubric and writes `.captain/verdict.json` citing the rubric's hash, so editing the criteria
+afterwards voids the verdict. A pass shows the worktree as READY TO MERGE with the PR's merge
+command; a fail shows up as NEEDS YOU with the verifier's summary. Per-repo fleet memory
+(`~/.claude/captain/memory/<repo>/learnings.md`) carries verified learnings from past runs into
+every new brief.
 
 ## Development
 
