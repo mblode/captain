@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  checkHalt,
-  isHumanGated,
-  onPlanApproved,
-  transition,
-} from "./pipeline";
+import { checkHalt, onPlanApproved, transition } from "./pipeline";
 import type { HookEvent, Stage, Worktree } from "./types";
 
 const wt = (stage: Stage, over: Partial<Worktree> = {}): Worktree => ({
   agent: "claude",
   cwd: "/repo/tig-1",
   name: "tig-1",
-  retries: 0,
   since: 0,
   stage,
   workspaceId: "ws-1",
@@ -68,36 +62,6 @@ describe("transition", () => {
     expect(transition(wt("PLAN_READY"), ev("Stop"))).toBeNull();
     expect(transition(wt("BABYSITTING"), ev("Stop"))).toBeNull();
     expect(transition(wt("READY_TO_MERGE"), ev("Stop"))).toBeNull();
-  });
-
-  it("advances normally with no tuning or an empty policy (parity)", () => {
-    // Even with retries piled up, an uncapped stage keeps advancing — exactly
-    // as it did before self-tuning existed.
-    const busy = { ...wt("SIMPLIFY"), retries: 99 };
-    expect(transition(busy, ev("Stop"))).toMatchObject({
-      nextStage: "REVIEW",
-      send: "/pr-reviewer",
-    });
-    expect(transition(busy, ev("Stop"), { maxRetries: {} })).toMatchObject({
-      nextStage: "REVIEW",
-    });
-  });
-
-  it("escalates to a human gate once retries exhaust the learned budget", () => {
-    const tuning = { maxRetries: { SIMPLIFY: 2 } };
-    // Under budget: still advances.
-    expect(
-      transition({ ...wt("SIMPLIFY"), retries: 1 }, ev("Stop"), tuning)
-    ).toMatchObject({ nextStage: "REVIEW", send: "/pr-reviewer" });
-    // At/over budget: routes to BLOCKED instead of retrying forever.
-    const stuck = transition(
-      { ...wt("SIMPLIFY"), retries: 2 },
-      ev("Stop"),
-      tuning
-    );
-    expect(stuck?.nextStage).toBe("BLOCKED");
-    expect(stuck?.gate).toBe("needs-input");
-    expect(stuck?.send).toBeUndefined();
   });
 
   it("routes AskUserQuestion to BLOCKED", () => {
@@ -178,12 +142,5 @@ describe("checkHalt", () => {
 describe("gates", () => {
   it("approving a plan moves to IMPLEMENTING", () => {
     expect(onPlanApproved()).toBe("IMPLEMENTING");
-  });
-
-  it("flags the human-gated stages", () => {
-    expect(isHumanGated("PLAN_READY")).toBe(true);
-    expect(isHumanGated("READY_TO_MERGE")).toBe(true);
-    expect(isHumanGated("BLOCKED")).toBe(true);
-    expect(isHumanGated("SIMPLIFY")).toBe(false);
   });
 });

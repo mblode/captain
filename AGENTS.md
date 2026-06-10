@@ -22,26 +22,24 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: fanout | status | metrics | audit | approve | reject | stop | watch
+  cli.ts            # Commander entry: fanout | status | audit | approve | reject | stop | watch
   runner.ts         # the inherited fan-out + armWatcher (writes match, ensures the daemon)
   cmux.ts git.ts linear.ts repo.ts issue.ts prompt.ts images.ts launch.ts progress.ts shell.ts
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
   memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
   captain/
-    pipeline.ts     # PURE state machine: (worktree, hook event, tuning?) -> transition. Start here.
-    types.ts        # Stage, Worktree, FleetState, HookEvent, Transition, HistoryRecord, FleetMetrics, PipelineTuning
+    pipeline.ts     # PURE state machine: (worktree, hook event) -> transition. Start here.
+    types.ts        # Stage, Worktree, FleetState, HookEvent, Transition, HistoryRecord
     state.ts        # DEFAULT_FLEET + atomic load/save of ~/.claude/captain/default/state.json + cursor
     history.ts      # append-only audit log ~/.claude/captain/default/history.jsonl (appendHistory/readHistory)
     intents.ts      # append-only intent log ~/.claude/captain/default/intents.jsonl: approve/reject hand decisions to the watcher (single-writer)
-    metrics.ts      # PURE: roll history + live state into FleetMetrics (durations, autonomy, intervention rate)
-    tuning.ts       # PURE: deriveTuning(metrics) -> per-stage retry budgets (the self-improvement loop)
     daemon.ts       # singleton watcher: pidfile guard, ensureDaemon (detached spawn), stopDaemon
     control.ts      # cmux wrappers: workspace.list, send, read-screen, notify, feed reply
     events.ts       # spawn `cmux events --category agent --reconnect`, parse agent.hook frames
     verdict.ts      # PURE parse/checkVerdict (+ thin fs reads): the agent-written .captain/verdict.json -> pr-ready gate or BLOCKED
-    watch.ts        # the live daemon: adopt -> react to events -> advance / park gates / surface verdicts; records history + applies tuning
-    commands.ts     # status + metrics + audit (read views) + approve/reject + friendly-id resolution
-    format.ts       # TTY-aware colour, stage glyphs, grouped status + the metrics & audit views
+    watch.ts        # the live daemon: adopt -> react to events -> advance / park gates / surface verdicts; records history
+    commands.ts     # status + audit (read views) + approve/reject + friendly-id resolution
+    format.ts       # TTY-aware colour, stage glyphs, grouped status + the audit view
 ```
 
 ## DX surface
@@ -88,18 +86,14 @@ _verified_ learnings at end of run. Curation (Inbox → Rules) is human-driven v
 skill; reject/halt/verdict reasons land in `HistoryRecord.note` so `captain audit` shows the
 why worth distilling.
 
-## Metrics & the self-improvement loop
+## Measurement & the self-improvement loop
 
 Every transition the watcher makes is appended to `history.jsonl` (`history.ts`) — advances,
-gates, busy-defer reworks, plus approve/reject from `commands.ts`. `captain metrics` rolls that
-log + live state into a `FleetMetrics` view (`metrics.ts`, PURE): per-stage durations, PR-ready
-throughput, autonomy rate, and the intervention rate (the essay's "correction/redirect rate").
-The loop closes in `tuning.ts`: `deriveTuning(metrics)` turns observed per-stage reliability into
-retry budgets, which the watcher passes into `transition()` so a chronically-stuck stage escalates
-to a human gate instead of retrying forever. **Cold-start parity**: with an empty/young log no
-stage is capped, so driving is identical to pre-tuning behaviour; it only adapts once real
-outcomes accrue. The dead `Worktree.retries` field is now wired (bumped on busy-defer, reset on a
-clean stage change in `setStage`).
+gates, busy-defer reworks, plus approve/reject from `commands.ts`. That log + `captain audit`
+are the measurement substrate; the self-improvement loop itself is agent-side: the verdict gate
+(outcome verification) + fleet memory (distilled learnings) — see `research/loops-fable5.md`.
+(The old metrics/tuning subsystem — `captain metrics`, per-stage retry budgets — was deleted:
+it never fired in real runs, and `checkHalt` + the verdict gate cover what it was for.)
 
 `captain audit` is the governance trail over that same log: every advance, gate, and human
 approve/reject rendered chronologically with the actor (watcher vs. you), the stage flow, and the
@@ -111,7 +105,7 @@ planned follow-up; this ships the read-side audit first.)
 ## Gotchas
 
 - **ESM, bundler resolution**: extensionless relative imports (`./state`, not `./state.js`); `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
-- **The pure core stays pure** (`pipeline.ts`, `metrics.ts`, `tuning.ts`) — keep I/O (cmux, fs) out so they stay unit-testable; `transition` takes `tuning` as plain input data, not a fs read.
+- **The pure core stays pure** (`pipeline.ts`, `verdict.ts`, `rubric.ts`) — keep I/O (cmux, fs) out so they stay unit-testable; decisions take plain input data, not fs reads.
 - **Append-only logs, single state writer** (`history.ts`, `intents.ts`): each is one JSON line per record, so it never races the `state.json` temp+rename and a truncated tail line is just skipped on read — safe to append from any process. The **watcher is the sole writer of `state.json`**: `approve`/`reject` never mutate it (that would race the watcher's live saves), they append an `intent` to `intents.jsonl`, and the watcher drains it via a byte-offset cursor (`state.intentsOffset`) — at startup, before each event, and on the reconcile timer — replying to the cmux plan gate and moving the stage itself. Exactly-once: the cursor only advances past complete lines.
 - **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (see `isNewGate` in `watch.ts`), never double-notify. A re-emitted `ExitPlanMode` (and a bypass-permissions re-plan) must not regress an already-approved worktree — `transition` only gates from the pre-approval stages (`PLANNABLE_FROM` in `pipeline.ts`).
 - **Never trust cmux's built-in status** (it desyncs); derive state from the agent event stream.
@@ -131,5 +125,5 @@ planned follow-up; this ships the read-side audit first.)
   `CAPTAIN_NO_WATCH=1` guards the daemon.
 - **Self-exclusion is free**: the auto-started watcher is a detached process, not a cmux workspace, so it never appears in `cmux workspace list` and can't drive itself (no `CMUX_CAPTAIN` needed). The `CMUX_WORKSPACE_ID` fallback in `watch.ts` only matters for a manual in-workspace `captain watch`.
 - **Singleton watcher**: `ensureDaemon` is pidfile-guarded — re-running `fanout` never double-spawns. Tests must set `CAPTAIN_NO_WATCH=1` to avoid spawning a real daemon / writing real `~/.claude` state.
-- **Stall halt keys off event-silence, not work time**: `checkHalt` measures `wt.lastSeen` (epoch secs of the last _handled event_), NOT `wt.since` (time-in-stage) — a long but healthy turn that keeps emitting hook events resets the clock and is never falsely halted; only a genuinely event-silent agent escalates. The sweep rides the existing 30s reconcile tick (no new timer). Cold-start parity holds the same way the self-tuning loop does: because it watches silence, not elapsed work, normal/fast runs are unchanged no matter how long a stage legitimately runs. Knobs mirror the watcher opt-outs: `CAPTAIN_STALL_SECS` (default 1800) tunes the threshold, `CAPTAIN_NO_HALT=1` disables the sweep (parallels `CAPTAIN_NO_WATCH=1`). The halt lands in `history.jsonl` as `kind:"gate"` / `gate:"needs-input"` / `event:"halt"`, so `audit` shows it and `metrics` counts it as an intervention/block.
+- **Stall halt keys off event-silence, not work time**: `checkHalt` measures `wt.lastSeen` (epoch secs of the last _handled event_), NOT `wt.since` (time-in-stage) — a long but healthy turn that keeps emitting hook events resets the clock and is never falsely halted; only a genuinely event-silent agent escalates. The sweep rides the existing 30s reconcile tick (no new timer). Cold-start parity: because it watches silence, not elapsed work, normal/fast runs are unchanged no matter how long a stage legitimately runs. Knobs mirror the watcher opt-outs: `CAPTAIN_STALL_SECS` (default 1800) tunes the threshold, `CAPTAIN_NO_HALT=1` disables the sweep (parallels `CAPTAIN_NO_WATCH=1`). The halt lands in `history.jsonl` as `kind:"gate"` / `gate:"needs-input"` / `event:"halt"`, so `audit` shows it.
 - **Behaviour parity**: preserve the inherited `fanout` modes (single-issue, fan-out, `--print`).

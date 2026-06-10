@@ -5,11 +5,9 @@ import {
   fmtDuration,
   groupOf,
   renderAudit,
-  renderMetrics,
   renderStatus,
   style,
 } from "./format";
-import { computeMetrics } from "./metrics";
 import type { HistoryRecord, Stage, Worktree } from "./types";
 
 const plain = style(false);
@@ -17,26 +15,9 @@ const wt = (name: string, stage: Stage, since = 0): Worktree => ({
   agent: "claude",
   cwd: `/repo/${name}`,
   name,
-  retries: 0,
   since,
   stage,
   workspaceId: name,
-});
-
-const adv = (
-  id: string,
-  ts: number,
-  from: Stage,
-  to: Stage
-): HistoryRecord => ({
-  event: "Stop",
-  from,
-  kind: "advance",
-  name: id,
-  seq: ts,
-  to,
-  ts,
-  workspaceId: id,
 });
 
 describe("fmtAge", () => {
@@ -127,27 +108,6 @@ describe("fmtDuration", () => {
     expect(fmtDuration(30)).toBe("<1m");
     expect(fmtDuration(5 * 60)).toBe("5m");
     expect(fmtDuration((2 * 60 + 5) * 60)).toBe("2h5m");
-  });
-});
-
-describe("renderMetrics", () => {
-  it("guides the user when nothing is recorded yet", () => {
-    const out = renderMetrics(computeMetrics([], [], 100), plain);
-    expect(out).toContain("no runs recorded yet");
-  });
-
-  it("renders fleet totals and a per-stage table", () => {
-    const history = [
-      adv("ws-1", 100, "IMPLEMENTING", "SIMPLIFY"),
-      adv("ws-1", 160, "SIMPLIFY", "REVIEW"),
-      adv("ws-1", 200, "REVIEW", "PR_OPEN"),
-      adv("ws-1", 220, "PR_OPEN", "BABYSITTING"),
-    ];
-    const out = renderMetrics(computeMetrics(history, [], 300), plain);
-    expect(out).toContain("PR-ready");
-    expect(out).toContain("STAGES");
-    expect(out).toContain("implementing");
-    expect(out).toContain("advance");
   });
 });
 

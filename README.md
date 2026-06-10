@@ -56,7 +56,6 @@ auto-driving them.)
 | ------------------------------------------ | --------------------------------------------------------- |
 | `captain fanout <ISSUE-ID…>`               | worktree + agent per Linear issue, and starts the watcher |
 | `captain status [--json]`                  | the one view: NEEDS YOU / IN FLIGHT / READY, gates inline |
-| `captain metrics [--json]`                 | velocity, autonomy, intervention rate, per-stage timings  |
 | `captain audit [--since <dur>] [--ref …]`  | the governance trail of every advance, gate, and decision |
 | `captain approve --plans <tickets\|all>`   | approve plan(s) → implementing                            |
 | `captain reject --ref <ticket> --note "…"` | send a plan back to planning                              |

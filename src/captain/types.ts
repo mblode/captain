@@ -24,8 +24,6 @@ export interface Worktree {
   stage: Stage;
   // epoch seconds the worktree entered `stage`
   since: number;
-  // bounded REVIEW/QA loop guard
-  retries: number;
   // epoch seconds of the last hook event the watcher handled for this worktree —
   // the stall clock (event-silence, not time-in-stage). Optional for back-compat
   // with state.json written before this field existed.
@@ -102,7 +100,7 @@ export interface Transition {
 }
 
 // One line of the append-only audit log (~/.claude/captain/default/history.jsonl).
-// The substrate every metric and the self-tuning policy is derived from.
+// The substrate `captain audit` renders and the memory distill reads.
 export type HistoryKind =
   | "adopt"
   | "advance"
@@ -130,46 +128,4 @@ export interface HistoryRecord {
   // the why behind a human/escalation record: reject feedback, gate hint, halt
   // reason, or verdict summary — the substrate the memory distill reads
   note?: string;
-}
-
-// Per-stage rollup: how long worktrees sit here, and how reliably the watcher
-// advances out of it (advances vs. reworks feed the self-tuning policy).
-export interface StageMetric {
-  // number of duration samples
-  count: number;
-  totalSec: number;
-  medianSec: number;
-  // clean auto-advances out of this stage
-  advances: number;
-  // failed advances out of this stage (busy-defer or escalation to a gate)
-  reworks: number;
-}
-
-// The whole-fleet measurement view, derived purely from history + live state.
-export interface FleetMetrics {
-  // distinct worktrees ever seen in the log (plus any live but unlogged)
-  runs: number;
-  // worktrees that have reached a PR-ready stage
-  prsReady: number;
-  // PR-ready runs that took zero human intervention (no reject/block)
-  autonomousRuns: number;
-  // autonomousRuns / prsReady (0 when nothing is PR-ready)
-  autonomyRate: number;
-  interventions: {
-    plans: number;
-    rejects: number;
-    blocks: number;
-    total: number;
-  };
-  // interventions / advances — the essay's "correction/redirect rate"
-  interventionRate: number;
-  // PR-ready worktrees per day, over the observed window
-  throughputPerDay: number;
-  stages: Partial<Record<Stage, StageMetric>>;
-}
-
-// The learned driving policy: how many times the watcher will retry an
-// auto-advance for a given stage before escalating to a human gate.
-export interface PipelineTuning {
-  maxRetries: Partial<Record<Stage, number>>;
 }

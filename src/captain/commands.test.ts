@@ -13,7 +13,6 @@ const state = (...rows: [string, string, Stage][]): FleetState => ({
         agent: "claude" as const,
         cwd: `/repo/${name}`,
         name,
-        retries: 0,
         since: 0,
         stage,
         workspaceId: id,

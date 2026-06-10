@@ -1,10 +1,4 @@
-import type {
-  HookEvent,
-  PipelineTuning,
-  Stage,
-  Transition,
-  Worktree,
-} from "./types";
+import type { HookEvent, Stage, Transition, Worktree } from "./types";
 
 // The auto-advance pipeline: when a worktree in `stage` finishes a turn (Stop),
 // send the slash command and move to the next stage. The flow is:
@@ -52,15 +46,8 @@ const GATED_FROM = new Set<Stage>([
 ]);
 
 // Pure: given a worktree and an incoming hook event, what should change?
-// Returns null when the event is informational (no state change). `tuning` is the
-// learned policy (input data, not I/O — purity preserved); when omitted, or when a
-// stage has no learned budget, the watcher retries an advance indefinitely, exactly
-// as it did before self-tuning existed.
-export const transition = (
-  wt: Worktree,
-  ev: HookEvent,
-  tuning?: PipelineTuning
-): Transition | null => {
+// Returns null when the event is informational (no state change).
+export const transition = (wt: Worktree, ev: HookEvent): Transition | null => {
   switch (ev.hookEventName) {
     case "ExitPlanMode": {
       // A re-emitted frame (or a bypass-mode re-plan) on an already-approved
@@ -95,16 +82,6 @@ export const transition = (
       const step = NEXT_ON_STOP[wt.stage];
       if (!step) {
         return null;
-      }
-      // Self-tuning: if this stage keeps failing to advance, the learned budget
-      // routes it to a human instead of retrying forever.
-      const budget = tuning?.maxRetries[wt.stage];
-      if (budget !== undefined && wt.retries >= budget) {
-        return {
-          gate: "needs-input",
-          nextStage: "BLOCKED",
-          notify: `${wt.name}: auto-advance stuck at ${wt.stage.toLowerCase()} — needs you`,
-        };
       }
       return { nextStage: step.next, send: step.send };
     }
@@ -147,6 +124,3 @@ export const checkHalt = (
 
 // Approving a plan is a human action (not an event): the agent now implements.
 export const onPlanApproved = (): Stage => "IMPLEMENTING";
-
-export const isHumanGated = (stage: Stage): boolean =>
-  stage === "PLAN_READY" || stage === "READY_TO_MERGE" || stage === "BLOCKED";

@@ -11,19 +11,16 @@ import {
 import type { CmuxWorkspace } from "./control";
 import { streamAgentEvents } from "./events";
 import { groupOf } from "./format";
-import { appendHistory, readHistory } from "./history";
+import { appendHistory } from "./history";
 import { readIntentsFrom } from "./intents";
-import { computeMetrics } from "./metrics";
 import { checkHalt, onPlanApproved, transition } from "./pipeline";
 import { cursorPath, DEFAULT_FLEET, loadState, now, saveState } from "./state";
-import { deriveTuning } from "./tuning";
 import type {
   FleetState,
   GateKind,
   HookEvent,
   HistoryKind,
   Intent,
-  PipelineTuning,
   Stage,
   Worktree,
 } from "./types";
@@ -117,7 +114,6 @@ const reconcile = (
         cwd: w.cwd,
         lastSeen: now(),
         name: w.name,
-        retries: 0,
         since: now(),
         stage: "ADOPTED",
         workspaceId: w.id,
@@ -135,12 +131,11 @@ const reconcile = (
   );
 };
 
-// A real stage change resets the retry counter; a busy-defer (same stage) keeps it.
+// A real stage change restarts the time-in-stage clock; a busy-defer (same stage) keeps it.
 const setStage = (wt: Worktree, stage: Stage): void => {
   if (wt.stage !== stage) {
     wt.stage = stage;
     wt.since = now();
-    wt.retries = 0;
   }
 };
 
@@ -356,7 +351,6 @@ const adoptFromEvent = (
     cwd: ev.cwd,
     lastSeen: now(),
     name: adoptedName,
-    retries: 0,
     since: now(),
     stage: "ADOPTED",
     workspaceId: ev.workspaceId,
@@ -375,8 +369,7 @@ const adoptFromEvent = (
 const handleEvent = (
   state: FleetState,
   ev: HookEvent,
-  opts: WatchOptions,
-  tuning: PipelineTuning
+  opts: WatchOptions
 ): void => {
   // Never drive ourselves.
   if (ev.workspaceId === state.captainWorkspaceId) {
@@ -395,7 +388,7 @@ const handleEvent = (
   if (ev.hookEventName === "Stop" && applyVerdictFor(state, wt, opts, ev.seq)) {
     return;
   }
-  const result = transition(wt, ev, tuning);
+  const result = transition(wt, ev);
   if (!result) {
     return;
   }
@@ -404,10 +397,9 @@ const handleEvent = (
 
   if (result.send) {
     // Verify before you send: only advance if the surface looks idle, otherwise
-    // count a rework, bump the retry counter, and let the next Stop retry — the
-    // tuning policy escalates to a human once retries exhaust the learned budget.
+    // record a rework and let the next Stop retry. A genuinely hung loop is the
+    // stall halt's job (checkHalt), not a retry budget's.
     if (BUSY.test(readScreen(wt.workspaceId, opts.env, 8))) {
-      wt.retries += 1;
       record(wt.workspaceId, wt.name, {
         action: result.send,
         event: ev.hookEventName,
@@ -416,9 +408,7 @@ const handleEvent = (
         seq: ev.seq,
         to: from,
       });
-      opts.log?.(
-        `${wt.name} still busy — deferring ${result.send} (retry ${wt.retries})`
-      );
+      opts.log?.(`${wt.name} still busy — deferring ${result.send}`);
       saveState(state);
       return;
     }
@@ -502,25 +492,12 @@ export const watch = (input: {
   drainIntents(state, opts);
   banner(state, opts);
 
-  // The learned driving policy, recomputed from the audit log. Refreshed on each
-  // reconcile so it adapts as runs accumulate; the event handler reads it live.
-  const refreshTuning = (): PipelineTuning =>
-    deriveTuning(
-      computeMetrics(
-        readHistory(DEFAULT_FLEET),
-        Object.values(state.worktrees),
-        now()
-      )
-    );
-  let tuning = refreshTuning();
-
   // Periodic reconcile catches worktrees spawned/closed after startup, and is a
   // backstop drain in case the event stream is briefly idle when an intent lands.
   const timer = setInterval(() => {
     reconcile(state, listWorkspaces(opts.env), opts.match);
     saveState(state);
     drainIntents(state, opts);
-    tuning = refreshTuning();
     if (haltsEnabled) {
       enforceHalts(state, opts, stallSecs);
     }
@@ -532,6 +509,6 @@ export const watch = (input: {
   // and the event is handled against the worktree's fresh stage.
   streamAgentEvents(cursorPath(DEFAULT_FLEET), opts.env, (ev) => {
     drainIntents(state, opts);
-    handleEvent(state, ev, opts, tuning);
+    handleEvent(state, ev, opts);
   });
 };

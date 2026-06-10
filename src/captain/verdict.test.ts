@@ -28,7 +28,6 @@ const wt = (over: Partial<Worktree> = {}): Worktree => ({
   agent: "claude",
   cwd: "/wt/tig-430",
   name: "tig-430",
-  retries: 0,
   since: 0,
   stage: "BABYSITTING",
   workspaceId: "ws-1",

@@ -1,15 +1,8 @@
 import { runningPid, watcherHealth } from "./daemon";
-import {
-  renderAudit,
-  renderMetrics,
-  renderStatus,
-  style,
-  useColor,
-} from "./format";
+import { renderAudit, renderStatus, style, useColor } from "./format";
 import type { Style } from "./format";
 import { readHistory } from "./history";
 import { appendIntent } from "./intents";
-import { computeMetrics } from "./metrics";
 import { DEFAULT_FLEET, loadState, now } from "./state";
 import type { FleetState, HistoryRecord, Worktree } from "./types";
 
@@ -58,22 +51,6 @@ export const status = (json: boolean, out: NodeJS.WritableStream): void => {
     return;
   }
   out.write(renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET)));
-};
-
-// The measurement view: velocity, autonomy, intervention rate, and per-stage
-// timings — derived purely from the audit log + live state.
-export const metrics = (json: boolean, out: NodeJS.WritableStream): void => {
-  const state = loadState(DEFAULT_FLEET);
-  const m = computeMetrics(
-    readHistory(DEFAULT_FLEET),
-    Object.values(state.worktrees),
-    now()
-  );
-  if (json) {
-    out.write(`${JSON.stringify(m, null, 2)}\n`);
-    return;
-  }
-  out.write(renderMetrics(m, styleFor(out)));
 };
 
 // Parse a coarse duration like "90m", "2h", "1d", "1h30m" → seconds

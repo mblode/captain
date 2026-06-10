@@ -5,7 +5,7 @@ export {
   openIssueWorkspace,
 } from "./cmux";
 export { approve, reject, status } from "./captain/commands";
-export { isHumanGated, onPlanApproved, transition } from "./captain/pipeline";
+export { onPlanApproved, transition } from "./captain/pipeline";
 export { DEFAULT_FLEET, loadState, saveState } from "./captain/state";
 export type * from "./captain/types";
 export { watch } from "./captain/watch";

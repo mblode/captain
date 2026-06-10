@@ -73,12 +73,13 @@ This is the keystone: it converts captain's central feature (human plan approval
 
 ### Phase 2 — Slim the core _(lightweight; ~685 LOC out, near-zero risk)_
 
-- [ ] Delete `tuning.ts`, the metrics subsystem (`metrics.ts`, `renderMetrics`, the
+- [x] Delete `tuning.ts`, the metrics subsystem (`metrics.ts`, `renderMetrics`, the
       `metrics` command), `Worktree.retries`, and the 30s history re-read hot-path
       (`watch.ts` `refreshTuning`). (~600 LOC; nothing depends on it; never fired in the
       real session.) **Replaced, not just removed**: the verdict gate + fleet memory
       (see `loops-fable5.md`, shipped) are the self-improvement loop now — outcome
-      verification supersedes retry-budget heuristics.
+      verification supersedes retry-budget heuristics. **Done** (architecture.md
+      Slice 1): ~470 LOC deleted; `checkHalt` + the verdict gate cover escalation.
 - [x] ~~Delete the dead PR-merge path … or wire it (pick one).~~ **Resolved: wired.**
       `READY_TO_MERGE` is now the verified PR-ready gate (a passing
       `.captain/verdict.json` moves the worktree there) and `prUrl` is assigned from the

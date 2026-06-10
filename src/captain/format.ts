@@ -1,11 +1,5 @@
 import { now } from "./state";
-import type {
-  FleetMetrics,
-  HistoryKind,
-  HistoryRecord,
-  Stage,
-  Worktree,
-} from "./types";
+import type { HistoryKind, HistoryRecord, Stage, Worktree } from "./types";
 
 // ANSI styling that no-ops when output isn't a TTY or NO_COLOR is set, so piped
 // output (and the LLM reading it via `--json`) stays clean.
@@ -197,64 +191,8 @@ export const renderStatus = (
   return `${lines.join("\n")}\n`;
 };
 
-// Lifecycle order for the metrics stage table (STAGE_META is keyed, not ordered).
-const STAGE_ORDER: Stage[] = [
-  "ADOPTED",
-  "PLANNING",
-  "PLAN_READY",
-  "IMPLEMENTING",
-  "SIMPLIFY",
-  "REVIEW",
-  "PR_OPEN",
-  "BABYSITTING",
-  "READY_TO_MERGE",
-  "BLOCKED",
-];
-
-const pct = (x: number): string => `${Math.round(x * 100)}%`;
 const plural = (n: number, w: string): string =>
   `${n} ${w}${n === 1 ? "" : "s"}`;
-
-// The measurement view: fleet-wide velocity/autonomy up top, then a per-stage
-// table of how long worktrees dwell and how reliably the watcher advances them.
-// Plain when not a TTY (style no-ops), so `--json` and pipes stay parseable.
-export const renderMetrics = (m: FleetMetrics, s: Style): string => {
-  const head = `${s.bold("Captain")}  ${s.dim("metrics")}`;
-  if (m.runs === 0) {
-    return [head, s.dim("  no runs recorded yet."), ""].join("\n");
-  }
-
-  const lines = [
-    head,
-    "",
-    `  ${s.dim("runs")}          ${m.runs}`,
-    `  ${s.dim("PR-ready")}      ${m.prsReady}  ${s.dim(`(${m.throughputPerDay.toFixed(1)}/day)`)}`,
-    `  ${s.dim("autonomous")}    ${m.autonomousRuns}  ${s.dim(`(${pct(m.autonomyRate)} of PR-ready)`)}`,
-    `  ${s.dim("intervention")}  ${pct(m.interventionRate)}  ${s.dim(
-      `(${plural(m.interventions.plans, "plan")} · ${plural(m.interventions.rejects, "reject")} · ${plural(m.interventions.blocks, "block")})`
-    )}`,
-    "",
-    s.dim("STAGES"),
-  ];
-
-  for (const stage of STAGE_ORDER) {
-    const sm = m.stages[stage];
-    if (!sm) {
-      continue;
-    }
-    const meta = STAGE_META[stage];
-    const paint = paintGroup(s, meta.group);
-    const label = meta.label.padEnd(14);
-    const timing = `${s.dim("median")} ${fmtDuration(sm.medianSec).padStart(6)}  ${s.dim("total")} ${fmtDuration(sm.totalSec).padStart(6)}`;
-    const flow =
-      sm.advances + sm.reworks > 0
-        ? `  ${s.dim(`(${plural(sm.advances, "advance")} · ${plural(sm.reworks, "rework")})`)}`
-        : "";
-    lines.push(`  ${paint(meta.glyph)} ${paint(label)} ${timing}${flow}`);
-  }
-  lines.push("");
-  return `${lines.join("\n")}\n`;
-};
 
 // Per-kind glyph + actor (who caused the record): approve/reject are human
 // decisions; everything else is the watcher acting on the event stream.
