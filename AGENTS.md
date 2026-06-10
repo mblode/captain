@@ -22,7 +22,7 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: fanout | status | audit | approve | reject | stop | watch
+  cli.ts            # Commander entry: fanout | status | audit | approve | reject | restart | stop | watch
   runner.ts         # the inherited fan-out + armWatcher (writes match, ensures the daemon)
   cmux.ts git.ts linear.ts repo.ts issue.ts prompt.ts images.ts launch.ts progress.ts shell.ts
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
@@ -33,8 +33,8 @@ src/
     state.ts        # DEFAULT_FLEET + atomic load/save of ~/.claude/captain/default/state.json + cursor
     history.ts      # append-only audit log ~/.claude/captain/default/history.jsonl (appendHistory/readHistory)
     intents.ts      # append-only intent log ~/.claude/captain/default/intents.jsonl: approve/reject hand decisions to the watcher (single-writer)
-    daemon.ts       # singleton watcher: pidfile guard, ensureDaemon (detached spawn), stopDaemon
-    control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, send, read-screen, notify, feed reply); tests pass a fake port
+    daemon.ts       # singleton watcher: pidfile guard, async ensureDaemon (spawn + settle-verify alive), stopDaemon, stale-pidfile self-heal
+    control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, send, read-screen, notify, feed.list, runState via `cmux top`, feed reply); tests pass a fake port
     events.ts       # spawn `cmux events --category agent --reconnect`, parse agent.hook frames
     verdict.ts      # 100% PURE parse/checkVerdict (lint-enforced no-fs): verdict data -> pr-ready gate or BLOCKED
     watch.ts        # wiring only: load state, boot reconcile/drain, the 30s timer, the event loop + a slim handleEvent
@@ -63,6 +63,14 @@ watcher-health header. `stop` tears the daemon down. `CAPTAIN_NO_WATCH=1` opts o
 `AskUserQuestion`/`Notification` → BLOCKED · `UserPromptSubmit`/`PreToolUse` → busy.
 The advance pipeline (`NEXT_ON_STOP` in `pipeline.ts`) is derived from real cadence usage:
 `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`, stopping at PR-ready.
+
+Before sending the next command on `Stop`, the watcher confirms the agent is idle via
+**cmux-native signals** (`watch.ts`): the busy check reads the per-workspace run-state tag from
+`cmux top --all --flat --format tsv` and the gate hint comes from the newest unresolved
+`question`/`notification` in `cmux rpc feed.list` (matched by cwd). Both fall back automatically to
+the legacy screen scrape (`BUSY`/`PROSE` regexes) when the native signal is unavailable
+(`runState` "unknown" / empty feed), and `CAPTAIN_SCRAPE=1` forces scrape-only — the regexes are
+kept for one release, then deleted.
 
 Beyond event-driven advancement, the 30s reconcile timer sweeps for hung loops (`sweepHalts` in
 `sweeps.ts` + the pure `checkHalt` in `pipeline.ts`): a worktree event-silent past `CAPTAIN_STALL_SECS`
@@ -118,7 +126,10 @@ planned follow-up; this ships the read-side audit first.)
   for the `fleetDir` spy pattern). The same config bans `node:fs`/`node:child_process` in the pure
   domain (`pipeline.ts`, `verdict.ts`).
 - **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (`commit()` owns that decision), never double-notify. A re-emitted `ExitPlanMode` (and a bypass-permissions re-plan) must not regress an already-approved worktree — `transition` only gates from the pre-approval stages (`PLANNABLE_FROM` in `pipeline.ts`).
-- **Never trust cmux's built-in status** (it desyncs); derive state from the agent event stream.
+- **Never trust cmux's built-in workspace status** (the status glyph desyncs); derive stage from
+  the agent event stream. This does _not_ apply to `cmux top`'s per-workspace run-state **tag**
+  (`runState` in `control.ts`) — that's live process accounting, not the glyph, and is the trusted
+  primary busy signal. Anything it can't read parses as "unknown" and falls back to the scrape.
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.
 - **The verdict gate is fail-safe by construction**: a missing/garbage `.captain/verdict.json` is
@@ -135,5 +146,8 @@ planned follow-up; this ships the read-side audit first.)
   `CAPTAIN_NO_WATCH=1` guards the daemon.
 - **Self-exclusion is free**: the auto-started watcher is a detached process, not a cmux workspace, so it never appears in `cmux workspace list` and can't drive itself (no `CMUX_CAPTAIN` needed). The `CMUX_WORKSPACE_ID` fallback in `watch.ts` only matters for a manual in-workspace `captain watch`.
 - **Singleton watcher**: `ensureDaemon` is pidfile-guarded — re-running `fanout` never double-spawns. Tests must set `CAPTAIN_NO_WATCH=1` to avoid spawning a real daemon / writing real `~/.claude` state.
+- **Daemon spawn verification (no lying about "started")**: `ensureDaemon` is `async` — after the detached spawn it awaits a brief settle (`SETTLE_MS`) during which an instant death surfaces as the child's `exit`/`error` event (and Node reaps it, so a just-exited child is never a zombie that a bare signal-0 would misread as alive). Only a child still alive after the settle reports `started: true`; otherwise the pidfile is cleaned and the caller (`fanout`/`restart`) prints "could not start — check watch.log". The pidfile is written temp+rename like `state.json`. Because `ensureDaemon` is async, `armWatcher` (runner.ts) and the `restart` action await it.
+- **`captain restart`** bounces the watcher in one move (stop-if-running → `ensureDaemon` with the persisted `match`) — recovering a dead daemon no longer needs a manual relaunch + hand-repointed pidfile (session bugs #1/#9). A stale pidfile (dead pid) is cleaned automatically by `ensureDaemon` before it spawns.
+- **No plugin daemon**: Claude Code plugin monitors and MCP servers are session-scoped (verified June 2026) and cannot host captain's 24/7 watcher, so the daemon stays a self-managed detached process by design. A plugin could one day bundle the skill for distribution, but never the watcher itself.
 - **Stall halt keys off event-silence, not work time**: `checkHalt` measures `wt.lastSeen` (epoch secs of the last _handled event_), NOT `wt.since` (time-in-stage) — a long but healthy turn that keeps emitting hook events resets the clock and is never falsely halted; only a genuinely event-silent agent escalates. The sweep rides the existing 30s reconcile tick (no new timer). Cold-start parity: because it watches silence, not elapsed work, normal/fast runs are unchanged no matter how long a stage legitimately runs. Knobs mirror the watcher opt-outs: `CAPTAIN_STALL_SECS` (default 1800) tunes the threshold, `CAPTAIN_NO_HALT=1` disables the sweep (parallels `CAPTAIN_NO_WATCH=1`). The halt lands in `history.jsonl` as `kind:"gate"` / `gate:"needs-input"` / `event:"halt"`, so `audit` shows it.
 - **Behaviour parity**: preserve the inherited `fanout` modes (single-issue, fan-out, `--print`).

@@ -96,10 +96,16 @@ cmux 0.64.13 now provides structured signals captain currently re-implements by 
 
 - [ ] Read gates from the cmux **Feed** (`feed.list` / `cmux events --category feed`)
       instead of re-deriving PLAN_READY/BLOCKED from raw `agent.hook.*` frames.
+- [x] Replace the `read-screen` "esc to interrupt" busy-scrape and the `gateHint` PROSE
+      regex with native run-state (`cmux top` tag) and the Feed item payload.
+      **Done in architecture.md slice 3**: `runState` on `CmuxPort` reads the per-workspace
+      tag from `cmux top --all --flat --format tsv`; the gate hint reads the newest
+      unresolved `question`/`notification` from `feed.list`. Both auto-fall-back to the
+      scrape on an "unknown" run-state or empty feed; `CAPTAIN_SCRAPE=1` forces scrape-only
+      for one release before the regexes go.
 - [ ] Drop captain's `notify()`; rely on cmux's native Feed notifications (inline
-      Allow/Deny/Submit buttons).
-- [ ] Replace the `read-screen` "esc to interrupt" busy-scrape and the `gateHint` PROSE
-      regex with native run-state (`cmux list-status` / `cmux top`) and the Feed item payload.
+      Allow/Deny/Submit buttons). _(Deferred: the run-state + feed read paths landed in
+      slice 3; the notify→Feed write path is still open.)_
 - [ ] **Fix the broken read command in `status` (bug #5):** print a valid
       `cmux read-screen --workspace <workspace:N|uuid>` (map name→ref) so copy-paste works.
 - [ ] Use the frame's `session_id` as the stable identity key (alongside cwd).
@@ -126,25 +132,35 @@ cmux 0.64.13 now provides structured signals captain currently re-implements by 
 
 ### Phase 5 — Repackage as a Claude Code plugin _(installed, not npm-link)_
 
-⚠️ Verify the specifics (background-monitor feature, skill namespacing, marketplace flow)
-against current docs before building — high value but the research was not first-hand.
+**Verified June 2026 (architecture.md slice 4 recon):** Claude Code plugin monitors and
+plugin MCP servers are **session-scoped** — they start when a session loads and stop when it
+ends. There is **no plugin-native way to host captain's 24/7 watcher**. So the daemon stays a
+self-managed detached process by design; the plugin idea survives only as a possible future
+_skill-distribution wrapper_ (bundle the `captain` skill, accept `/captain:status` namespacing),
+never as the watcher's host.
 
-- [ ] Author `.claude-plugin/plugin.json`; bundle the existing `captain` skill into the
-      plugin (accepting `/captain:status`-style namespacing).
-- [ ] Replace the hand-managed detached daemon with a plugin **background monitor**
-      (Claude-Code-supervised `captain watch`) — _or_, if that feature isn't real/robust, add
-      `captain restart` + a self-heal/health path to the existing daemon (`daemon.ts`).
-- [ ] Distribute via a plugin marketplace (`/plugin install …`); drop `npm link`.
-- [ ] Keep the pure core importable so it stays unit-testable.
+- [x] Replace the hand-managed daemon's recovery story with `captain restart` + daemon
+      self-heal. **Done in architecture.md slice 4**: `restart` (stop-if-running → relaunch
+      with persisted match), stale-pidfile hygiene, atomic pidfile write, and async spawn
+      verification (await a settle, vouch only if still alive — no more "started" lies;
+      session bugs #1/#9).
+- [ ] _(Optional, deferred)_ Author `.claude-plugin/plugin.json` to bundle the `captain`
+      skill for `/plugin install` distribution — the CLI + daemon still install separately
+      (`npm link`); the plugin would only carry the skill. Low priority given the daemon
+      can't move into it.
+- [x] Keep the pure core importable so it stays unit-testable. **Holds**: `pipeline.ts`/
+      `verdict.ts` are lint-enforced I/O-free (slice 2).
 
 ### Phase 6 — Harden the IO layer _(the real engineering debt)_
 
 The pure core is well-tested; every bug this session hit lived in untested `watch.ts` /
 `daemon.ts` / `control.ts` / `events.ts`.
 
-- [ ] Add tests for daemon child survival + boot adoption (the actual death bug), and for
-      watch.ts adoption/prune/drain paths. _(Partially done in architecture.md slice 2:
-      adoption/prune/drain/busy/verdict paths are covered; daemon child survival remains.)_
+- [x] Add tests for daemon child survival + boot adoption (the actual death bug), and for
+      watch.ts adoption/prune/drain paths. **Done in architecture.md slices 2 + 4**:
+      watch.ts adoption/prune/drain/busy/verdict paths covered (slice 2); daemon spawn
+      verification, stale-pidfile cleanup, instant-death and unspawnable-command paths, and
+      restart sequencing covered (slice 4).
 - [x] Split the `watch.ts` god-file (adoption · intents · gate-hinting · busy · event loop).
       **Done in architecture.md slice 2**: `commit.ts` (single mutator) + `adopt.ts` +
       `sweeps.ts` + `intents-drain.ts`; `watch.ts` is wiring only.
