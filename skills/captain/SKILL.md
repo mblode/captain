@@ -19,7 +19,7 @@ four verbs) and `linear-worktree` (fan-out).
   protocol. Nothing external types commands into a workspace; if an agent stalls, you nudge it.
 - **Status is stateless.** A captain worktree is any cmux workspace whose cwd has a
   `.captain/` dir. Busy/idle comes from `cmux top` run-state tags; gates are the newest
-  *unresolved* feed items (plan approvals, questions); done is a hash-checked
+  _unresolved_ feed items (plan approvals, questions); done is a hash-checked
   `.captain/verdict.json`. Re-run `captain status` any time — there is nothing to desync.
 - **Human gates**: plan approval (mandatory — implementation never starts un-approved),
   questions/blocked agents, and the merge itself. Everything else flows on its own.
@@ -44,14 +44,14 @@ four verbs) and `linear-worktree` (fan-out).
 
 ## The loop (what you do)
 
-| You say                                      | Run                                                                                                                                                                                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "status" / "what's blocked" / "what's ready" | `captain status` (`--json` for parsing; `--repo`, `--needs`, `--ready` to narrow) — one view: NEEDS YOU / IN FLIGHT / READY, each gate carrying its inline resolve command and each PR its merge hint (plus merge-order overlap warnings)    |
-| "show me the plans"                          | for each plan gate, `cmux read-screen --workspace <id> --scrollback` once; summarize **all together** so scope drift is spottable in one pass                                                                                                |
-| "approve all plans"                          | `captain approve --plans all` (or comma-separated ticket names, or a repo label)                                                                                                                                                             |
-| "send 404 back: don't touch auth"            | `captain reject --ref tig-404 --note "…"` — replies to the plan gate *and* types the feedback into the workspace                                                                                                                             |
-| "what's verified"                            | `captain status` — READY rows carry `✓ verified` plus the verdict summary; spot-read `<worktree>/.captain/verdict.json`'s criteria array before merging                                                                                      |
-| "this one's gone quiet"                      | `cmux read-screen --workspace <id>` to see where it is, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge                                                                                                           |
+| You say                                      | Run                                                                                                                                                                                                                                           |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "status" / "what's blocked" / "what's ready" | `captain status` (`--json` for parsing; `--repo`, `--needs`, `--ready` to narrow) — one view: NEEDS YOU / IN FLIGHT / READY, each gate carrying its inline resolve command and each PR its merge hint (plus merge-order overlap warnings)     |
+| "show me the plans"                          | for each plan gate, `cmux read-screen --workspace <id> --scrollback` once; summarize **all together** so scope drift is spottable in one pass                                                                                                 |
+| "approve all plans"                          | `captain approve --plans all` (or comma-separated ticket names, or a repo label)                                                                                                                                                              |
+| "send 404 back: don't touch auth"            | `captain reject --ref tig-404 --note "…"` — replies to the plan gate _and_ types the feedback into the workspace                                                                                                                              |
+| "what's verified"                            | `captain status` — READY rows carry `✓ verified` plus the verdict summary; spot-read `<worktree>/.captain/verdict.json`'s criteria array before merging                                                                                       |
+| "this one's gone quiet"                      | `cmux read-screen --workspace <id>` to see where it is, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge                                                                                                            |
 | "distill the fleet's learnings"              | open `~/.claude/captain/memory/<repo>/learnings.md`; promote Inbox bullets that held up into `## Rules`, delete slop. `~/.claude/captain/log.jsonl` holds approve/reject notes and toasts — grep it for recurring failure causes worth a rule |
 
 ## Gotchas
