@@ -73,16 +73,16 @@ const watcherNote = (pid: number, started: boolean): string => {
 // Make sure exactly one watcher is running, scoped to these worktrees. The match
 // is passed to the watcher (which owns state.json) rather than written here.
 // Set CAPTAIN_NO_WATCH=1 to create the worktrees without auto-driving them.
-const armWatcher = (
+const armWatcher = async (
   worktreePaths: string[],
   env: NodeJS.ProcessEnv,
   stdout: NodeJS.WritableStream
-): void => {
+): Promise<void> => {
   if (env.CAPTAIN_NO_WATCH) {
     return;
   }
   const match = worktreeMatch(worktreePaths);
-  const { pid, started } = ensureDaemon(DEFAULT_FLEET, env, match);
+  const { pid, started } = await ensureDaemon(DEFAULT_FLEET, env, match);
   stdout.write(`watcher: ${watcherNote(pid, started)} · captain status\n`);
 
   // A watcher already running keeps its original scope (it reads match once at
@@ -278,7 +278,7 @@ const dispatch = async ({
     stdout.write(
       `spawned ${tokens.length} workspaces - each running claude in plan mode from its worktree\n`
     );
-    armWatcher(worktreePaths, env, stdout);
+    await armWatcher(worktreePaths, env, stdout);
     return 0;
   }
 
@@ -298,7 +298,7 @@ const dispatch = async ({
     try {
       await launchViaCmux(prepared, env, true, progress);
       progress.done(`opened cmux workspace ${prepared.worktree.branch}`);
-      armWatcher([prepared.worktree.worktreePath], env, stdout);
+      await armWatcher([prepared.worktree.worktreePath], env, stdout);
       return 0;
     } catch {
       // fall through to inline launch if cmux refuses the workspace

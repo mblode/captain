@@ -5,8 +5,13 @@ import { join } from "node:path";
 import { Command } from "commander";
 
 import { approve, audit, reject, status } from "./captain/commands";
-import { stopDaemon } from "./captain/daemon";
-import { DEFAULT_FLEET } from "./captain/state";
+import {
+  ensureDaemon,
+  stopDaemon,
+  watcherHealth,
+  watchLogPath,
+} from "./captain/daemon";
+import { DEFAULT_FLEET, loadState } from "./captain/state";
 import { watch } from "./captain/watch";
 import { CliError } from "./errors";
 import { runLinearWorktree } from "./runner";
@@ -30,6 +35,7 @@ Workflow:
   $ captain audit                      the governance trail of every decision
   $ captain approve --plans tig-430    approve plan(s)  (or: --plans all)
   $ captain reject  --ref tig-430 --note "…"            send a plan back
+  $ captain restart                    bounce the watcher (e.g. after a rebuild)
   $ captain stop                       stop the watcher
 
 fanout starts a background watcher that reacts to cmux agent events live,
@@ -114,6 +120,32 @@ program
     process.stdout.write(
       pid ? `stopped watcher (pid ${pid})\n` : "no watcher was running\n"
     );
+  });
+
+// Bounce the watcher in one move (session bug #9: recovering a dead daemon used
+// to mean a manual relaunch + a hand-repointed pidfile). A dead/missing watcher
+// just skips the stop; the new one reuses the persisted match scope.
+program
+  .command("restart")
+  .description("restart the background watcher (e.g. after a rebuild)")
+  .action(async () => {
+    const stopped = stopDaemon(DEFAULT_FLEET);
+    if (stopped) {
+      process.stdout.write(`stopped watcher (pid ${stopped})\n`);
+    }
+    const { started } = await ensureDaemon(
+      DEFAULT_FLEET,
+      process.env,
+      loadState(DEFAULT_FLEET).match
+    );
+    if (!started) {
+      process.stderr.write(
+        `watcher: could not start — check ${watchLogPath(DEFAULT_FLEET)}\n`
+      );
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(`watcher: ${watcherHealth(DEFAULT_FLEET)}\n`);
   });
 
 const main = async (): Promise<void> => {
