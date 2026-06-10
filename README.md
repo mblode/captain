@@ -1,10 +1,11 @@
 # captain
 
-Run a fleet of [cmux](https://cmux.com/) worktrees, one per Linear ticket.
+Captain a fleet of [cmux](https://cmux.com/) worktrees from one Claude Code session, one worktree
+per Linear ticket.
 
-Each agent gets a brief covering the whole job (plan, implement, review, open a PR) and runs it
-on its own. `captain status` shows what's blocked, in flight, and ready. You approve plans and
-merge; captain never does that for you.
+Each worktree runs its own agent on a brief covering the whole job: plan, implement, review, open
+a PR. From your captain session you watch them all with `captain status`, approve their plans,
+and answer what they're blocked on. The child agents do the work; you steer.
 
 ## Requirements
 
