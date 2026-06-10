@@ -28,14 +28,10 @@ export interface DoctorDeps {
   skillInstalled: (skill: string) => boolean;
 }
 
-// The skills the agent brief actually invokes (src/prompt.ts) — without them
-// the self-drive pipeline silently no-ops — plus the captain steering skill.
-const PIPELINE_SKILLS = [
-  "simplify",
-  "pr-reviewer",
-  "pr-creator",
-  "pr-babysitter",
-];
+// The pipeline skills the agent brief invokes (src/prompt.ts) that ship from
+// mblode/agent-skills — without them the self-drive pipeline silently no-ops.
+// (/simplify ships with Claude Code itself, so it isn't listed here.)
+const PIPELINE_SKILLS = ["pr-reviewer", "pr-creator", "pr-babysitter"];
 
 const ADD_PIPELINE = "npx skills add mblode/agent-skills -g";
 const ADD_CAPTAIN = "npx skills add mblode/captain -g";
@@ -54,12 +50,13 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
   ];
 
   for (const command of ["git", "claude"]) {
+    const found = deps.hasCommand(command);
     checks.push({
-      detail: deps.hasCommand(command) ? "on PATH" : "not found",
+      detail: found ? "on PATH" : "not found",
       hint: `install ${command} and ensure it's on your PATH`,
       label: command,
       level: "required",
-      ok: deps.hasCommand(command),
+      ok: found,
     });
   }
 
@@ -88,35 +85,34 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
     detail: missingPipeline.length
       ? `missing: ${missingPipeline.join(", ")}`
       : "installed",
-    hint: `the brief runs /simplify, /pr-reviewer, /pr-creator, /pr-babysitter — ${ADD_PIPELINE}`,
+    hint: `the brief runs ${PIPELINE_SKILLS.map((s) => `/${s}`).join(", ")} — ${ADD_PIPELINE}`,
     label: "pipeline skills",
     level: "recommended",
     ok: missingPipeline.length === 0,
   });
 
+  const captainOk = deps.skillInstalled("captain");
   checks.push({
-    detail: deps.skillInstalled("captain") ? "installed" : "not found",
+    detail: captainOk ? "installed" : "not found",
     hint: `teach your agent to drive captain — ${ADD_CAPTAIN}`,
     label: "captain skill",
     level: "recommended",
-    ok: deps.skillInstalled("captain"),
+    ok: captainOk,
   });
 
   return checks;
 };
 
 // Best-effort skill detection across the dirs `skills add` writes to.
-const skillProbe =
-  (env: NodeJS.ProcessEnv) =>
-  (skill: string): boolean => {
-    const home = env.HOME ?? homedir();
-    const dirs = [
-      join(home, ".agents", "skills"),
-      join(home, ".claude", "skills"),
-      join(process.cwd(), ".claude", "skills"),
-    ];
-    return dirs.some((dir) => existsSync(join(dir, skill)));
-  };
+const skillProbe = (env: NodeJS.ProcessEnv): ((skill: string) => boolean) => {
+  const home = env.HOME ?? homedir();
+  const dirs = [
+    join(home, ".agents", "skills"),
+    join(home, ".claude", "skills"),
+    join(process.cwd(), ".claude", "skills"),
+  ];
+  return (skill) => dirs.some((dir) => existsSync(join(dir, skill)));
+};
 
 export const realDeps = (env: NodeJS.ProcessEnv): DoctorDeps => ({
   cmuxReachable: () => cmuxReachable(env),
@@ -167,17 +163,13 @@ export const renderDoctor = (
   };
 };
 
-// The CLI entry: build the live verdict, render it, and report the exit code.
-// Tests pass fake deps; the CLI lets `realDeps` read the world.
+// The CLI entry; tests pass fake deps, the CLI lets `realDeps` read the world.
 export const doctor = (
   stdout: NodeJS.WritableStream,
-  deps?: DoctorDeps
+  deps: DoctorDeps = realDeps(process.env)
 ): number => {
   const s = style(useColor(stdout));
-  const { exitCode, text } = renderDoctor(
-    buildChecks(deps ?? realDeps(process.env)),
-    s
-  );
+  const { exitCode, text } = renderDoctor(buildChecks(deps), s);
   stdout.write(text);
   return exitCode;
 };

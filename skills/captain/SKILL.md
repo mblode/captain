@@ -35,8 +35,9 @@ low-level [`cmux`](../cmux/SKILL.md) skill (the four verbs).
 ## Setup
 
 1. **Check prerequisites:** `captain doctor` verifies node, git, claude, cmux, `LINEAR_API_KEY`,
-   and that the pipeline skills the brief invokes (`/simplify`, `/pr-reviewer`, `/pr-creator`,
-   `/pr-babysitter`) are installed. Required gaps exit non-zero; fix them first.
+   and the review/PR skills the brief invokes (`/pr-reviewer`, `/pr-creator`, `/pr-babysitter`
+   from `mblode/agent-skills`; `/simplify` ships with Claude Code). Required gaps exit non-zero;
+   fix them first.
 2. **Ensure the CLI is installed:** `captain --version`. If missing: `npm i -g cmux-captain`
    (or build + link from a checkout: `cd ~/Code/mblode/captain && npm run build && npm link`).
 3. **Fan out work:** `captain fanout TIG-401 TIG-402 …` (worktree + workspace + self-driving

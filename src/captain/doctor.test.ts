@@ -1,8 +1,11 @@
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { buildChecks, doctor, renderDoctor } from "./doctor";
+import { buildChecks, doctor, realDeps, renderDoctor } from "./doctor";
 import type { DoctorDeps } from "./doctor";
 import { style } from "./format";
 
@@ -93,9 +96,19 @@ describe("renderDoctor", () => {
 describe("doctor entry", () => {
   it("writes the report and returns the exit code", () => {
     const { out, text } = capture();
-    const code = doctor(out, deps({ cmuxReachable: () => false }));
+    const code = doctor(out, deps({ hasCommand: () => false }));
     expect(code).toBe(1);
     expect(text()).toContain("Captain doctor");
-    expect(text()).toContain("cmux");
+    expect(text()).toContain("required check(s) failed");
+  });
+});
+
+describe("realDeps skill detection", () => {
+  it("finds a skill in any of the install dirs, off HOME", () => {
+    const home = mkdtempSync(join(tmpdir(), "captain-doctor-"));
+    mkdirSync(join(home, ".claude", "skills", "captain"), { recursive: true });
+    const probe = realDeps({ HOME: home } as NodeJS.ProcessEnv).skillInstalled;
+    expect(probe("captain")).toBe(true);
+    expect(probe("pr-creator")).toBe(false);
   });
 });

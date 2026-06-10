@@ -25,14 +25,15 @@ whole pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-c
 npm i -g cmux-captain        # puts `captain` on your PATH
 ```
 
-Captain drives agents through a skill-based pipeline, so install the skills too:
+The agents' pipeline is built from skills, so install those too:
 
 ```bash
 # the captain steering skill (teaches Claude Code to run this CLI)
 npx skills add mblode/captain -g
 
-# the pipeline skills each agent's brief invokes — /simplify, /pr-reviewer,
-# /pr-creator, /pr-babysitter. Without these, the agents' pipeline no-ops.
+# the review + PR skills the brief runs — /pr-reviewer, /pr-creator,
+# /pr-babysitter. Without them that stretch of the pipeline no-ops.
+# (/simplify ships with Claude Code, so there's nothing to install.)
 npx skills add mblode/agent-skills -g
 ```
 
