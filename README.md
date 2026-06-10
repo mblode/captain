@@ -1,16 +1,14 @@
 # captain
 
-Run a fleet of [cmux](https://cmux.com/) worktrees, one per Linear ticket, and see only the
-decisions that need you.
+Run a fleet of [cmux](https://cmux.com/) worktrees, one per Linear ticket.
 
-`captain fanout` opens a worktree per issue and hands each agent a brief with the whole pipeline:
+`captain fanout` opens a worktree per issue and gives each agent a brief with the whole pipeline:
 plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verifier
-verdict. The agent drives itself. `captain status` then shows you what's blocked, what's in
-flight, and what's ready to merge, derived live from cmux. There's no daemon and no saved state,
-so it can't desync.
+verdict. Each agent runs that brief on its own. `captain status` reads cmux to show what's
+blocked, what's in flight, and what's ready to merge. It keeps no daemon and no saved state.
 
-You still own the calls that matter: every plan and every question is surfaced to you, never
-auto-decided, and merging stays in your hands (no auto-merge).
+Captain never approves a plan, answers a question, or merges a PR for you. Those are left to
+`captain approve`, `captain reject`, and your own `git`/`gh`.
 
 ## Requirements
 
@@ -71,7 +69,7 @@ captain reject  --ref tig-449 --note "don't touch auth"
 captain notify                          # foreground; Ctrl-C stops. --once for a single pass
 ```
 
-`status` works out everything live, so there's no daemon to start or restart:
+`status` reads its signals fresh each run, so there's no daemon to start or restart:
 
 | Signal                | Source                                                   |
 | --------------------- | -------------------------------------------------------- |
@@ -97,13 +95,14 @@ brief without launching) and `--base <ref>` (stack on a prerequisite branch). Ru
 
 ## How agents finish
 
-Fan-out writes a definition of done into each worktree (`.captain/rubric.md`, built straight from
-the Linear issue). Before calling a ticket done, the agent runs a fresh-context verifier against
-that rubric and writes `.captain/verdict.json` citing the rubric's hash, so editing the criteria
-afterwards voids the verdict. A pass shows the worktree as READY TO MERGE with the PR's merge
-command; a fail shows up as NEEDS YOU with the verifier's summary. Per-repo fleet memory
-(`~/.claude/captain/memory/<repo>/learnings.md`) carries verified learnings from past runs into
-every new brief.
+Fan-out writes a definition of done into each worktree (`.captain/rubric.md`, generated from the
+Linear issue). Before marking a ticket done, the agent runs a fresh-context verifier against that
+rubric and writes `.captain/verdict.json` citing the rubric's hash. Edit the criteria afterwards
+and the verdict no longer matches, so it's void. A pass shows the worktree as READY TO MERGE with
+the PR's merge command; a fail shows NEEDS YOU with the verifier's summary.
+
+Each repo also has a fleet memory file (`~/.claude/captain/memory/<repo>/learnings.md`). Agents
+append verified learnings to it, and fan-out includes them in the next brief.
 
 ## Development
 
