@@ -4,16 +4,9 @@ import { join } from "node:path";
 
 import { Command } from "commander";
 
-import { approve, audit, reject, status } from "./captain/commands";
-import {
-  ensureDaemon,
-  stopDaemon,
-  watcherHealth,
-  watchLogPath,
-} from "./captain/daemon";
+import { approve, reject, status } from "./captain/commands";
 import { msg, style, useColor } from "./captain/format";
-import { DEFAULT_FLEET, loadState } from "./captain/state";
-import { watch } from "./captain/watch";
+import { notifyLoop } from "./captain/notify";
 import { CliError } from "./errors";
 import { runLinearWorktree } from "./runner";
 
@@ -25,27 +18,23 @@ const program = new Command();
 
 program
   .name("captain")
-  .description("Drive a fleet of cmux worktrees through the SDLC, live")
+  .description("Dispatch a fleet of cmux worktrees and surface what needs you")
   .version(packageJson.version)
   .addHelpText(
     "after",
     `
 Workflow:
-  $ captain fanout TIG-430 TIG-431       worktrees + agents, and starts the watcher
+  $ captain fanout TIG-430 TIG-431       worktrees + agents, each self-driving to PR-ready
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
   $ captain status --repo linkiq         one repo's worktrees only
-  $ captain status --all                 include long-parked stale gates
-  $ captain audit --since 2h             the governance trail of every decision
-  $ captain audit --ref tig-430          one worktree's trail
   $ captain approve --plans tig-430      approve plan(s)  (or a repo, or: all)
-  $ captain reject --ref tig-430 --note "…"   send a plan back
-  $ captain restart                      bounce the watcher (e.g. after a rebuild)
-  $ captain stop                         stop the watcher
+  $ captain reject --ref tig-430 --note "…"   send a plan back with feedback
+  $ captain notify                       optional foreground toaster (Ctrl-C stops)
 
-fanout starts a background watcher that reacts to cmux agent events live,
-auto-advances each worktree (simplify → review → PR → babysit) and stops at
-PR-ready. You only make the gated decisions: approve plans, answer questions,
-merge. Everything runs on one fleet; status shows how to resolve each gate.
+Each agent's brief carries the whole pipeline (plan → implement → /simplify →
+/pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict); Captain keeps
+no state — status is derived live from cmux and the worktrees. You only make
+the gated decisions: approve plans, answer questions, merge.
 Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
   );
 
@@ -77,17 +66,6 @@ program
     }
   );
 
-// The live daemon. Normally auto-started by `fanout`; exposed for a manual restart.
-program
-  .command("watch")
-  .description("live: hold the cmux event stream open and drive the fleet")
-  .action(() => {
-    watch({
-      env: process.env,
-      log: (m) => process.stderr.write(`[captain] ${m}\n`),
-    });
-  });
-
 program
   .command("status")
   .description(
@@ -97,28 +75,16 @@ program
   .option("--repo <name>", "only one repo's worktrees, e.g. linkiq")
   .option("--needs", "only the NEEDS YOU group")
   .option("--ready", "only the READY group")
-  .option("--all", "include stale gates parked past CAPTAIN_STALE_SECS")
   .action(
     (options: {
       json?: boolean;
       repo?: string;
       needs?: boolean;
       ready?: boolean;
-      all?: boolean;
     }) => {
       status(options, process.stdout);
     }
   );
-
-program
-  .command("audit")
-  .description("the governance trail: every advance, gate, and human decision")
-  .option("--json", "emit JSON")
-  .option("--since <dur>", "only events within a window, e.g. 2h or 1d")
-  .option("--ref <ticket>", "only events for one worktree (ticket name or id)")
-  .action((options: { json?: boolean; since?: string; ref?: string }) => {
-    audit(options, process.stdout);
-  });
 
 program
   .command("approve")
@@ -138,43 +104,17 @@ program
   });
 
 program
-  .command("stop")
-  .description("stop the background watcher")
-  .action(() => {
-    const pid = stopDaemon(DEFAULT_FLEET);
-    const s = style(useColor(process.stdout));
-    process.stdout.write(
-      pid
-        ? `${msg.ok(s, `stopped watcher (pid ${pid})`)}\n`
-        : "no watcher was running\n"
-    );
-  });
-
-// Bounce the watcher in one move (session bug #9: recovering a dead daemon used
-// to mean a manual relaunch + a hand-repointed pidfile). A dead/missing watcher
-// just skips the stop; the new one reuses the persisted match scope.
-program
-  .command("restart")
-  .description("restart the background watcher (e.g. after a rebuild)")
-  .action(async () => {
-    const stopped = stopDaemon(DEFAULT_FLEET);
-    if (stopped) {
-      process.stdout.write(`stopped watcher (pid ${stopped})\n`);
-    }
-    const { started } = await ensureDaemon(
-      DEFAULT_FLEET,
-      process.env,
-      loadState(DEFAULT_FLEET).match
-    );
-    if (!started) {
-      const s = style(useColor(process.stderr));
-      process.stderr.write(
-        `${msg.err(s, "watcher could not start")}\n${msg.hint(s, `tail -20 ${watchLogPath(DEFAULT_FLEET)}`)}\n`
-      );
-      process.exitCode = 1;
-      return;
-    }
-    process.stdout.write(`watcher: ${watcherHealth(DEFAULT_FLEET)}\n`);
+  .command("notify")
+  .description(
+    "foreground poller: toast on new gates, verdicts, and quiet worktrees"
+  )
+  .option("--once", "run a single poll pass and exit")
+  .action((options: { once?: boolean }) => {
+    notifyLoop({
+      env: process.env,
+      log: (m) => process.stderr.write(`[captain] ${m}\n`),
+      once: options.once,
+    });
   });
 
 const main = async (): Promise<void> => {

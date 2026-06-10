@@ -56,6 +56,25 @@ describe("prompt extras", () => {
     expect(renderPromptExtras({})).toBe("");
   });
 
+  it("renders the self-drive workflow with the full pipeline in order", () => {
+    const out = renderPromptExtras({ workflow: true });
+    expect(out).toContain("<workflow>");
+    const steps = [
+      "/simplify",
+      "/pr-reviewer",
+      "/pr-creator",
+      "/pr-babysitter",
+    ];
+    let last = -1;
+    for (const step of steps) {
+      const at = out.indexOf(step);
+      expect(at).toBeGreaterThan(last);
+      last = at;
+    }
+    expect(out).toContain("without waiting to be told to continue");
+    expect(out).not.toContain("<finishing-protocol>");
+  });
+
   it("renders the finishing protocol around the rubric path", () => {
     const out = renderPromptExtras({ rubricPath: ".captain/rubric.md" });
     expect(out).toContain("<finishing-protocol>");

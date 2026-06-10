@@ -60,6 +60,9 @@ export const renderPrompt = (
 };
 
 export interface PromptExtras {
+  // include the self-drive workflow section (fan-out briefs set this; Captain
+  // has no watcher — the agent drives its own pipeline end to end)
+  workflow?: boolean;
   // worktree-relative path to the rubric written at fan-out
   rubricPath?: string;
   // the injected excerpt of the per-repo memory file (empty → section omitted)
@@ -68,13 +71,34 @@ export interface PromptExtras {
   memoryPath?: string;
 }
 
-// The two loop-closing sections appended after the issue context: the finishing
-// protocol (the rubric is the definition of done; a fresh-context verifier must
-// pass before the verdict is written) and the fleet memory (consult before
-// re-deriving; append only what this run verified). Pure and additive — with no
-// extras the fan-out prompt is byte-identical to the plain renderPrompt output.
+// The sections appended after the issue context: the self-drive workflow (the
+// agent owns the whole SDLC — captain only dispatches and surfaces), the
+// finishing protocol (the rubric is the definition of done; a fresh-context
+// verifier must pass before the verdict is written) and the fleet memory
+// (consult before re-deriving; append only what this run verified). Pure and
+// additive — with no extras the prompt is byte-identical to renderPrompt.
 export const renderPromptExtras = (extras: PromptExtras): string => {
   let out = "";
+
+  if (extras.workflow) {
+    out += "\n<workflow>\n";
+    out += [
+      "You own this ticket end to end. Drive the whole pipeline yourself, in order,",
+      "without waiting to be told to continue:",
+      "",
+      "1. Plan first (you are launched in plan mode) and present the plan for approval.",
+      "2. Once the plan is approved, implement it.",
+      "3. Run /simplify to clean up the diff.",
+      "4. Run /pr-reviewer and fix every finding it reports.",
+      "5. Run /pr-creator to open the PR.",
+      "6. Run /pr-babysitter until the PR is green (CI passing, conflicts resolved).",
+      "7. Finish with the finishing protocol below (verifier + verdict).",
+      "",
+      "If you are ever blocked on a decision only a human can make, ask the question",
+      "and wait — otherwise keep moving to the next step on your own.",
+    ].join("\n");
+    out += "\n</workflow>\n";
+  }
 
   if (extras.rubricPath) {
     out += "\n<finishing-protocol>\n";

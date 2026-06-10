@@ -5,7 +5,7 @@ import { run, runRequired } from "../shell";
 // Short repo label for a worktree path: a linked worktree's --git-common-dir
 // resolves to the main checkout's .git, whose parent dir name is the repo
 // ("linkiq"). Fail-soft: any git failure (not a repo, fake test path) →
-// undefined, so adoption never breaks on it.
+// undefined, so the view never breaks on it.
 export const repoLabel = (
   cwd: string,
   env: NodeJS.ProcessEnv = process.env
@@ -19,7 +19,7 @@ export const repoLabel = (
   return basename(dirname(gitDir)) || undefined;
 };
 
-// Thin wrappers over the cmux CLI for the captain's "hands". Each reuses the
+// Thin wrappers over the cmux CLI for captain's "hands". Each reuses the
 // shared spawn helpers so behaviour matches the rest of the tool.
 
 export interface CmuxWorkspace {
@@ -52,28 +52,30 @@ export interface CmuxFeedItem {
 // failed or no tag row for that workspace.
 export type RunState = "running" | "needs-input" | "idle" | "unknown";
 
-// The injectable seam between the watcher and cmux. The watcher modules take a
-// CmuxPort via WatchOptions instead of importing spawn wrappers directly, so the
-// tests drive the REAL orchestration code with an in-memory fake — one seam, no
-// mocking library. `realCmux(env)` folds the env in once at the entrypoint
-// (watch()/cli), keeping every call site free of env threading.
+// The injectable seam between captain and cmux. status/approve/reject/notify
+// take a CmuxPort instead of importing spawn wrappers directly, so the tests
+// drive the REAL code with an in-memory fake — one seam, no mocking library.
+// `realCmux(env)` folds the env in once at the entrypoint, keeping every call
+// site free of env threading.
 export interface CmuxPort {
   listWorkspaces(): CmuxWorkspace[];
   send(workspaceId: string, text: string): void;
-  readScreen(workspaceId: string, lines?: number): string;
   notify(title: string, body: string): void;
   feedList(): CmuxFeedItem[];
   replyExitPlan(id: string, approve: boolean): void;
-  runState(workspaceId: string): RunState;
+  // every workspace's agent run state, keyed by workspace id (one `cmux top`)
+  runStates(): Record<string, RunState>;
 }
 
-// What a tag row's title says → our RunState. Anything else parses as "unknown"
-// so the caller falls back to the legacy screen scrape.
+// What a tag row's title says → our RunState.
 const TOP_STATES: Record<string, RunState> = {
   idle: "idle",
   "needs input": "needs-input",
   running: "running",
 };
+
+// A `cmux top` tag row's ref: workspace:<UUID>:tag:claude_code
+const TAG_REF = /^workspace:([^:]+):tag:/iu;
 
 // The default port: spawnSync against the real cmux CLI.
 export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
@@ -121,8 +123,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     try {
       parsed = JSON.parse(raw.stdout) as typeof parsed;
     } catch {
-      // garbage from an unreliable RPC reads as "no data this tick", the same
-      // contract reconcile() already assumes for an empty list.
+      // garbage from an unreliable RPC reads as "no data this tick"
       return [];
     }
     return (parsed.workspaces ?? []).map((w) => {
@@ -140,15 +141,6 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     run("cmux", ["notify", "--title", title, "--body", body], { env });
   },
 
-  readScreen: (workspaceId: string, lines = 40): string => {
-    const result = run(
-      "cmux",
-      ["read-screen", "--workspace", workspaceId, "--lines", String(lines)],
-      { env }
-    );
-    return result.stdout;
-  },
-
   replyExitPlan: (id: string, approve: boolean): void => {
     runRequired(
       "cmux",
@@ -157,31 +149,28 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     );
   },
 
-  // Per-workspace agent run state from `cmux top`'s status tag row:
+  // Every workspace's agent run state from `cmux top`'s status tag rows:
   //   <cpu>\t<mem>\t<procs>\ttag\tworkspace:<UUID>:tag:claude_code\tworkspace:N\tRunning
   // (TSV columns: cpu, mem, procs, kind, ref, parent_ref, title — verified live
-  // on 0.64.14). `--all` because the watcher is a detached daemon with no
-  // "current window"; without it top scopes to one window and other windows'
-  // workspaces would all read "unknown". Any failure → "unknown" so driving
-  // falls back to the screen scrape instead of stalling on a flaky `top`.
-  runState: (workspaceId: string): RunState => {
-    if (!workspaceId) {
-      return "unknown";
-    }
+  // on 0.64.14). `--all` because captain runs outside any window; without it
+  // top scopes to one window. Any failure → {} so every lookup reads "unknown".
+  runStates: (): Record<string, RunState> => {
     const raw = run("cmux", ["top", "--all", "--flat", "--format", "tsv"], {
       env,
     });
     if (raw.status !== 0) {
-      return "unknown";
+      return {};
     }
-    const needle = workspaceId.toLowerCase();
+    const states: Record<string, RunState> = {};
     for (const line of raw.stdout.split("\n")) {
       const cols = line.split("\t");
-      if (cols[3] === "tag" && cols[4]?.toLowerCase().includes(needle)) {
-        return TOP_STATES[cols[6]?.trim().toLowerCase() ?? ""] ?? "unknown";
+      const ref = cols[3] === "tag" ? cols[4]?.match(TAG_REF) : null;
+      if (ref) {
+        states[ref[1].toLowerCase()] =
+          TOP_STATES[cols[6]?.trim().toLowerCase() ?? ""] ?? "unknown";
       }
     }
-    return "unknown";
+    return states;
   },
 
   // `send` types text into a workspace's focused surface; \n submits.

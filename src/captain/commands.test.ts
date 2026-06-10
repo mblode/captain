@@ -1,48 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
-import { filterHistory, mergeOrderHints, resolveTargets } from "./commands";
-import type { FleetState, HistoryRecord, Stage } from "./types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const state = (...rows: [string, string, Stage][]): FleetState => ({
-  fleetId: "f1",
-  updatedAt: 0,
-  worktrees: Object.fromEntries(
-    rows.map(([id, name, stage]) => [
-      id,
-      {
-        agent: "claude" as const,
-        cwd: `/repo/${name}`,
-        name,
-        since: 0,
-        stage,
-        workspaceId: id,
-      },
-    ])
-  ),
+import { renderRubric } from "../rubric";
+import { approve, reject, resolveTargets, status } from "./commands";
+import type { CmuxFeedItem, CmuxPort, CmuxWorkspace } from "./control";
+import type { FleetRow } from "./view";
+
+const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
+  cwd: "/wt/tig-1",
+  group: "needs-you",
+  name: "frontyard-tig-430",
+  run: "idle",
+  workspaceId: "ws-uuid-aaa",
+  ...over,
 });
 
 describe("resolveTargets", () => {
-  const s = state(
-    ["ws-uuid-aaa", "frontyard-tig-430", "PLAN_READY"],
-    ["ws-uuid-bbb", "frontyard-tig-431", "PLAN_READY"],
-    ["ws-uuid-ccc", "frontyard-tig-449", "IMPLEMENTING"]
-  );
+  const pool = [
+    fleetRow(),
+    fleetRow({ name: "frontyard-tig-431", workspaceId: "ws-uuid-bbb" }),
+  ];
 
-  it('"all" returns every worktree in the stage', () => {
-    const { matched } = resolveTargets(s, "all", "PLAN_READY");
-    expect(matched.map((w) => w.name).toSorted()).toEqual([
-      "frontyard-tig-430",
-      "frontyard-tig-431",
-    ]);
+  it('"all" returns the whole pool', () => {
+    expect(resolveTargets(pool, "all").matched).toHaveLength(2);
   });
 
   it("matches by friendly ticket substring, no uuid needed", () => {
-    const { matched, unknown } = resolveTargets(
-      s,
-      "tig-430,tig-431",
-      "PLAN_READY"
-    );
-    expect(matched.map((w) => w.name)).toEqual([
+    const { matched, unknown } = resolveTargets(pool, "tig-430,tig-431");
+    expect(matched.map((r) => r.name)).toEqual([
       "frontyard-tig-430",
       "frontyard-tig-431",
     ]);
@@ -50,153 +40,236 @@ describe("resolveTargets", () => {
   });
 
   it("matches by exact workspace id too", () => {
-    const { matched } = resolveTargets(s, "ws-uuid-aaa", "PLAN_READY");
-    expect(matched).toHaveLength(1);
+    expect(resolveTargets(pool, "ws-uuid-aaa").matched).toHaveLength(1);
   });
 
-  it("reports unknown tokens and ignores wrong-stage worktrees", () => {
-    const { matched, unknown } = resolveTargets(
-      s,
-      "tig-449,tig-999",
-      "PLAN_READY"
-    );
-    // tig-449 is IMPLEMENTING (wrong stage); tig-999 doesn't exist.
+  it("reports unknown tokens", () => {
+    const { matched, unknown } = resolveTargets(pool, "tig-999");
     expect(matched).toHaveLength(0);
-    expect(unknown).toEqual(["tig-449", "tig-999"]);
+    expect(unknown).toEqual(["tig-999"]);
   });
 
   it("de-duplicates overlapping tokens", () => {
-    const { matched } = resolveTargets(
-      s,
-      "tig-430,frontyard-tig-430",
-      "PLAN_READY"
+    expect(
+      resolveTargets(pool, "tig-430,frontyard-tig-430").matched
+    ).toHaveLength(1);
+  });
+
+  it("a repo label matches the whole repo's batch", () => {
+    const tagged = pool.map((r) => ({ ...r, repo: "frontyard" }));
+    expect(resolveTargets(tagged, "frontyard").matched).toHaveLength(2);
+  });
+});
+
+// approve/reject/status driven end to end through the REAL surface (fleetRows
+// over temp worktrees with a `.captain/` marker) with an in-memory CmuxPort.
+
+interface FakePort extends CmuxPort {
+  replies: { id: string; approve: boolean }[];
+  sent: { workspaceId: string; text: string }[];
+  toasts: { title: string; body: string }[];
+}
+
+const fakePort = (
+  workspaces: CmuxWorkspace[],
+  feed: CmuxFeedItem[]
+): FakePort => {
+  const replies: FakePort["replies"] = [];
+  const sent: FakePort["sent"] = [];
+  const toasts: FakePort["toasts"] = [];
+  return {
+    feedList: () => feed,
+    listWorkspaces: () => workspaces,
+    notify: (title, body) => {
+      toasts.push({ body, title });
+    },
+    replies,
+    replyExitPlan: (id, isApproved) => {
+      replies.push({ approve: isApproved, id });
+    },
+    runStates: () => ({}),
+    send: (workspaceId, text) => {
+      sent.push({ text, workspaceId });
+    },
+    sent,
+    toasts,
+  };
+};
+
+const capture = (): { out: PassThrough; text: () => string } => {
+  const out = new PassThrough();
+  let buf = "";
+  out.on("data", (c: Buffer) => {
+    buf += c.toString();
+  });
+  return { out, text: () => buf };
+};
+
+describe("stateless approve/reject/status over the real surface", () => {
+  let root: string;
+
+  const worktree = (name: string, withVerdict?: object): string => {
+    const cwd = join(root, name);
+    mkdirSync(join(cwd, ".captain"), { recursive: true });
+    const { hash, text } = renderRubric(undefined, name.toUpperCase());
+    writeFileSync(join(cwd, ".captain", "rubric.md"), text);
+    if (withVerdict) {
+      writeFileSync(
+        join(cwd, ".captain", "verdict.json"),
+        JSON.stringify({
+          criteria: [{ evidence: "x", name: "implements", pass: true }],
+          issue: name.toUpperCase(),
+          rubricHash: hash,
+          summary: "all criteria pass",
+          ts: 1,
+          verdict: "pass",
+          ...withVerdict,
+        })
+      );
+    }
+    return cwd;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "captain-commands-"));
+    vi.stubEnv("CAPTAIN_HOME", join(root, "home"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("approve replies to the plan gate directly and logs the decision", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "tig-430" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
     );
-    expect(matched).toHaveLength(1);
+    const { out, text } = capture();
+    approve("tig-430", out, port);
+    expect(port.replies).toEqual([{ approve: true, id: "feed-1" }]);
+    expect(text()).toContain("approved");
+    const log = readFileSync(join(root, "home", "log.jsonl"), "utf-8");
+    expect(JSON.parse(log.trim())).toMatchObject({ kind: "approve" });
   });
 
-  it("a repo label matches the whole repo's gated batch", () => {
-    const { matched, unknown } = resolveTargets(s, "frontyard", "PLAN_READY");
-    expect(matched.map((w) => w.name).toSorted()).toEqual([
-      "frontyard-tig-430",
-      "frontyard-tig-431",
+  it("approve all approves every plan gate and nothing else", () => {
+    const a = worktree("tig-430");
+    const b = worktree("tig-431");
+    const c = worktree("tig-432");
+    const port = fakePort(
+      [
+        { cwd: a, id: "ws-1", name: "tig-430", ref: "r" },
+        { cwd: b, id: "ws-2", name: "tig-431", ref: "r" },
+        { cwd: c, id: "ws-3", name: "tig-432", ref: "r" },
+      ],
+      [
+        { cwd: a, id: "feed-1", kind: "exitPlan", status: "pending" },
+        { cwd: b, id: "feed-2", kind: "exitPlan", status: "pending" },
+        // tig-432 is blocked on a question, not a plan — must not be approved.
+        { cwd: c, id: "feed-3", kind: "question", status: "pending" },
+      ]
+    );
+    const { out } = capture();
+    approve("all", out, port);
+    expect(port.replies.map((r) => r.id).toSorted()).toEqual([
+      "feed-1",
+      "feed-2",
     ]);
-    expect(unknown).toEqual([]);
   });
 
-  it("prefers the persisted repo field for repo-batch matching", () => {
-    const tagged: FleetState = {
-      ...s,
-      worktrees: Object.fromEntries(
-        Object.entries(s.worktrees).map(([id, w]) => [
-          id,
-          { ...w, repo: "linkiq" },
-        ])
-      ),
-    };
-    const { matched } = resolveTargets(tagged, "linkiq", "PLAN_READY");
-    expect(matched).toHaveLength(2);
-  });
-});
-
-const rec = (name: string, ts: number, workspaceId = name): HistoryRecord => ({
-  event: "Stop",
-  from: "IMPLEMENTING",
-  kind: "advance",
-  name,
-  seq: ts,
-  to: "SIMPLIFY",
-  ts,
-  workspaceId,
-});
-
-describe("filterHistory", () => {
-  const log = [
-    rec("frontyard-tig-430", 100, "ws-a"),
-    rec("frontyard-tig-431", 200, "ws-b"),
-    rec("frontyard-tig-430", 300, "ws-a"),
-  ];
-
-  it("returns the whole log when no filter is given", () => {
-    expect(filterHistory(log, {}, 1000)).toHaveLength(3);
+  it("a resolved plan item never reads as approvable", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [
+        {
+          cwd,
+          id: "feed-old",
+          kind: "exitPlan",
+          resolved_at: "2026-06-10T00:00:00Z",
+          status: "expired",
+        },
+      ]
+    );
+    const { out, text } = capture();
+    approve("tig-430", out, port);
+    expect(port.replies).toHaveLength(0);
+    expect(text()).toContain("nothing to approve");
   });
 
-  it("keeps only events newer than the --since window", () => {
-    // now=1000, since 800s → cutoff 200, so ts 100 drops out.
-    const out = filterHistory(log, { since: "800s" }, 1000);
-    expect(out.map((r) => r.ts)).toEqual([200, 300]);
-  });
-
-  it("supports compound durations like 1h30m", () => {
-    // 1h30m = 5400s; now=5500 → cutoff 100, so all three remain.
-    expect(filterHistory(log, { since: "1h30m" }, 5500)).toHaveLength(3);
-  });
-
-  it("ignores an unparseable --since rather than dropping everything", () => {
-    expect(filterHistory(log, { since: "soon" }, 1000)).toHaveLength(3);
-  });
-
-  it("narrows to a worktree by friendly substring", () => {
-    const out = filterHistory(log, { ref: "tig-430" }, 1000);
-    expect(out).toHaveLength(2);
-    expect(out.every((r) => r.name === "frontyard-tig-430")).toBe(true);
-  });
-
-  it("narrows to a worktree by exact workspace id", () => {
-    expect(filterHistory(log, { ref: "ws-b" }, 1000)).toHaveLength(1);
-  });
-
-  it("combines --since and --ref", () => {
-    const out = filterHistory(log, { ref: "tig-430", since: "800s" }, 1000);
-    expect(out.map((r) => r.ts)).toEqual([300]);
-  });
-});
-
-const entry = (
-  workspaceId: string,
-  name: string,
-  repo: string,
-  files: string[]
-) => ({ files, name, repo, workspaceId });
-
-describe("mergeOrderHints", () => {
-  it("flags both sides of a same-repo changed-file overlap", () => {
-    const hints = mergeOrderHints([
-      entry("ws-a", "linkiq-tig-494", "linkiq", [
-        "recommendations.schema.ts",
-        "a.ts",
-      ]),
-      entry("ws-b", "linkiq-tig-496", "linkiq", [
-        "recommendations.schema.ts",
-        "b.ts",
-      ]),
+  it("reject replies false AND types the feedback into the workspace", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out } = capture();
+    reject("tig-430", "split the migration", out, port);
+    expect(port.replies).toEqual([{ approve: false, id: "feed-1" }]);
+    expect(port.sent).toEqual([
+      {
+        text: "Plan rejected — revise it: split the migration",
+        workspaceId: "ws-1",
+      },
     ]);
-    expect(hints["ws-a"]).toContain("overlaps linkiq-tig-496");
-    expect(hints["ws-a"]).toContain("recommendations.schema.ts");
-    expect(hints["ws-b"]).toContain("overlaps linkiq-tig-494");
   });
 
-  it("ignores overlapping paths across different repos", () => {
-    const hints = mergeOrderHints([
-      entry("ws-a", "linkiq-tig-494", "linkiq", ["src/index.ts"]),
-      entry("ws-b", "chat-tig-487", "chat", ["src/index.ts"]),
-    ]);
-    expect(hints).toEqual({});
+  it("status derives groups live: gate, verdict pass, and in flight", () => {
+    const gated = worktree("tig-430");
+    const ready = worktree("tig-431", { prUrl: "https://x/pr/1" });
+    const flowing = worktree("tig-432");
+    const port = fakePort(
+      [
+        { cwd: gated, id: "ws-1", name: "tig-430", ref: "r" },
+        { cwd: ready, id: "ws-2", name: "tig-431", ref: "r" },
+        { cwd: flowing, id: "ws-3", name: "tig-432", ref: "r" },
+      ],
+      [{ cwd: gated, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    status({}, out, port);
+    const rendered = text();
+    expect(rendered).toContain("NEEDS YOU");
+    expect(rendered).toContain("READY TO MERGE");
+    expect(rendered).toContain("gh pr merge https://x/pr/1 --squash");
+    expect(rendered).toContain("captain approve --plans tig-430");
   });
 
-  it("stays silent when branches touch disjoint files", () => {
-    const hints = mergeOrderHints([
-      entry("ws-a", "linkiq-tig-494", "linkiq", ["a.ts"]),
-      entry("ws-b", "linkiq-tig-496", "linkiq", ["b.ts"]),
-    ]);
-    expect(hints).toEqual({});
+  it("status ignores cmux workspaces without a .captain marker", () => {
+    const managed = worktree("tig-430");
+    const port = fakePort(
+      [
+        { cwd: managed, id: "ws-1", name: "tig-430", ref: "r" },
+        {
+          cwd: join(root, "random-dir"),
+          id: "ws-9",
+          name: "scratch",
+          ref: "r",
+        },
+      ],
+      []
+    );
+    const { out, text } = capture();
+    status({ json: true }, out, port);
+    const rows = JSON.parse(text()) as FleetRow[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].workspaceId).toBe("ws-1");
   });
 
-  it("truncates a long shared-file list", () => {
-    const shared = ["a.ts", "b.ts", "c.ts", "d.ts"];
-    const hints = mergeOrderHints([
-      entry("ws-a", "x-tig-1", "x", shared),
-      entry("ws-b", "x-tig-2", "x", shared),
-    ]);
-    expect(hints["ws-a"]).toContain("(+2 more)");
+  it("status --json stays plain and machine-readable", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    status({ json: true }, out, port);
+    const rows = JSON.parse(text()) as FleetRow[];
+    expect(rows[0]).toMatchObject({
+      gate: { id: "feed-1", kind: "plan" },
+      group: "needs-you",
+    });
   });
 });

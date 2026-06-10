@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { renderRubric } from "../rubric";
-// The fs readers moved to sweeps.ts so verdict.ts stays pure.
-import { expectedRubricHash, readVerdict } from "./sweeps";
-import type { Stage, Verdict, Worktree } from "./types";
-import { checkVerdict, parseVerdict } from "./verdict";
+// The fs readers live in surface.ts so verdict.ts stays pure.
+import { expectedRubricHash, readVerdict } from "./surface";
+import { parseVerdict, verdictCounts } from "./verdict";
+import type { Verdict } from "./verdict";
 
 const verdict = (over: Partial<Verdict> = {}): Verdict => ({
   criteria: [{ evidence: "src/x.ts:10", name: "implements", pass: true }],
@@ -18,16 +18,6 @@ const verdict = (over: Partial<Verdict> = {}): Verdict => ({
   summary: "all criteria pass",
   ts: 1_700_000_000,
   verdict: "pass",
-  ...over,
-});
-
-const wt = (over: Partial<Worktree> = {}): Worktree => ({
-  agent: "claude",
-  cwd: "/wt/tig-430",
-  name: "tig-430",
-  since: 0,
-  stage: "BABYSITTING",
-  workspaceId: "ws-1",
   ...over,
 });
 
@@ -64,66 +54,18 @@ describe("parseVerdict", () => {
   });
 });
 
-describe("checkVerdict", () => {
-  it("parks the pr-ready gate on a verified pass", () => {
-    const t = checkVerdict(wt(), verdict(), "abc123");
-    expect(t).toEqual({
-      gate: "pr-ready",
-      nextStage: "READY_TO_MERGE",
-      notify: "verified PR-ready: all criteria pass",
-    });
+describe("verdictCounts", () => {
+  it("accepts a matching hash and rejects a stale/tampered one", () => {
+    expect(verdictCounts(verdict(), "abc123")).toBe(true);
+    expect(verdictCounts(verdict(), "other-hash")).toBe(false);
   });
 
-  it("escalates a fail to BLOCKED with the verifier's summary", () => {
-    const t = checkVerdict(
-      wt(),
-      verdict({ summary: "tests missing", verdict: "fail" }),
-      "abc123"
-    );
-    expect(t?.nextStage).toBe("BLOCKED");
-    expect(t?.gate).toBe("needs-input");
-    expect(t?.notify).toContain("tests missing");
-  });
-
-  it("ignores a verdict citing the wrong rubric hash (stale or tampered)", () => {
-    expect(checkVerdict(wt(), verdict(), "other-hash")).toBeNull();
-  });
-
-  it("accepts the verdict's hash when no rubric exists to check against", () => {
-    expect(checkVerdict(wt(), verdict())?.nextStage).toBe("READY_TO_MERGE");
-  });
-
-  it("does nothing without a verdict", () => {
-    expect(checkVerdict(wt(), null, "abc123")).toBeNull();
-  });
-
-  it("only fires in the PR stages", () => {
-    const earlier: Stage[] = [
-      "ADOPTED",
-      "PLANNING",
-      "PLAN_READY",
-      "IMPLEMENTING",
-      "SIMPLIFY",
-      "REVIEW",
-      "READY_TO_MERGE",
-      "BLOCKED",
-    ];
-    for (const stage of earlier) {
-      expect(checkVerdict(wt({ stage }), verdict(), "abc123")).toBeNull();
-    }
-    expect(
-      checkVerdict(wt({ stage: "PR_OPEN" }), verdict(), "abc123")
-    ).not.toBeNull();
-  });
-
-  it("never re-fires once a gate is parked (idempotent on re-checks)", () => {
-    expect(
-      checkVerdict(wt({ gate: "pr-ready" }), verdict(), "abc123")
-    ).toBeNull();
+  it("accepts as-is when no rubric exists to check against", () => {
+    expect(verdictCounts(verdict())).toBe(true);
   });
 });
 
-describe("the fs round trip (rubric on disk → verdict → gate)", () => {
+describe("the fs round trip (rubric on disk → verdict → hash check)", () => {
   const cleanup: string[] = [];
 
   afterEach(async () => {
@@ -141,19 +83,15 @@ describe("the fs round trip (rubric on disk → verdict → gate)", () => {
     return { cwd, hash };
   };
 
-  it("a verdict citing the on-disk rubric's hash opens the pr-ready gate", () => {
+  it("a verdict citing the on-disk rubric's hash counts", () => {
     const { cwd, hash } = worktreeWithRubric();
     writeFileSync(
       join(cwd, ".captain", "verdict.json"),
       JSON.stringify(verdict({ rubricHash: hash }))
     );
-    const t = checkVerdict(
-      wt({ cwd }),
-      readVerdict(cwd),
-      expectedRubricHash(cwd)
-    );
-    expect(t?.nextStage).toBe("READY_TO_MERGE");
-    expect(t?.gate).toBe("pr-ready");
+    const v = readVerdict(cwd);
+    expect(v).not.toBeNull();
+    expect(v && verdictCounts(v, expectedRubricHash(cwd))).toBe(true);
   });
 
   it("editing the rubric after the verdict voids it", () => {
@@ -166,9 +104,8 @@ describe("the fs round trip (rubric on disk → verdict → gate)", () => {
       join(cwd, ".captain", "rubric.md"),
       "# Definition of done — TIG-430\n\nweakened criteria\n"
     );
-    expect(
-      checkVerdict(wt({ cwd }), readVerdict(cwd), expectedRubricHash(cwd))
-    ).toBeNull();
+    const v = readVerdict(cwd);
+    expect(v && verdictCounts(v, expectedRubricHash(cwd))).toBe(false);
   });
 
   it("a missing verdict file reads as no verdict", () => {

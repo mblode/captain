@@ -13,11 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { launchPlanMode } from "./launch";
-import {
-  collapsedWorktreeNotes,
-  runLinearWorktree,
-  worktreeMatch,
-} from "./runner";
+import { collapsedWorktreeNotes, runLinearWorktree } from "./runner";
 import { runRequired } from "./shell";
 
 const cleanup: string[] = [];
@@ -95,27 +91,6 @@ const createGitRepo = async (
   return { repo, root };
 };
 
-describe("worktreeMatch", () => {
-  it("scopes to the shared parent of sibling worktrees", () => {
-    expect(worktreeMatch(["/repo/wt/feat-1", "/repo/wt/feat-2"])).toBe(
-      "/repo/wt"
-    );
-  });
-
-  it("scopes a single worktree to its parent, not its leaf", () => {
-    // So a later `fanout` adding a sibling under /repo/wt still matches.
-    expect(worktreeMatch(["/repo/wt/feat-1"])).toBe("/repo/wt");
-  });
-
-  it("is undefined for an empty list (no scope)", () => {
-    expect(worktreeMatch([])).toBeUndefined();
-  });
-
-  it("is undefined for disjoint trees, so the watcher stays unscoped", () => {
-    expect(worktreeMatch(["/a/x", "/b/y"])).toBeUndefined();
-  });
-});
-
 describe("runner integration", () => {
   it("--print creates a sibling worktree with the fallback prompt", async () => {
     const { repo, root } = await createGitRepo("src");
@@ -172,6 +147,7 @@ describe("runner integration", () => {
       "learnings.md"
     );
     expect(await readFile(memory, "utf-8")).toContain("## Inbox");
+    expect(output.value()).toContain("<workflow>");
     expect(output.value()).toContain("<finishing-protocol>");
     expect(output.value()).toContain("<fleet-memory>");
     expect(output.value()).toContain(memory);
@@ -267,7 +243,6 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
       cwd: repo,
       env: {
         ...safeEnv(),
-        CAPTAIN_NO_WATCH: "1",
         CMUX_LOG: log,
         PATH: `${binDir}:${safeEnv().PATH}`,
       },
@@ -285,8 +260,8 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
       "claude --permission-mode plan --allow-dangerously-skip-permissions"
     );
     expect(output.value()).toContain("spawned 2 workspaces");
-    // CAPTAIN_NO_WATCH=1 suppresses auto-arming the watcher.
-    expect(output.value()).not.toContain("watcher:");
+    // No watcher to arm — the agents self-drive; status is the read surface.
+    expect(output.value()).toContain("follow along: captain status");
     expect(errput.value()).toContain("[1/2] TST-1 ·");
     expect(errput.value()).toContain("opened tst-1 (1/2)");
     expect(errput.value()).toContain("opened tst-2 (2/2)");
@@ -318,7 +293,6 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
       cwd: repo,
       env: {
         ...safeEnv(),
-        CAPTAIN_NO_WATCH: "1",
         CMUX_LOG: log,
         PATH: `${binDir}:${safeEnv().PATH}`,
       },

@@ -3,16 +3,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { realCmux } from "./captain/control";
-import { ensureDaemon } from "./captain/daemon";
-import { ticketFrom } from "./captain/format";
-import { appendIntent } from "./captain/intents";
-import {
-  DEFAULT_FLEET,
-  inScope,
-  loadState,
-  now,
-  scopesOf,
-} from "./captain/state";
+import { ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { CliError } from "./errors";
 import { ensureWorktree, fetchOrigin } from "./git";
@@ -51,70 +42,6 @@ interface DispatchArgs {
   stdout: NodeJS.WritableStream;
   tokens: string[];
 }
-
-// The longest path all inputs share, segment by segment.
-const commonDirPrefix = (paths: string[]): string => {
-  if (paths.length === 0) {
-    return "";
-  }
-  const split = paths.map((p) => p.split("/"));
-  const [first] = split;
-  let i = 0;
-  while (i < first.length && split.every((parts) => parts[i] === first[i])) {
-    i += 1;
-  }
-  return first.slice(0, i).join("/");
-};
-
-// The shared parent directory of the fanned-out worktrees, handed to the watcher
-// as its `match`. Scoping to the parent (not the leaf) keeps a single-issue fanout
-// in the same scope as a batch one. Disjoint trees share no parent → undefined
-// ("don't narrow").
-export const worktreeMatch = (paths: string[]): string | undefined =>
-  commonDirPrefix(paths.map(dirname)) || undefined;
-
-const watcherNote = (pid: number, started: boolean): string => {
-  if (started) {
-    return `started (pid ${pid})`;
-  }
-  return pid ? `already running (pid ${pid})` : "could not start";
-};
-
-// Make sure exactly one watcher is running, scoped to these worktrees. The match
-// is passed to the watcher (which owns state.json) rather than written here.
-// Set CAPTAIN_NO_WATCH=1 to create the worktrees without auto-driving them.
-const armWatcher = async (
-  worktreePaths: string[],
-  env: NodeJS.ProcessEnv,
-  stdout: NodeJS.WritableStream
-): Promise<void> => {
-  if (env.CAPTAIN_NO_WATCH) {
-    return;
-  }
-  const match = worktreeMatch(worktreePaths);
-  const { pid, started } = await ensureDaemon(DEFAULT_FLEET, env, match);
-  stdout.write(`watcher: ${watcherNote(pid, started)} · captain status\n`);
-
-  // A watcher already running boots with its original match. If these worktrees
-  // fall outside every tracked scope, extend the scope via the intent log (the
-  // watcher is the sole state writer) instead of dropping them — it adopts the
-  // new dir on its next drain/reconcile.
-  if (!started && pid && match) {
-    const scopes = scopesOf(loadState(DEFAULT_FLEET));
-    const covered = worktreePaths.every((p) => inScope(p, scopes));
-    if (!covered) {
-      appendIntent(DEFAULT_FLEET, {
-        dir: match,
-        kind: "scope",
-        ts: now(),
-        workspaceId: "",
-      });
-      stdout.write(
-        `  scope: extended to ${match} — the watcher adopts these within ~30s\n`
-      );
-    }
-  }
-};
 
 // After a fan-out, every worktree we created should own a dedicated cmux
 // workspace (matched by cwd). One that doesn't has collapsed into an existing
@@ -217,6 +144,7 @@ const withLoopExtras = async (
       memory: readMemoryExcerpt(repoRoot, env),
       memoryPath,
       rubricPath: RUBRIC_RELPATH,
+      workflow: true,
     })
   );
 };
@@ -319,7 +247,7 @@ const dispatch = async ({
     }
 
     stdout.write(
-      `spawned ${tokens.length} workspaces - each running claude in plan mode from its worktree\n`
+      `spawned ${tokens.length} workspaces — each agent drives its own pipeline to PR-ready\n`
     );
     for (const note of collapsedWorktreeNotes(
       worktreePaths,
@@ -327,7 +255,7 @@ const dispatch = async ({
     )) {
       stdout.write(`  ${note}\n`);
     }
-    await armWatcher(worktreePaths, env, stdout);
+    stdout.write("follow along: captain status  ·  toasts: captain notify\n");
     return 0;
   }
 
@@ -347,7 +275,7 @@ const dispatch = async ({
     try {
       await launchViaCmux(prepared, env, true, progress);
       progress.done(`opened cmux workspace ${prepared.worktree.branch}`);
-      await armWatcher([prepared.worktree.worktreePath], env, stdout);
+      stdout.write("follow along: captain status\n");
       return 0;
     } catch {
       // fall through to inline launch if cmux refuses the workspace

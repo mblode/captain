@@ -1,38 +1,28 @@
 import { run } from "../shell";
-import { runningPid, watcherHealth } from "./daemon";
-import {
-  DEFAULT_STALE_SECS,
-  groupOf,
-  msg,
-  renderAudit,
-  renderStatus,
-  repoOf,
-  style,
-  useColor,
-} from "./format";
+import { realCmux } from "./control";
+import type { CmuxPort } from "./control";
+import { msg, renderStatus, style, useColor } from "./format";
 import type { Style } from "./format";
-import { readHistory } from "./history";
-import { appendIntent } from "./intents";
-import { DEFAULT_FLEET, loadState, now } from "./state";
-import type { FleetState, HistoryRecord, Worktree } from "./types";
+import { appendLog, now } from "./log";
+import { fleetRows } from "./surface";
+import { mergeOrderHints } from "./view";
+import type { FleetRow } from "./view";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
 
-// Resolve a user-friendly target spec to worktrees. Accepts "all", a repo label
-// ("linkiq" → every gated worktree of that repo), or a comma-separated list of
+// Resolve a user-friendly target spec to rows. Accepts "all", a repo label
+// ("linkiq" → every matching row in the pool), or a comma-separated list of
 // ticket names ("tig-430"), substrings, or workspace ids — never a pasted uuid.
 export const resolveTargets = (
-  state: FleetState,
-  spec: string,
-  stage: Worktree["stage"]
-): { matched: Worktree[]; unknown: string[] } => {
-  const pool = Object.values(state.worktrees).filter((w) => w.stage === stage);
+  pool: FleetRow[],
+  spec: string
+): { matched: FleetRow[]; unknown: string[] } => {
   if (spec === "all") {
     return { matched: pool, unknown: [] };
   }
-  const matched: Worktree[] = [];
+  const matched: FleetRow[] = [];
   const unknown: string[] = [];
-  const push = (hit: Worktree): void => {
+  const push = (hit: FleetRow): void => {
     if (!matched.includes(hit)) {
       matched.push(hit);
     }
@@ -42,8 +32,8 @@ export const resolveTargets = (
     if (!token) {
       continue;
     }
-    // A repo label addresses the whole repo's gated batch at once.
-    const repoHits = pool.filter((w) => repoOf(w).toLowerCase() === token);
+    // A repo label addresses the whole repo's batch at once.
+    const repoHits = pool.filter((r) => r.repo?.toLowerCase() === token);
     if (repoHits.length > 0) {
       for (const hit of repoHits) {
         push(hit);
@@ -51,10 +41,10 @@ export const resolveTargets = (
       continue;
     }
     const hit = pool.find(
-      (w) =>
-        w.workspaceId.toLowerCase() === token ||
-        w.name.toLowerCase() === token ||
-        w.name.toLowerCase().includes(token)
+      (r) =>
+        r.workspaceId.toLowerCase() === token ||
+        r.name.toLowerCase() === token ||
+        r.name.toLowerCase().includes(token)
     );
     if (hit) {
       push(hit);
@@ -73,50 +63,7 @@ export interface StatusOptions {
   needs?: boolean;
   // only the READY group
   ready?: boolean;
-  // include long-parked stale gates instead of folding them into a count
-  all?: boolean;
 }
-
-// How long a human gate sits unanswered before status folds it away as stale.
-const staleSecsFrom = (env: NodeJS.ProcessEnv): number =>
-  Number(env.CAPTAIN_STALE_SECS) || DEFAULT_STALE_SECS;
-
-// PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO
-// (paths are repo-relative, so cross-repo "overlap" is meaningless). Two
-// branches touching the same file will conflict at merge — surface the
-// merge-order call instead of leaving it to be discovered by hand.
-export const mergeOrderHints = (
-  entries: {
-    workspaceId: string;
-    name: string;
-    repo: string;
-    files: string[];
-  }[]
-): Record<string, string> => {
-  const hints: Record<string, string> = {};
-  for (let i = 0; i < entries.length; i += 1) {
-    for (let j = i + 1; j < entries.length; j += 1) {
-      const a = entries[i];
-      const b = entries[j];
-      if (a.repo !== b.repo) {
-        continue;
-      }
-      const shared = a.files.filter((f) => b.files.includes(f));
-      if (shared.length === 0) {
-        continue;
-      }
-      const files =
-        shared.length > 2
-          ? `${shared.slice(0, 2).join(", ")} (+${shared.length - 2} more)`
-          : shared.join(", ");
-      hints[a.workspaceId] ??=
-        `overlaps ${b.name} on ${files} — merge one, rebase the other`;
-      hints[b.workspaceId] ??=
-        `overlaps ${a.name} on ${files} — merge one, rebase the other`;
-    }
-  }
-  return hints;
-};
 
 // Thin fs edge: the branch's changed files vs origin's default branch.
 // Fail-soft ([]): a missing origin/HEAD or a deleted worktree must never break
@@ -141,129 +88,59 @@ const changedFiles = (cwd: string, env: NodeJS.ProcessEnv): string[] => {
   return diff.stdout.split("\n").filter(Boolean);
 };
 
-// The one read surface: a watcher-health header, then worktrees grouped with the
-// few that need a decision on top — each carrying its inline resolve command.
-// --repo/--needs/--ready narrow the view; --all unfolds stale gates.
+// The one read surface: the fleet view derived live from cmux + the worktrees,
+// grouped with the few that need a decision on top — each carrying its inline
+// resolve command. --repo/--needs/--ready narrow the view.
 export const status = (
   options: StatusOptions,
-  out: NodeJS.WritableStream
+  out: NodeJS.WritableStream,
+  port: CmuxPort = realCmux(process.env)
 ): void => {
-  let rows = Object.values(loadState(DEFAULT_FLEET).worktrees);
+  let rows = fleetRows(port);
   if (options.repo) {
     const token = options.repo.trim().toLowerCase();
-    rows = rows.filter((w) => repoOf(w).toLowerCase().includes(token));
+    rows = rows.filter((r) => (r.repo ?? "").toLowerCase().includes(token));
   }
   if (options.needs) {
-    rows = rows.filter((w) => groupOf(w.stage) === "needs-you");
+    rows = rows.filter((r) => r.group === "needs-you");
   }
   if (options.ready) {
-    rows = rows.filter((w) => groupOf(w.stage) === "ready");
+    rows = rows.filter((r) => r.group === "ready");
   }
   if (options.json) {
     out.write(`${JSON.stringify(rows, null, 2)}\n`);
     return;
   }
   // Merge-order pass: only worth a git call when ≥2 worktrees are ready.
-  const ready = rows.filter((w) => groupOf(w.stage) === "ready");
+  const ready = rows.filter((r) => r.group === "ready");
   const overlaps =
     ready.length >= 2
       ? mergeOrderHints(
-          ready.map((w) => ({
-            files: changedFiles(w.cwd, process.env),
-            name: w.name,
-            repo: repoOf(w),
-            workspaceId: w.workspaceId,
+          ready.map((r) => ({
+            files: changedFiles(r.cwd, process.env),
+            name: r.name,
+            repo: r.repo ?? "?",
+            workspaceId: r.workspaceId,
           }))
         )
       : {};
-  out.write(
-    renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET), {
-      all: options.all,
-      overlaps,
-      staleSecs: staleSecsFrom(process.env),
-    })
-  );
+  out.write(renderStatus(rows, styleFor(out), { overlaps }));
 };
 
-// Parse a coarse duration like "90m", "2h", "1d", "1h30m" → seconds
-// (undefined if nothing parses, so a typo'd --since is a no-op, not a crash).
-const parseSince = (spec: string): number | undefined => {
-  const units: Record<string, number> = { d: 86_400, h: 3600, m: 60, s: 1 };
-  let total = 0;
-  let matched = false;
-  for (const m of spec.matchAll(/(\d+)\s*([dhms])/giu)) {
-    total += Number(m[1]) * units[m[2].toLowerCase()];
-    matched = true;
-  }
-  return matched ? total : undefined;
-};
+// Rows currently parked at the plan gate — what approve/reject act on.
+const planGated = (port: CmuxPort): FleetRow[] =>
+  fleetRows(port).filter((r) => r.gate?.kind === "plan");
 
-export interface AuditFilter {
-  since?: string;
-  ref?: string;
-}
-
-// Pure filter for the audit trail: recency window (--since) and/or a worktree
-// (--ref, by friendly ticket substring or workspace id). Kept pure of fs/clock so
-// the slicing is unit-testable; `audit` feeds it the real log + clock.
-export const filterHistory = (
-  records: HistoryRecord[],
-  filter: AuditFilter,
-  nowSec: number
-): HistoryRecord[] => {
-  let out = records;
-  if (filter.since) {
-    const secs = parseSince(filter.since);
-    if (secs !== undefined) {
-      const cutoff = nowSec - secs;
-      out = out.filter((r) => r.ts >= cutoff);
-    }
-  }
-  if (filter.ref) {
-    const token = filter.ref.trim().toLowerCase();
-    out = out.filter(
-      (r) =>
-        r.workspaceId.toLowerCase() === token ||
-        r.name.toLowerCase().includes(token)
-    );
-  }
-  return out;
-};
-
-// The governance trail: the append-only history rendered chronologically,
-// optionally narrowed to a recency window or a single worktree.
-export const audit = (
-  filter: AuditFilter & { json?: boolean },
-  out: NodeJS.WritableStream
+// Approve plan(s): reply to the cmux exit-plan feed item directly — there is
+// no state to update and no watcher to hand off to, so the reply IS the
+// approval; the agent resumes and self-drives the rest of its brief.
+export const approve = (
+  spec: string,
+  out: NodeJS.WritableStream,
+  port: CmuxPort = realCmux(process.env)
 ): void => {
-  const records = filterHistory(readHistory(DEFAULT_FLEET), filter, now());
-  if (filter.json) {
-    out.write(`${JSON.stringify(records, null, 2)}\n`);
-    return;
-  }
-  out.write(renderAudit(records, styleFor(out)));
-};
-
-// Approve plan(s): reply to the cmux exit-plan feed item, then mark IMPLEMENTING
-// A queued intent only takes effect when a watcher drains it; warn if none is up.
-const warnIfNoWatcher = (out: NodeJS.WritableStream, s: Style): void => {
-  if (!runningPid(DEFAULT_FLEET)) {
-    out.write(
-      s.dim("  (no watcher running — queued; it applies when one starts)\n")
-    );
-  }
-};
-
-// so the next Stop auto-advances. `spec` = "all" or ticket names / ids.
-//
-// The CLI never writes state.json — that's the watcher's job alone (no two-writer
-// race). It appends an `approve` intent per target; the watcher drains the log,
-// replies to the cmux plan gate, and advances the worktree to IMPLEMENTING. If no
-// watcher is running, the intent is queued and applied the moment one starts.
-export const approve = (spec: string, out: NodeJS.WritableStream): void => {
   const s = styleFor(out);
-  const state = loadState(DEFAULT_FLEET);
-  const { matched, unknown } = resolveTargets(state, spec, "PLAN_READY");
+  const { matched, unknown } = resolveTargets(planGated(port), spec);
   for (const u of unknown) {
     out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
   }
@@ -271,40 +148,32 @@ export const approve = (spec: string, out: NodeJS.WritableStream): void => {
     out.write(s.dim("nothing to approve.\n"));
     return;
   }
-  for (const wt of matched) {
-    appendIntent(DEFAULT_FLEET, {
-      kind: "approve",
-      ts: now(),
-      workspaceId: wt.workspaceId,
-    });
-    out.write(`${msg.ok(s, `approved ${s.bold(wt.name)} → implementing`)}\n`);
+  for (const row of matched) {
+    port.replyExitPlan(row.gate?.id ?? "", true);
+    appendLog({ kind: "approve", name: row.name, ts: now() });
+    out.write(`${msg.ok(s, `approved ${s.bold(row.name)} — implementing`)}\n`);
   }
-  warnIfNoWatcher(out, s);
   out.write(`${msg.hint(s, "next: captain status")}\n`);
 };
 
-// Reject a plan: queue a `reject` intent with the revision feedback. The watcher
-// replies to the plan gate with the note and sends the worktree back to PLANNING.
+// Reject a plan: reply false to the plan gate, then type the feedback into the
+// workspace so the agent actually receives the why and revises against it.
 export const reject = (
   ref: string,
   note: string,
-  out: NodeJS.WritableStream
+  out: NodeJS.WritableStream,
+  port: CmuxPort = realCmux(process.env)
 ): void => {
   const s = styleFor(out);
-  const state = loadState(DEFAULT_FLEET);
-  const { matched } = resolveTargets(state, ref, "PLAN_READY");
-  const [wt] = matched;
-  if (!wt) {
+  const { matched } = resolveTargets(planGated(port), ref);
+  const [row] = matched;
+  if (!row) {
     out.write(`${msg.warn(s, `no plan-ready worktree matches "${ref}"`)}\n`);
     return;
   }
-  appendIntent(DEFAULT_FLEET, {
-    kind: "reject",
-    note,
-    ts: now(),
-    workspaceId: wt.workspaceId,
-  });
-  out.write(`${s.yellow("↩")} ${s.bold(wt.name)} back to planning: ${note}\n`);
-  warnIfNoWatcher(out, s);
+  port.replyExitPlan(row.gate?.id ?? "", false);
+  port.send(row.workspaceId, `Plan rejected — revise it: ${note}`);
+  appendLog({ kind: "reject", name: row.name, note, ts: now() });
+  out.write(`${s.yellow("↩")} ${s.bold(row.name)} back to planning: ${note}\n`);
   out.write(`${msg.hint(s, "next: captain status")}\n`);
 };

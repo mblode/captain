@@ -1,8 +1,10 @@
 # captain
 
-A live driver for a fleet of cmux worktrees (Linear ticket → PR-ready), built on the
-`linear-worktree` fan-out. The watcher holds the cmux agent event stream open and advances each
-worktree through a state machine, parking human gates.
+Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you, built
+on the `linear-worktree` fan-out. Each agent's brief carries the whole pipeline and the agent
+drives it itself; captain keeps **no state** — `status` is derived live from cmux-native signals
+and the per-worktree `.captain/` files. (The previous watcher-daemon/state-machine architecture
+was deleted June 2026 — see `research/` for the history.)
 
 ## Commands
 
@@ -22,132 +24,96 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: fanout | status | audit | approve | reject | restart | stop | watch
-  runner.ts         # the inherited fan-out + armWatcher (writes match, ensures the daemon)
-  cmux.ts git.ts linear.ts repo.ts issue.ts prompt.ts images.ts launch.ts progress.ts shell.ts
+  cli.ts            # Commander entry: fanout | status | approve | reject | notify
+  runner.ts         # the fan-out: worktree + workspace + the self-drive brief per issue
+  cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts
+  prompt.ts         # issue context + <workflow> (the self-drive pipeline) + <finishing-protocol> + <fleet-memory>
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
   memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
   captain/
-    pipeline.ts     # PURE state machine: (worktree, hook event) -> transition. Start here.
-    types.ts        # Stage, Worktree, FleetState, HookEvent, Transition, HistoryRecord
-    state.ts        # DEFAULT_FLEET + atomic load/save of ~/.claude/captain/default/state.json + cursor
-    history.ts      # append-only audit log ~/.claude/captain/default/history.jsonl (appendHistory/readHistory)
-    intents.ts      # append-only intent log ~/.claude/captain/default/intents.jsonl: approve/reject hand decisions to the watcher (single-writer)
-    daemon.ts       # singleton watcher: pidfile guard, async ensureDaemon (spawn + settle-verify alive), stopDaemon, stale-pidfile self-heal
-    control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, send, read-screen, notify, feed.list, runState via `cmux top`, feed reply); tests pass a fake port
-    events.ts       # spawn `cmux events --category agent --reconnect`, parse agent.hook frames
-    verdict.ts      # 100% PURE parse/checkVerdict (lint-enforced no-fs): verdict data -> pr-ready gate or BLOCKED
-    watch.ts        # wiring only: load state, boot reconcile/drain, the 30s timer, the event loop + a slim handleEvent
-    commit.ts       # THE single state mutator: stage/gate/note/verdict/prUrl + new-gate idempotency + notify + history + save; persist() for non-transition saves
-    adopt.ts        # adoptFromEvent + reconcile (workspace adoption/prune)
-    sweeps.ts       # sweepHalts + sweepVerdicts + applyVerdict (reconcile-tick passes) + the verdict/rubric fs readers
-    intents-drain.ts # drainIntents + applyIntent (the watcher's side of approve/reject)
-    commands.ts     # status + audit (read views) + approve/reject + friendly-id resolution
-    format.ts       # TTY-aware colour, stage glyphs, grouped status + the audit view
+    view.ts         # 100% PURE (lint-enforced): identity, pendingGate (feed → gate), rowOf (the grouping rule), mergeOrderHints. Start here.
+    verdict.ts      # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
+    surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
+    control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
+    commands.ts     # stateless status/approve/reject + friendly-id resolution
+    notify.ts       # optional foreground poller: diff the view per tick, toast on change, one quiet nudge
+    format.ts       # TTY-aware colour + the grouped status renderer (display only)
+    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/toasts)
 ```
 
-## DX surface
+## How it works
 
-One implicit fleet (`DEFAULT_FLEET`), so no `--fleet` anywhere. `fanout` auto-starts a single
-detached watcher (pidfile-guarded in `daemon.ts`), passing the worktrees' shared parent dir as a
-`CAPTAIN_MATCH` scope. The watcher is the **sole writer** of `state.json` (it persists that match),
-so `fanout` never races its saves; an already-running watcher keeps its boot-time scope and warns
-if a later `fanout` falls outside it. `status` is the whole read surface — it folds in the old
-`gates`/`ready` by printing each gate's inline resolve command and each PR's merge hint, plus a
-watcher-health header. `stop` tears the daemon down. `CAPTAIN_NO_WATCH=1` opts out of auto-driving.
+**Dispatch** (`fanout`): per issue — worktree + cmux workspace + a brief containing the issue,
+the `<workflow>` pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` →
+`/pr-babysitter`), the finishing protocol, and fleet memory. The agent self-drives; nothing
+external types commands into it.
 
-## How the watcher decides
+**Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
 
-`hook_event_name` drives everything (each frame carries `workspace_id` + `cwd` + `seq`):
-`Stop` → advance (send next slash command) · `ExitPlanMode` → PLAN_READY gate ·
-`AskUserQuestion`/`Notification` → BLOCKED · `UserPromptSubmit`/`PreToolUse` → busy.
-The advance pipeline (`NEXT_ON_STOP` in `pipeline.ts`) is derived from real cadence usage:
-`/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`, stopping at PR-ready.
+- membership: a cmux workspace whose cwd has a `.captain/` dir (fanout writes the rubric there)
+- busy/idle: `cmux top --all --flat --format tsv` run-state tags (one call, all workspaces)
+- gates: the newest **unresolved** `feed.list` item per cwd (`resolved_at` absent = pending);
+  `exitPlan` → the plan gate, `question`/`notification` → blocked
+- done: `.captain/verdict.json`, hash-checked against the rubric as it exists now
+- grouping (`rowOf` in `view.ts`): gate, failed verdict, or run-state `needs-input` → NEEDS YOU;
+  valid passing verdict → READY TO MERGE; otherwise IN FLIGHT
 
-Before sending the next command on `Stop`, the watcher confirms the agent is idle via
-**cmux-native signals** (`watch.ts`): the busy check reads the per-workspace run-state tag from
-`cmux top --all --flat --format tsv` and the gate hint comes from the newest unresolved
-`question`/`notification` in `cmux rpc feed.list` (matched by cwd). Both fall back automatically to
-the legacy screen scrape (`BUSY`/`PROSE` regexes) when the native signal is unavailable
-(`runState` "unknown" / empty feed), and `CAPTAIN_SCRAPE=1` forces scrape-only — the regexes are
-kept for one release, then deleted.
+`approve` replies to the exit-plan feed item directly; `reject` replies false **and** types the
+feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
+intent queue, no daemon to race.
 
-Beyond event-driven advancement, the 30s reconcile timer sweeps for hung loops (`sweepHalts` in
-`sweeps.ts` + the pure `checkHalt` in `pipeline.ts`): a worktree event-silent past `CAPTAIN_STALL_SECS`
-(default 1800 = 30m) while in a working stage (PLANNING/IMPLEMENTING/SIMPLIFY/REVIEW/PR_OPEN) is a
-silently-hung agent — no events means `transition` never fires for it — so it's parked at a
-`BLOCKED` gate ("needs you"). BABYSITTING (legitimately long-polls a PR), ADOPTED (transient), and
-the human gates (PLAN_READY/READY_TO_MERGE/BLOCKED) idle by design and are exempt.
+**Notify** (`captain notify`, optional): a foreground 30s poller (`CAPTAIN_POLL_SECS`) that diffs
+the view in memory and toasts on a new gate, a fresh verdict, or a worktree idle-and-unchanged
+past `CAPTAIN_QUIET_SECS` (default 1800; one nudge, never repeated). `--once` runs a single pass.
+Kill/restart freely — worst case is one repeat toast.
 
 ## The verdict gate & fleet memory (the agent-side loops)
 
-Two loops the _agent_ closes against its environment, with captain as the recording gate (design
-rationale in `research/loops-fable5.md`). **Verifier loop**: fan-out writes a definition of done
-into each worktree (`.captain/rubric.md`, rendered by `rubric.ts` from the Linear issue — no LLM
-call) and the prompt's `<finishing-protocol>` section requires a fresh-context verifier sub-agent
-to pass it before the agent writes `.captain/verdict.json`. The watcher reads that file on `Stop`
-and on the reconcile tick (`applyVerdict`/`sweepVerdicts` in `sweeps.ts`, pure decision in
-`verdict.ts`): a pass parks the `pr-ready` gate at `READY_TO_MERGE` (wiring the formerly dead
-stage, and assigning `prUrl` when the verdict carries it); a fail escalates to `BLOCKED` with the
-verifier's summary. The verdict must cite the sha256 of the rubric body _as it exists now_
+**Verifier loop**: fan-out writes a definition of done into each worktree (`.captain/rubric.md`,
+rendered by `rubric.ts` from the Linear issue — no LLM call) and the prompt's
+`<finishing-protocol>` requires a fresh-context verifier sub-agent to pass it before the agent
+writes `.captain/verdict.json`. `status` reads that file at render time: a valid pass shows
+READY TO MERGE + `✓ verified` (+ the PR's merge hint); a fail shows NEEDS YOU with the verifier's
+summary. The verdict must cite the sha256 of the rubric body _as it exists now_
 (`rubricBody`/`rubricHash`), so editing the criteria after the fact voids it. **Memory loop**:
 `memory.ts` keeps `~/.claude/captain/memory/<repo>/learnings.md` (shared by all worktrees of a
-repo, survives worktree removal); fan-out injects all of `## Rules` plus the tail-capped
-`## Inbox` via the prompt's `<fleet-memory>` section, and instructs agents to append only
-_verified_ learnings at end of run. Curation (Inbox → Rules) is human-driven via the captain
-skill; reject/halt/verdict reasons land in `HistoryRecord.note` so `captain audit` shows the
-why worth distilling.
-
-## Measurement & the self-improvement loop
-
-Every transition the watcher makes is appended to `history.jsonl` (`history.ts`) — advances,
-gates, busy-defer reworks, plus approve/reject from `commands.ts`. That log + `captain audit`
-are the measurement substrate; the self-improvement loop itself is agent-side: the verdict gate
-(outcome verification) + fleet memory (distilled learnings) — see `research/loops-fable5.md`.
-(The old metrics/tuning subsystem — `captain metrics`, per-stage retry budgets — was deleted:
-it never fired in real runs, and `checkHalt` + the verdict gate cover what it was for.)
-
-`captain audit` is the governance trail over that same log: every advance, gate, and human
-approve/reject rendered chronologically with the actor (watcher vs. you), the stage flow, and the
-slash command sent — `filterHistory` (PURE, in `commands.ts`) narrows it by recency (`--since 2h`)
-or worktree (`--ref tig-430`), and `--json` stays plain for piping. It reuses `readHistory`; no new
-state. (The scoped-permission/policy layer that _constrains_ what the watcher may do unattended is a
-planned follow-up; this ships the read-side audit first.)
+repo, survives worktree removal); fan-out injects `## Rules` + the tail-capped `## Inbox` via
+`<fleet-memory>`, and agents append only _verified_ learnings at end of run. Curation is
+human-driven via the captain skill; approve/reject notes land in `~/.claude/captain/log.jsonl`.
 
 ## Gotchas
 
-- **ESM, bundler resolution**: extensionless relative imports (`./state`, not `./state.js`); `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
-- **The pure core stays pure** (`pipeline.ts`, `verdict.ts`, `rubric.ts`) — keep I/O (cmux, fs) out so they stay unit-testable; decisions take plain input data, not fs reads.
-- **Append-only logs, single state writer** (`history.ts`, `intents.ts`): each is one JSON line per record, so it never races the `state.json` temp+rename and a truncated tail line is just skipped on read — safe to append from any process. The **watcher is the sole writer of `state.json`**: `approve`/`reject` never mutate it (that would race the watcher's live saves), they append an `intent` to `intents.jsonl`, and the watcher drains it via a byte-offset cursor (`state.intentsOffset`) — at startup, before each event, and on the reconcile timer — replying to the cmux plan gate and moving the stage itself. Exactly-once: the cursor only advances past complete lines.
-- **All state mutation goes through `commit()`** (`commit.ts`) — the one home for the
-  mutate → notify → record history → save invariant; `persist()` covers non-transition saves
-  (adoption, the intents cursor). Lint-enforced: `saveState` imports are banned outside
-  `commit.ts`/`state.ts` (oxlint `no-restricted-imports` in `oxlint.config.ts`; `*.test.ts` exempt
-  for the `fleetDir` spy pattern). The same config bans `node:fs`/`node:child_process` in the pure
-  domain (`pipeline.ts`, `verdict.ts`).
-- **Idempotent gates**: cmux re-emits some hook frames; only alert on a _new_ gate (`commit()` owns that decision), never double-notify. A re-emitted `ExitPlanMode` (and a bypass-permissions re-plan) must not regress an already-approved worktree — `transition` only gates from the pre-approval stages (`PLANNABLE_FROM` in `pipeline.ts`).
-- **Never trust cmux's built-in workspace status** (the status glyph desyncs); derive stage from
-  the agent event stream. This does _not_ apply to `cmux top`'s per-workspace run-state **tag**
-  (`runState` in `control.ts`) — that's live process accounting, not the glyph, and is the trusted
-  primary busy signal. Anything it can't read parses as "unknown" and falls back to the scrape.
-- **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill can parse them.
+- **ESM, bundler resolution**: extensionless relative imports (`./view`, not `./view.js`);
+  `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
+- **The pure core stays pure** (`view.ts`, `verdict.ts`, `rubric.ts`) — lint-enforced for
+  view/verdict (oxlint `no-restricted-imports` bans `node:fs`/`node:child_process` in
+  `oxlint.config.ts`). Decisions take plain input data; `surface.ts` is the one fs/cmux edge.
+- **The verdict is fail-safe by construction**: a missing/garbage `.captain/verdict.json` is "no
+  verdict yet" (`parseVerdict` returns null — a malformed verdict must never read as a pass), and
+  the verdict gates the _label_ (`✓ verified`), never the merge — the human merge gate stays
+  authoritative.
+- **Never trust cmux's built-in workspace status glyph** (it desyncs). The trusted signals are
+  `cmux top`'s per-workspace run-state **tag** (live process accounting, `runStates` in
+  `control.ts`) and the feed's `resolved_at` field. An unreadable tag parses as "unknown" =
+  not busy.
+- **The feed is the gate inventory**: always filter `!resolved_at` and pick the newest match per
+  cwd (`pendingGate` in `view.ts`) — a stale resolved item must never read as a live gate or
+  swallow an `exit_plan.reply`.
+- **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill
+  can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.
-- **The verdict gate is fail-safe by construction**: a missing/garbage `.captain/verdict.json` is
-  "no verdict yet" — the worktree idles at BABYSITTING exactly as before the feature existed, and a
-  malformed verdict must never read as a pass (`parseVerdict` returns null). The verdict gates the
-  _label_ (READY_TO_MERGE + `✓ verified`), never the merge — the human merge gate stays
-  authoritative. `checkVerdict` is idempotent (null once `wt.gate` is set), so the Stop path and
-  the reconcile sweep never double-fire.
 - **`.captain/` never reaches a diff**: `fanout` appends it to the repo's shared
   `.git/info/exclude` (one append covers all linked worktrees) — don't move the rubric/verdict
-  into tracked paths.
-- **Tests must not touch real `$HOME` memory**: `memory.ts` honours `CAPTAIN_MEMORY_DIR`; any test
-  that drives the fan-out (runner tests) must set it to a temp dir, the same way
-  `CAPTAIN_NO_WATCH=1` guards the daemon.
-- **Self-exclusion is free**: the auto-started watcher is a detached process, not a cmux workspace, so it never appears in `cmux workspace list` and can't drive itself (no `CMUX_CAPTAIN` needed). The `CMUX_WORKSPACE_ID` fallback in `watch.ts` only matters for a manual in-workspace `captain watch`.
-- **Singleton watcher**: `ensureDaemon` is pidfile-guarded — re-running `fanout` never double-spawns. Tests must set `CAPTAIN_NO_WATCH=1` to avoid spawning a real daemon / writing real `~/.claude` state.
-- **Daemon spawn verification (no lying about "started")**: `ensureDaemon` is `async` — after the detached spawn it awaits a brief settle (`SETTLE_MS`) during which an instant death surfaces as the child's `exit`/`error` event (and Node reaps it, so a just-exited child is never a zombie that a bare signal-0 would misread as alive). Only a child still alive after the settle reports `started: true`; otherwise the pidfile is cleaned and the caller (`fanout`/`restart`) prints "could not start — check watch.log". The pidfile is written temp+rename like `state.json`. Because `ensureDaemon` is async, `armWatcher` (runner.ts) and the `restart` action await it.
-- **`captain restart`** bounces the watcher in one move (stop-if-running → `ensureDaemon` with the persisted `match`) — recovering a dead daemon no longer needs a manual relaunch + hand-repointed pidfile (session bugs #1/#9). A stale pidfile (dead pid) is cleaned automatically by `ensureDaemon` before it spawns.
-- **No plugin daemon**: Claude Code plugin monitors and MCP servers are session-scoped (verified June 2026) and cannot host captain's 24/7 watcher, so the daemon stays a self-managed detached process by design. A plugin could one day bundle the skill for distribution, but never the watcher itself.
-- **Stall halt keys off event-silence, not work time**: `checkHalt` measures `wt.lastSeen` (epoch secs of the last _handled event_), NOT `wt.since` (time-in-stage) — a long but healthy turn that keeps emitting hook events resets the clock and is never falsely halted; only a genuinely event-silent agent escalates. The sweep rides the existing 30s reconcile tick (no new timer). Cold-start parity: because it watches silence, not elapsed work, normal/fast runs are unchanged no matter how long a stage legitimately runs. Knobs mirror the watcher opt-outs: `CAPTAIN_STALL_SECS` (default 1800) tunes the threshold, `CAPTAIN_NO_HALT=1` disables the sweep (parallels `CAPTAIN_NO_WATCH=1`). The halt lands in `history.jsonl` as `kind:"gate"` / `gate:"needs-input"` / `event:"halt"`, so `audit` shows it.
+  into tracked paths. It doubles as the membership marker `surface.ts` filters by.
+- **Tests must not touch the real `$HOME`**: `memory.ts` honours `CAPTAIN_MEMORY_DIR` and
+  `log.ts` honours `CAPTAIN_HOME` — runner/commands/notify tests set both to temp dirs and drive
+  the real modules through a fake `CmuxPort` (no mocking library).
+- **No daemon, ever**: there is no watcher process, no pidfile, no state.json. If you find
+  yourself adding persisted fleet state, stop — derive it from cmux + the filesystem instead.
 - **Behaviour parity**: preserve the inherited `fanout` modes (single-issue, fan-out, `--print`).
+
+## Env knobs
+
+`LINEAR_API_KEY` (issue fetch + screenshots) · `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
+`CAPTAIN_HOME` (log.jsonl override) · `CAPTAIN_POLL_SECS` / `CAPTAIN_QUIET_SECS` (notify) ·
+`CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
