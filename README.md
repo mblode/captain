@@ -4,11 +4,11 @@ Run a fleet of [cmux](https://cmux.com/) worktrees, one per Linear ticket.
 
 `captain fanout` opens a worktree per issue and gives each agent a brief with the whole pipeline:
 plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verifier
-verdict. Each agent runs that brief on its own. `captain status` reads cmux to show what's
-blocked, what's in flight, and what's ready to merge. It keeps no daemon and no saved state.
+verdict. Each agent runs it on its own. `captain status` reads cmux to show what's blocked,
+in flight, and ready to merge. No daemon, no saved state.
 
-Captain never approves a plan, answers a question, or merges a PR for you. Those are left to
-`captain approve`, `captain reject`, and your own `git`/`gh`.
+Captain never approves a plan, answers a question, or merges a PR for you. That's `captain
+approve`, `captain reject`, and your own `git`/`gh`.
 
 ## Requirements
 
@@ -23,7 +23,7 @@ Captain never approves a plan, answers a question, or merges a PR for you. Those
 npm i -g cmux-captain        # puts `captain` on your PATH
 ```
 
-The agents' pipeline runs on skills, so install those too:
+The pipeline runs on skills, so install those too:
 
 ```bash
 # the captain skill (teaches Claude Code to run this CLI)
@@ -96,13 +96,13 @@ brief without launching) and `--base <ref>` (stack on a prerequisite branch). Ru
 ## How agents finish
 
 Fan-out writes a definition of done into each worktree (`.captain/rubric.md`, generated from the
-Linear issue). Before marking a ticket done, the agent runs a fresh-context verifier against that
-rubric and writes `.captain/verdict.json` citing the rubric's hash. Edit the criteria afterwards
-and the verdict no longer matches, so it's void. A pass shows the worktree as READY TO MERGE with
-the PR's merge command; a fail shows NEEDS YOU with the verifier's summary.
+Linear issue). Before marking a ticket done, the agent runs a fresh-context verifier against it
+and writes `.captain/verdict.json` with the rubric's hash. A pass shows READY TO MERGE plus the
+merge command; a fail shows NEEDS YOU with the verifier's summary. Edit the rubric afterwards and
+the hash stops matching, so the verdict is void.
 
-Each repo also has a fleet memory file (`~/.claude/captain/memory/<repo>/learnings.md`). Agents
-append verified learnings to it, and fan-out includes them in the next brief.
+Each repo keeps a fleet memory file (`~/.claude/captain/memory/<repo>/learnings.md`). Agents
+append verified learnings, and fan-out feeds them into the next brief.
 
 ## Development
 
