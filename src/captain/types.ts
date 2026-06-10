@@ -47,6 +47,9 @@ export interface FleetState {
   captainWorkspaceId?: string;
   // only track worktrees whose cwd contains this (set by `fanout`)
   match?: string;
+  // additional scope dirs appended at runtime (a later fanout outside the boot
+  // match extends the scope via a `scope` intent instead of being dropped)
+  matches?: string[];
   updatedAt: number;
   // keyed by workspaceId
   worktrees: Record<string, Worktree>;
@@ -55,16 +58,20 @@ export interface FleetState {
   intentsOffset?: number;
 }
 
-// A human decision (`approve`/`reject`) handed from the CLI to the watcher via the
-// append-only intent log. The watcher is the sole writer of state.json, so the CLI
-// never mutates it directly — it appends one of these and the watcher applies it.
+// A human decision (`approve`/`reject`) or a scope extension handed from the
+// CLI to the watcher via the append-only intent log. The watcher is the sole
+// writer of state.json, so the CLI never mutates it directly — it appends one
+// of these and the watcher applies it.
 export interface Intent {
   ts: number;
-  kind: "approve" | "reject";
-  // cmux workspace uuid the decision targets
+  kind: "approve" | "reject" | "scope";
+  // cmux workspace uuid the decision targets ("" for fleet-level intents)
   workspaceId: string;
   // revision feedback (reject only)
   note?: string;
+  // scope dir to start tracking (scope only) — a later fanout outside the
+  // running watcher's boot match extends the scope instead of being dropped
+  dir?: string;
 }
 
 // The agent-side verifier's report, written to <worktree>/.captain/verdict.json

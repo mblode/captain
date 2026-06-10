@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filterHistory, resolveTargets } from "./commands";
+import { filterHistory, mergeOrderHints, resolveTargets } from "./commands";
 import type { FleetState, HistoryRecord, Stage } from "./types";
 
 const state = (...rows: [string, string, Stage][]): FleetState => ({
@@ -148,5 +148,55 @@ describe("filterHistory", () => {
   it("combines --since and --ref", () => {
     const out = filterHistory(log, { ref: "tig-430", since: "800s" }, 1000);
     expect(out.map((r) => r.ts)).toEqual([300]);
+  });
+});
+
+const entry = (
+  workspaceId: string,
+  name: string,
+  repo: string,
+  files: string[]
+) => ({ files, name, repo, workspaceId });
+
+describe("mergeOrderHints", () => {
+  it("flags both sides of a same-repo changed-file overlap", () => {
+    const hints = mergeOrderHints([
+      entry("ws-a", "linkiq-tig-494", "linkiq", [
+        "recommendations.schema.ts",
+        "a.ts",
+      ]),
+      entry("ws-b", "linkiq-tig-496", "linkiq", [
+        "recommendations.schema.ts",
+        "b.ts",
+      ]),
+    ]);
+    expect(hints["ws-a"]).toContain("overlaps linkiq-tig-496");
+    expect(hints["ws-a"]).toContain("recommendations.schema.ts");
+    expect(hints["ws-b"]).toContain("overlaps linkiq-tig-494");
+  });
+
+  it("ignores overlapping paths across different repos", () => {
+    const hints = mergeOrderHints([
+      entry("ws-a", "linkiq-tig-494", "linkiq", ["src/index.ts"]),
+      entry("ws-b", "chat-tig-487", "chat", ["src/index.ts"]),
+    ]);
+    expect(hints).toEqual({});
+  });
+
+  it("stays silent when branches touch disjoint files", () => {
+    const hints = mergeOrderHints([
+      entry("ws-a", "linkiq-tig-494", "linkiq", ["a.ts"]),
+      entry("ws-b", "linkiq-tig-496", "linkiq", ["b.ts"]),
+    ]);
+    expect(hints).toEqual({});
+  });
+
+  it("truncates a long shared-file list", () => {
+    const shared = ["a.ts", "b.ts", "c.ts", "d.ts"];
+    const hints = mergeOrderHints([
+      entry("ws-a", "x-tig-1", "x", shared),
+      entry("ws-b", "x-tig-2", "x", shared),
+    ]);
+    expect(hints["ws-a"]).toContain("(+2 more)");
   });
 });

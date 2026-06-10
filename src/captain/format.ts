@@ -194,6 +194,9 @@ export interface StatusView {
   all?: boolean;
   // how long a human gate sits unanswered before it counts as stale clutter
   staleSecs?: number;
+  // merge-order hints keyed by workspaceId (changed-file overlap between ready
+  // worktrees of one repo) — computed by the caller, rendered here
+  overlaps?: Record<string, string>;
 }
 
 // A worktree parked at a human gate so long it's clutter, not a decision queue.
@@ -259,6 +262,10 @@ export const renderStatus = (
       lines.push(row(wt, s, width, repoPad));
       if (wt.note) {
         lines.push(`      ${s.dim(wt.note)}`);
+      }
+      const overlap = view.overlaps?.[wt.workspaceId];
+      if (overlap) {
+        lines.push(`      ${msg.warn(s, overlap)}`);
       }
       lines.push(...actionLines(wt, s));
     }

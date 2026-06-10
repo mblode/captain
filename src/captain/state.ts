@@ -25,6 +25,19 @@ const statePath = (fleetId: string): string =>
 export const cursorPath = (fleetId: string): string =>
   join(fleetDir(fleetId), "cursor");
 
+// Every scope dir the fleet tracks: the boot-time match plus any extensions a
+// later fanout appended via a `scope` intent. Empty = unscoped (track all).
+export const scopesOf = (state: FleetState): string[] => [
+  ...new Set(
+    [state.match, ...(state.matches ?? [])].filter(Boolean) as string[]
+  ),
+];
+
+// Scope test for one worktree path: no scopes tracks everything, otherwise the
+// cwd must fall under (substring-match) at least one scope dir.
+export const inScope = (cwd: string, scopes: string[]): boolean =>
+  scopes.length === 0 || scopes.some((dir) => cwd.includes(dir));
+
 export const loadState = (fleetId: string): FleetState => {
   const path = statePath(fleetId);
   if (existsSync(path)) {

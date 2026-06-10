@@ -58,10 +58,18 @@ program
     "create the worktree and print the prompt without launching"
   )
   .option("--repo <path>", "force the git repo for this command")
+  .option(
+    "--base <ref>",
+    "branch new worktrees off this ref (e.g. a prerequisite ticket's branch) instead of origin's default"
+  )
   .argument("[input...]", "Linear issue ID, URL, or multiple bare issue IDs")
   .action(
-    async (input: string[], options: { print?: boolean; repo?: string }) => {
+    async (
+      input: string[],
+      options: { print?: boolean; repo?: string; base?: string }
+    ) => {
       process.exitCode = await runLinearWorktree({
+        base: options.base,
         print: Boolean(options.print),
         repoOverride: options.repo,
         tokens: input,

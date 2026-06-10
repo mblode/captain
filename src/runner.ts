@@ -5,7 +5,14 @@ import { basename, dirname, join } from "node:path";
 import { realCmux } from "./captain/control";
 import { ensureDaemon } from "./captain/daemon";
 import { ticketFrom } from "./captain/format";
-import { DEFAULT_FLEET, loadState } from "./captain/state";
+import { appendIntent } from "./captain/intents";
+import {
+  DEFAULT_FLEET,
+  inScope,
+  loadState,
+  now,
+  scopesOf,
+} from "./captain/state";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { CliError } from "./errors";
 import { ensureWorktree, fetchOrigin } from "./git";
@@ -33,6 +40,7 @@ interface PrepareContext {
   env: NodeJS.ProcessEnv;
   progress: Progress;
   repoOverride?: string;
+  base?: string;
 }
 
 interface DispatchArgs {
@@ -87,15 +95,22 @@ const armWatcher = async (
   const { pid, started } = await ensureDaemon(DEFAULT_FLEET, env, match);
   stdout.write(`watcher: ${watcherNote(pid, started)} · captain status\n`);
 
-  // A watcher already running keeps its original scope (it reads match once at
-  // boot). If these worktrees fall outside it, it won't adopt them — say so
-  // rather than silently dropping them.
-  if (!started && pid) {
-    const scope = loadState(DEFAULT_FLEET).match;
-    const covered = worktreePaths.every((p) => !scope || p.includes(scope));
+  // A watcher already running boots with its original match. If these worktrees
+  // fall outside every tracked scope, extend the scope via the intent log (the
+  // watcher is the sole state writer) instead of dropping them — it adopts the
+  // new dir on its next drain/reconcile.
+  if (!started && pid && match) {
+    const scopes = scopesOf(loadState(DEFAULT_FLEET));
+    const covered = worktreePaths.every((p) => inScope(p, scopes));
     if (!covered) {
+      appendIntent(DEFAULT_FLEET, {
+        dir: match,
+        kind: "scope",
+        ts: now(),
+        workspaceId: "",
+      });
       stdout.write(
-        "  note: outside the running watcher's scope — `captain stop` then re-run to track these\n"
+        `  scope: extended to ${match} — the watcher adopts these within ~30s\n`
       );
     }
   }
@@ -246,6 +261,7 @@ const prepareIssue = async (
 
   progress.step("creating worktree");
   const worktree = await ensureWorktree({
+    base: context.base,
     env,
     issueId: parsedIssue.issueId,
     repoRoot: repo.repoRoot,
@@ -359,6 +375,7 @@ export const runLinearWorktree = async (
 
   const progress = createProgress(options.stderr ?? process.stderr);
   const context: PrepareContext = {
+    base: options.base,
     cwd,
     env,
     progress,

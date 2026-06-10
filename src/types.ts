@@ -55,6 +55,8 @@ export interface CliOptions {
   env?: NodeJS.ProcessEnv;
   print?: boolean;
   repoOverride?: string;
+  // branch new worktrees off this ref instead of origin's default branch
+  base?: string;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   tokens: string[];

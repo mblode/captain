@@ -2,7 +2,7 @@ import { commit, persist } from "./commit";
 import type { WatchOptions } from "./commit";
 import { readIntentsFrom } from "./intents";
 import { onPlanApproved } from "./pipeline";
-import { DEFAULT_FLEET } from "./state";
+import { DEFAULT_FLEET, scopesOf } from "./state";
 import type { FleetState, Intent } from "./types";
 
 // Apply one queued human decision from the intent log. `approve`/`reject` run in
@@ -16,6 +16,17 @@ export const applyIntent = (
   intent: Intent,
   opts: WatchOptions
 ): void => {
+  // Fleet-level intent: a later fanout outside the boot match extends the
+  // watcher's scope instead of being dropped. Idempotent (Set semantics); the
+  // next reconcile adopts the new dir's worktrees.
+  if (intent.kind === "scope") {
+    const dir = intent.dir?.trim();
+    if (dir && !scopesOf(state).includes(dir)) {
+      state.matches = [...(state.matches ?? []), dir];
+      opts.log?.(`scope extended to ${dir}`);
+    }
+    return;
+  }
   const wt = state.worktrees[intent.workspaceId];
   if (!wt || wt.stage !== "PLAN_READY") {
     return;

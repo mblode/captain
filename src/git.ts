@@ -13,7 +13,46 @@ interface EnsureWorktreeOptions {
   repoRoot: string;
   slug: string;
   skipFetch?: boolean;
+  // branch the new worktree off this ref (another worktree's branch, a tag, a
+  // sha) instead of origin's default branch — lets a dependent ticket start
+  // from its prerequisite's code before that lands on main
+  base?: string;
 }
+
+// Resolve a user-supplied --base to something `worktree add` accepts: a local
+// branch, its origin counterpart, or any committish — in that order.
+const resolveBaseRef = (
+  repoRoot: string,
+  base: string,
+  env: NodeJS.ProcessEnv
+): string => {
+  for (const candidate of [
+    `refs/heads/${base}`,
+    `refs/remotes/origin/${base}`,
+  ]) {
+    if (
+      run(
+        "git",
+        ["-C", repoRoot, "show-ref", "--verify", "--quiet", candidate],
+        {
+          env,
+        }
+      ).status === 0
+    ) {
+      return candidate;
+    }
+  }
+  if (
+    run("git", ["-C", repoRoot, "rev-parse", "--verify", `${base}^{commit}`], {
+      env,
+    }).status === 0
+  ) {
+    return base;
+  }
+  throw new CliError(
+    `cannot resolve --base ${base} (no local branch, origin branch, or commit)`
+  );
+};
 
 export const fetchOrigin = (repoRoot: string, env: NodeJS.ProcessEnv): void => {
   run("git", ["-C", repoRoot, "fetch", "origin", "--quiet"], { env });
@@ -56,7 +95,8 @@ const addWorktree = (
   repoRoot: string,
   worktreePath: string,
   branch: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  base?: string
 ): void => {
   if (
     run(
@@ -106,6 +146,26 @@ const addWorktree = (
         branch,
         worktreePath,
         `origin/${branch}`,
+      ],
+      { env }
+    );
+    return;
+  }
+
+  // An explicit base wins over origin's default branch for a NEW branch (an
+  // existing branch keeps its history — the reuse paths above are unchanged).
+  if (base) {
+    runRequired(
+      "git",
+      [
+        "-C",
+        repoRoot,
+        "worktree",
+        "add",
+        "-b",
+        branch,
+        worktreePath,
+        resolveBaseRef(repoRoot, base, env),
       ],
       { env }
     );
@@ -219,7 +279,13 @@ export const ensureWorktree = async (
     run("git", ["-C", options.repoRoot, "worktree", "prune"], {
       env: options.env,
     });
-    addWorktree(options.repoRoot, worktreePath, branch, options.env);
+    addWorktree(
+      options.repoRoot,
+      worktreePath,
+      branch,
+      options.env,
+      options.base
+    );
   } finally {
     await releaseLock(lockDir);
   }

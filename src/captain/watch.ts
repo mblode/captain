@@ -197,17 +197,19 @@ export const watch = (input: {
   };
   const stallSecs = Number(input.env.CAPTAIN_STALL_SECS) || DEFAULT_STALL_SECS;
   const haltsEnabled = input.env.CAPTAIN_NO_HALT !== "1";
-  reconcile(state, port.listWorkspaces(), opts.match);
-  persist(state);
-  // Apply any decisions queued while no watcher was running (e.g. `approve` before
-  // `fanout` finished spawning, or between a crash and this restart).
+  // Apply any decisions queued while no watcher was running (e.g. `approve`
+  // before `fanout` finished spawning, or a scope extension from a fanout that
+  // landed between a crash and this restart) — before the first reconcile so an
+  // extended scope adopts its worktrees immediately.
   drainIntents(state, opts);
+  reconcile(state, port.listWorkspaces());
+  persist(state);
   banner(state, opts);
 
   // Periodic reconcile catches worktrees spawned/closed after startup, and is a
   // backstop drain in case the event stream is briefly idle when an intent lands.
   const timer = setInterval(() => {
-    reconcile(state, port.listWorkspaces(), opts.match);
+    reconcile(state, port.listWorkspaces());
     persist(state);
     drainIntents(state, opts);
     if (haltsEnabled) {

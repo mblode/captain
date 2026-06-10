@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { adoptFromEvent, reconcile } from "./adopt";
+import { applyIntent } from "./intents-drain";
 import * as state from "./state";
+import { scopesOf } from "./state";
 import type { FleetState, Worktree } from "./types";
 
 const FLEET = "default";
@@ -76,5 +78,64 @@ describe("adoption identity", () => {
     reconcile(s, [{ cwd: "/wt/chat", id: "ws-3", name: "chat", ref: "w:3" }]);
     expect(s.worktrees["ws-3"].name).toBe("chat");
     expect(s.worktrees["ws-3"].ticket).toBeUndefined();
+  });
+});
+
+describe("scope union", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "captain-scope-"));
+    vi.spyOn(state, "fleetDir").mockReturnValue(root);
+    vi.stubEnv("HOME", root);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("adopts from any tracked scope dir, not just the boot match", () => {
+    const s = { ...fleet(), match: "/repos/linkiq", matches: ["/repos/chat"] };
+    const inside = adoptFromEvent(
+      s,
+      {
+        cwd: "/repos/chat/chat-tig-487",
+        hookEventName: "Stop",
+        seq: 1,
+        workspaceId: "ws-chat",
+      },
+      {}
+    );
+    const outside = adoptFromEvent(
+      s,
+      {
+        cwd: "/elsewhere/frontyard-tig-1",
+        hookEventName: "Stop",
+        seq: 2,
+        workspaceId: "ws-out",
+      },
+      {}
+    );
+    expect(inside?.name).toBe("chat-tig-487");
+    expect(outside).toBeUndefined();
+  });
+
+  it("a scope intent extends the tracked dirs exactly once", () => {
+    const s = { ...fleet(), match: "/repos/linkiq" };
+    const opts = { port: {} as never };
+    applyIntent(
+      s,
+      { dir: "/repos/chat", kind: "scope", ts: 1, workspaceId: "" },
+      opts
+    );
+    applyIntent(
+      s,
+      { dir: "/repos/chat", kind: "scope", ts: 2, workspaceId: "" },
+      opts
+    );
+    expect(s.matches).toEqual(["/repos/chat"]);
+    expect(scopesOf(s)).toEqual(["/repos/linkiq", "/repos/chat"]);
   });
 });

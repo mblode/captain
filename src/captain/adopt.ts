@@ -4,7 +4,7 @@ import { record } from "./commit";
 import { repoLabel } from "./control";
 import type { CmuxWorkspace } from "./control";
 import { ticketFrom } from "./format";
-import { now } from "./state";
+import { inScope, now, scopesOf } from "./state";
 import type { FleetState, HookEvent, Worktree } from "./types";
 
 const agentOf = (name: string): Worktree["agent"] => {
@@ -34,11 +34,12 @@ const identity = (
 };
 
 // Adopt current cmux workspaces into the fleet (excluding the captain itself),
-// and drop tracked worktrees whose workspace has vanished.
+// and drop tracked worktrees whose workspace has vanished. Scope comes from the
+// state itself (boot match + any later `scope` intents), so an extension takes
+// effect on the very next tick.
 export const reconcile = (
   state: FleetState,
-  workspaces: CmuxWorkspace[],
-  match?: string
+  workspaces: CmuxWorkspace[]
 ): void => {
   // A failed or empty `workspace.list` (the cmux RPC is unreliable from a
   // detached daemon) must NOT wipe the tracked fleet — treat it as "no data this
@@ -46,10 +47,11 @@ export const reconcile = (
   if (workspaces.length === 0) {
     return;
   }
+  const scopes = scopesOf(state);
   const selfId = state.captainWorkspaceId;
   const live = new Set<string>();
   for (const w of workspaces) {
-    if (w.id === selfId || (match && !w.cwd.includes(match))) {
+    if (w.id === selfId || !inScope(w.cwd, scopes)) {
       continue;
     }
     live.add(w.id);
@@ -90,9 +92,9 @@ export const reconcile = (
 export const adoptFromEvent = (
   state: FleetState,
   ev: HookEvent,
-  opts: { match?: string; log?: (message: string) => void }
+  opts: { log?: (message: string) => void }
 ): Worktree | undefined => {
-  if (!ev.cwd || (opts.match && !ev.cwd.includes(opts.match))) {
+  if (!ev.cwd || !inScope(ev.cwd, scopesOf(state))) {
     return undefined;
   }
   const fallback = basename(ev.cwd);

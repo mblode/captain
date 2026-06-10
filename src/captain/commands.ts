@@ -1,3 +1,4 @@
+import { run } from "../shell";
 import { runningPid, watcherHealth } from "./daemon";
 import {
   DEFAULT_STALE_SECS,
@@ -80,6 +81,66 @@ export interface StatusOptions {
 const staleSecsFrom = (env: NodeJS.ProcessEnv): number =>
   Number(env.CAPTAIN_STALE_SECS) || DEFAULT_STALE_SECS;
 
+// PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO
+// (paths are repo-relative, so cross-repo "overlap" is meaningless). Two
+// branches touching the same file will conflict at merge — surface the
+// merge-order call instead of leaving it to be discovered by hand.
+export const mergeOrderHints = (
+  entries: {
+    workspaceId: string;
+    name: string;
+    repo: string;
+    files: string[];
+  }[]
+): Record<string, string> => {
+  const hints: Record<string, string> = {};
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const a = entries[i];
+      const b = entries[j];
+      if (a.repo !== b.repo) {
+        continue;
+      }
+      const shared = a.files.filter((f) => b.files.includes(f));
+      if (shared.length === 0) {
+        continue;
+      }
+      const files =
+        shared.length > 2
+          ? `${shared.slice(0, 2).join(", ")} (+${shared.length - 2} more)`
+          : shared.join(", ");
+      hints[a.workspaceId] ??=
+        `overlaps ${b.name} on ${files} — merge one, rebase the other`;
+      hints[b.workspaceId] ??=
+        `overlaps ${a.name} on ${files} — merge one, rebase the other`;
+    }
+  }
+  return hints;
+};
+
+// Thin fs edge: the branch's changed files vs origin's default branch.
+// Fail-soft ([]): a missing origin/HEAD or a deleted worktree must never break
+// `status`.
+const changedFiles = (cwd: string, env: NodeJS.ProcessEnv): string[] => {
+  const head = run(
+    "git",
+    ["-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    { env }
+  );
+  if (head.status !== 0) {
+    return [];
+  }
+  const diff = run(
+    "git",
+    ["-C", cwd, "diff", "--name-only", `${head.stdout.trim()}...HEAD`],
+    { env }
+  );
+  if (diff.status !== 0) {
+    return [];
+  }
+  return diff.stdout.split("\n").filter(Boolean);
+};
+
 // The one read surface: a watcher-health header, then worktrees grouped with the
 // few that need a decision on top — each carrying its inline resolve command.
 // --repo/--needs/--ready narrow the view; --all unfolds stale gates.
@@ -102,9 +163,23 @@ export const status = (
     out.write(`${JSON.stringify(rows, null, 2)}\n`);
     return;
   }
+  // Merge-order pass: only worth a git call when ≥2 worktrees are ready.
+  const ready = rows.filter((w) => groupOf(w.stage) === "ready");
+  const overlaps =
+    ready.length >= 2
+      ? mergeOrderHints(
+          ready.map((w) => ({
+            files: changedFiles(w.cwd, process.env),
+            name: w.name,
+            repo: repoOf(w),
+            workspaceId: w.workspaceId,
+          }))
+        )
+      : {};
   out.write(
     renderStatus(rows, styleFor(out), watcherHealth(DEFAULT_FLEET), {
       all: options.all,
+      overlaps,
       staleSecs: staleSecsFrom(process.env),
     })
   );
