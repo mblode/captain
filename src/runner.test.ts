@@ -13,7 +13,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { launchPlanMode } from "./launch";
-import { collapsedWorktreeNotes, runLinearWorktree } from "./runner";
+import {
+  collapsedWorktreeNotes,
+  runDispatch,
+  runLinearWorktree,
+  runStart,
+} from "./runner";
 import { runRequired } from "./shell";
 
 const cleanup: string[] = [];
@@ -377,6 +382,84 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
     expect(launchLog).toContain(
       "--permission-mode plan --allow-dangerously-skip-permissions prompt body"
     );
+  });
+});
+
+describe("runDispatch (non-Linear, current dir)", () => {
+  it("--print writes the task brief into the current checkout, no worktree", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    const status = await runDispatch({
+      cwd: repo,
+      env: { ...safeEnv(), CAPTAIN_SKILLS: "/simplify,/pr-creator" },
+      print: true,
+      stdout: output.stream,
+      task: "tidy the README",
+    });
+
+    expect(status).toBe(0);
+    // .captain/ lands in the repo root itself (no sibling worktree created).
+    const rubric = await readFile(join(repo, ".captain", "rubric.md"), "utf-8");
+    expect(rubric).toContain("# Definition of done — tidy-the-readme");
+    expect(
+      await readFile(join(repo, ".git", "info", "exclude"), "utf-8")
+    ).toContain(".captain/");
+    // The brief carries the task text, the configured skills, and the loops.
+    expect(output.value()).toContain("Task:\n\ntidy the README");
+    expect(output.value()).toContain("Run /simplify.");
+    expect(output.value()).toContain("Run /pr-creator.");
+    expect(output.value()).toContain("<finishing-protocol>");
+    expect(output.value()).toContain("<fleet-memory>");
+  });
+
+  it("errors on an empty task", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+
+    await expect(
+      runDispatch({ cwd: repo, env: safeEnv(), print: true, task: "   " })
+    ).rejects.toThrow(/usage: captain start/u);
+  });
+});
+
+describe("runStart routing", () => {
+  it("routes a Linear issue id to the worktree fan-out", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    await runStart({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      stdout: output.stream,
+      tokens: ["TST-7"],
+    });
+
+    expect(output.value()).toContain("Work on Linear issue TST-7.");
+    expect(output.value()).toContain(`cd ${join(root, "src-tst-7")}`);
+  });
+
+  it("routes free-form text to a current-dir dispatch", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    await runStart({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      stdout: output.stream,
+      tokens: ["tidy", "the", "readme"],
+    });
+
+    expect(output.value()).toContain("Task:\n\ntidy the readme");
+    // dispatch runs in place — the rubric lands in the checkout, no sibling.
+    expect(
+      await readFile(join(repo, ".captain", "rubric.md"), "utf-8")
+    ).toContain("# Definition of done — tidy-the-readme");
   });
 });
 

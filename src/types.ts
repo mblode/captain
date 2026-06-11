@@ -61,3 +61,18 @@ export interface CliOptions {
   stderr?: NodeJS.WritableStream;
   tokens: string[];
 }
+
+// `captain dispatch` — a free-form task with no Linear issue and no worktree,
+// run in the current checkout.
+export interface DispatchOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  print?: boolean;
+  repoOverride?: string;
+  stdout?: NodeJS.WritableStream;
+  stderr?: NodeJS.WritableStream;
+  // the plain-text task the agent should drive to PR-ready
+  task: string;
+  // workspace label (slugified); defaults to a slug of the task
+  name?: string;
+}

@@ -234,7 +234,7 @@ describe("stateless approve/reject/status over the real surface", () => {
     expect(rendered).toContain("NEEDS YOU");
     expect(rendered).toContain("READY TO MERGE");
     expect(rendered).toContain("gh pr merge https://x/pr/1 --squash");
-    expect(rendered).toContain("captain approve --plans tig-430");
+    expect(rendered).toContain("captain approve tig-430");
   });
 
   it("status ignores cmux workspaces without a .captain marker", () => {

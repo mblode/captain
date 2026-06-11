@@ -96,8 +96,8 @@ const actionLines = (row: FleetRow, s: Style): string[] => {
   if (row.gate?.kind === "plan") {
     return [
       `      ${s.dim("read:")}    cmux read-screen --workspace ${row.workspaceId} --scrollback`,
-      `      ${s.dim("approve:")} captain approve --plans ${shortName(row)}`,
-      `      ${s.dim("reject:")}  captain reject --ref ${shortName(row)} --note "…"`,
+      `      ${s.dim("approve:")} captain approve ${shortName(row)}`,
+      `      ${s.dim("reject:")}  captain reject ${shortName(row)} --note "…"`,
     ];
   }
   if (row.group === "needs-you") {

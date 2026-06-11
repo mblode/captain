@@ -91,6 +91,14 @@ const reuseExistingWorktree = (
   };
 };
 
+const refExists = (
+  repoRoot: string,
+  ref: string,
+  env: NodeJS.ProcessEnv
+): boolean =>
+  run("git", ["-C", repoRoot, "show-ref", "--verify", "--quiet", ref], { env })
+    .status === 0;
+
 const addWorktree = (
   repoRoot: string,
   worktreePath: string,
@@ -98,20 +106,7 @@ const addWorktree = (
   env: NodeJS.ProcessEnv,
   base?: string
 ): void => {
-  if (
-    run(
-      "git",
-      [
-        "-C",
-        repoRoot,
-        "show-ref",
-        "--verify",
-        "--quiet",
-        `refs/heads/${branch}`,
-      ],
-      { env }
-    ).status === 0
-  ) {
+  if (refExists(repoRoot, `refs/heads/${branch}`, env)) {
     runRequired(
       "git",
       ["-C", repoRoot, "worktree", "add", worktreePath, branch],
@@ -120,20 +115,7 @@ const addWorktree = (
     return;
   }
 
-  if (
-    run(
-      "git",
-      [
-        "-C",
-        repoRoot,
-        "show-ref",
-        "--verify",
-        "--quiet",
-        `refs/remotes/origin/${branch}`,
-      ],
-      { env }
-    ).status === 0
-  ) {
+  if (refExists(repoRoot, `refs/remotes/origin/${branch}`, env)) {
     runRequired(
       "git",
       [

@@ -53,7 +53,7 @@ describe("renderStatus", () => {
     expect(out).toContain("1 need you");
     expect(out.indexOf("NEEDS YOU")).toBeLessThan(out.indexOf("IN FLIGHT"));
     // The gate carries its own resolve command.
-    expect(out).toContain("captain approve --plans tig-2");
+    expect(out).toContain("captain approve tig-2");
   });
 
   it("inlines a merge hint when a worktree is ready", () => {

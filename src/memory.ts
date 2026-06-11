@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+
+import { captainHome } from "./home";
 
 // Cross-session fleet memory: one markdown file per repo that fan-out prompts
 // consult and agents append verified learnings to. `## Rules` is the curated,
@@ -35,7 +36,7 @@ export const memoryPath = (
   env: NodeJS.ProcessEnv = process.env
 ): string =>
   join(
-    env.CAPTAIN_MEMORY_DIR ?? join(homedir(), ".claude", "captain", "memory"),
+    env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory"),
     basename(repoRoot),
     "learnings.md"
   );

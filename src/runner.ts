@@ -5,10 +5,11 @@ import { basename, dirname, join } from "node:path";
 import { realCmux } from "./captain/control";
 import { ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
+import { loadSkills } from "./config";
 import { CliError } from "./errors";
 import { ensureWorktree, fetchOrigin } from "./git";
 import { downloadIssueImages } from "./images";
-import { parseIssueInput, slugify } from "./issue";
+import { isIssueId, parseIssueInput, slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
 import { fetchLinearIssue } from "./linear";
 import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
@@ -18,7 +19,7 @@ import { renderPrompt, renderPromptExtras } from "./prompt";
 import { resolveRepo } from "./repo";
 import { renderRubric, RUBRIC_RELPATH } from "./rubric";
 import { commandExists } from "./shell";
-import type { CliOptions, WorktreeResult } from "./types";
+import type { CliOptions, DispatchOptions, WorktreeResult } from "./types";
 
 interface PreparedIssue {
   displayId: string;
@@ -32,6 +33,8 @@ interface PrepareContext {
   progress: Progress;
   repoOverride?: string;
   base?: string;
+  // the configured post-implementation skills, loaded once per run
+  skills: string[];
 }
 
 interface DispatchArgs {
@@ -89,22 +92,68 @@ const writePromptFile = async (
   return promptPath;
 };
 
+interface LaunchTarget {
+  // cmux workspace name + git branch (progress label)
+  label: string;
+  // where the agent runs (a worktree, or the checkout itself for dispatch)
+  cwd: string;
+  // names the temp prompt-file dir
+  displayId: string;
+  prompt: string;
+  env: NodeJS.ProcessEnv;
+  progress: Progress;
+}
+
 const launchViaCmux = async (
-  prepared: PreparedIssue,
-  env: NodeJS.ProcessEnv,
-  focus: boolean,
-  progress: Progress
+  target: LaunchTarget,
+  focus: boolean
 ): Promise<void> => {
-  progress.step(`opening cmux workspace ${prepared.worktree.branch}`);
-  const promptPath = await writePromptFile(prepared.displayId, prepared.prompt);
+  target.progress.step(`opening cmux workspace ${target.label}`);
+  const promptPath = await writePromptFile(target.displayId, target.prompt);
   openIssueWorkspace({
-    branch: prepared.worktree.branch,
-    env,
+    branch: target.label,
+    env: target.env,
     focus,
     promptPath,
-    worktreePath: prepared.worktree.worktreePath,
+    worktreePath: target.cwd,
   });
 };
+
+// The single-target launch strategy, shared by single-issue fanout and dispatch:
+// cmux if reachable, else inline plan mode. (The multi-issue loop calls
+// launchViaCmux directly — a refused workspace there surfaces as a collapse note,
+// not a fallback.)
+const launchOrFallback = async (
+  target: LaunchTarget,
+  stdout: NodeJS.WritableStream
+): Promise<number> => {
+  const { env, progress } = target;
+  if (cmuxReachable(env) && commandExists("claude", env)) {
+    try {
+      await launchViaCmux(target, true);
+      progress.done(`opened cmux workspace ${target.label}`);
+      stdout.write("follow along: captain status\n");
+      return 0;
+    } catch {
+      // fall through to inline launch if cmux refuses the workspace
+    }
+  }
+  progress.done();
+  return launchPlanMode(target.cwd, target.prompt, env);
+};
+
+const targetOf = (
+  prepared: PreparedIssue,
+  progress: Progress,
+  env: NodeJS.ProcessEnv
+): LaunchTarget => ({
+  cwd: prepared.worktree.worktreePath,
+  displayId: prepared.displayId,
+  env,
+  label: prepared.worktree.branch,
+  progress,
+  prompt: prepared.prompt,
+});
 
 // Keep `.captain/` (rubric + verdict) out of every worktree's diff. Linked
 // worktrees share the main checkout's `.git/info/exclude`, so one append covers
@@ -131,7 +180,8 @@ const withLoopExtras = async (
   repoRoot: string,
   issue: Parameters<typeof renderRubric>[0],
   displayId: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  skills: string[]
 ): Promise<string> => {
   const { text } = renderRubric(issue, displayId);
   await mkdir(join(worktreePath, ".captain"), { recursive: true });
@@ -144,6 +194,7 @@ const withLoopExtras = async (
       memory: readMemoryExcerpt(repoRoot, env),
       memoryPath,
       rubricPath: RUBRIC_RELPATH,
+      skills,
       workflow: true,
     })
   );
@@ -203,7 +254,8 @@ const prepareIssue = async (
     repo.repoRoot,
     issue,
     parsedIssue.displayId,
-    env
+    env,
+    context.skills
   );
 
   return { displayId: parsedIssue.displayId, prompt, worktree };
@@ -242,7 +294,7 @@ const dispatch = async ({
         progress: scoped,
       });
       worktreePaths.push(prepared.worktree.worktreePath);
-      await launchViaCmux(prepared, env, false, scoped);
+      await launchViaCmux(targetOf(prepared, scoped, env), false);
       progress.done(
         `opened ${prepared.worktree.branch} (${index}/${tokens.length})`
       );
@@ -257,7 +309,7 @@ const dispatch = async ({
     )) {
       stdout.write(`  ${note}\n`);
     }
-    stdout.write("follow along: captain status  ·  toasts: captain notify\n");
+    stdout.write("follow along: captain status\n");
     return 0;
   }
 
@@ -273,19 +325,7 @@ const dispatch = async ({
     return 0;
   }
 
-  if (cmuxReachable(env) && commandExists("claude", env)) {
-    try {
-      await launchViaCmux(prepared, env, true, progress);
-      progress.done(`opened cmux workspace ${prepared.worktree.branch}`);
-      stdout.write("follow along: captain status\n");
-      return 0;
-    } catch {
-      // fall through to inline launch if cmux refuses the workspace
-    }
-  }
-
-  progress.done();
-  return launchPlanMode(prepared.worktree.worktreePath, prepared.prompt, env);
+  return launchOrFallback(targetOf(prepared, progress, env), stdout);
 };
 
 export const runLinearWorktree = async (
@@ -298,7 +338,7 @@ export const runLinearWorktree = async (
 
   if (tokens.length === 0) {
     throw new CliError(
-      "usage: captain fanout [--print] [--repo <path>] <issue-id|url> [more issue-ids...]",
+      "usage: captain start [--print] [--repo <path>] <issue-id|url> [more issue-ids...]",
       2
     );
   }
@@ -310,6 +350,7 @@ export const runLinearWorktree = async (
     env,
     progress,
     repoOverride: options.repoOverride,
+    skills: loadSkills(env),
   };
 
   try {
@@ -318,4 +359,98 @@ export const runLinearWorktree = async (
     progress.done();
     throw error;
   }
+};
+
+// `captain dispatch "<task>"` — the non-Linear path: no issue fetch, no worktree.
+// The agent runs in the current checkout (cwd = repoRoot), with the same
+// self-drive brief, rubric and verdict gate as fanout. One dispatch per checkout
+// at a time — a second clobbers the shared `.captain/` files.
+export const runDispatch = async (
+  options: DispatchOptions
+): Promise<number> => {
+  const cwd = options.cwd ?? process.cwd();
+  const env = options.env ?? process.env;
+  const stdout = options.stdout ?? process.stdout;
+  const task = options.task.trim();
+
+  if (!task) {
+    throw new CliError(
+      'usage: captain start "<task>" [--name <slug>] [--repo <path>]',
+      2
+    );
+  }
+
+  const progress = createProgress(options.stderr ?? process.stderr);
+  try {
+    progress.step("resolving repo");
+    const repo = resolveRepo({ cwd, env, repoOverride: options.repoOverride });
+
+    const name = slugify(options.name || task);
+    if (!name) {
+      throw new CliError(
+        "could not derive a workspace name from the task — pass --name <slug>",
+        2
+      );
+    }
+
+    let prompt = `Task:\n\n${task}\n`;
+    prompt = await withLoopExtras(
+      prompt,
+      repo.repoRoot,
+      repo.repoRoot,
+      undefined,
+      name,
+      env,
+      loadSkills(env)
+    );
+
+    if (options.print) {
+      progress.done();
+      stdout.write(`agent prompt:\n${prompt}\n`);
+      return 0;
+    }
+
+    return launchOrFallback(
+      {
+        cwd: repo.repoRoot,
+        displayId: name,
+        env,
+        label: name,
+        progress,
+        prompt,
+      },
+      stdout
+    );
+  } catch (error) {
+    progress.done();
+    throw error;
+  }
+};
+
+// A start token is Linear work if it's a bare issue id (TIG-430) or a Linear
+// URL; anything else is a free-form task. The whole list shares the first
+// token's verdict — you don't mix tickets and prose in one invocation.
+const isLinearToken = (token: string): boolean =>
+  isIssueId(token) || /^https?:\/\/linear\.app\//iu.test(token);
+
+// The single entry point behind `captain start`: route to the Linear worktree
+// fan-out or the free-form current-dir dispatch by inspecting the first token.
+// Empty tokens fall through to runLinearWorktree, which reads stdin then errors.
+export const runStart = (
+  options: CliOptions & { name?: string }
+): Promise<number> => {
+  const [first] = options.tokens;
+  if (first && !isLinearToken(first)) {
+    return runDispatch({
+      cwd: options.cwd,
+      env: options.env,
+      name: options.name,
+      print: options.print,
+      repoOverride: options.repoOverride,
+      stderr: options.stderr,
+      stdout: options.stdout,
+      task: options.tokens.join(" "),
+    });
+  }
+  return runLinearWorktree(options);
 };

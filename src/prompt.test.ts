@@ -75,6 +75,22 @@ describe("prompt extras", () => {
     expect(out).not.toContain("<finishing-protocol>");
   });
 
+  it("renders the configured skills in order between implement and finish", () => {
+    const out = renderPromptExtras({
+      skills: ["/simplify", "/pr-creator"],
+      workflow: true,
+    });
+    expect(out).toContain("2. Once the plan is approved, implement it.");
+    expect(out).toContain("3. Run /simplify.");
+    expect(out).toContain("4. Run /pr-creator.");
+    expect(out).toContain(
+      "5. Finish with the finishing protocol below (verifier + verdict)."
+    );
+    // only the configured skills appear — not the unconfigured defaults
+    expect(out).not.toContain("/pr-reviewer");
+    expect(out).not.toContain("/pr-babysitter");
+  });
+
   it("renders the finishing protocol around the rubric path", () => {
     const out = renderPromptExtras({ rubricPath: ".captain/rubric.md" });
     expect(out).toContain("<finishing-protocol>");

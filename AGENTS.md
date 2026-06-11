@@ -25,10 +25,11 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: doctor | fanout | status | approve | reject | notify
-  runner.ts         # the fan-out: worktree + workspace + the self-drive brief per issue
-  cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts
-  prompt.ts         # issue context + <workflow> (the self-drive pipeline) + <finishing-protocol> + <fleet-memory>
+  cli.ts            # Commander entry: doctor | start | status | approve | reject
+  runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief
+  cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
+  config.ts         # PURE-ish: loadSkills (CAPTAIN_SKILLS > ~/.config/captain/config.json .skills > DEFAULT_SKILLS), parseSkills
+  prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <finishing-protocol> + <fleet-memory>
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
   memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
   captain/
@@ -38,21 +39,30 @@ src/
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
     commands.ts     # stateless status/approve/reject + friendly-id resolution
     doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + render; realDeps reads the world
-    notify.ts       # optional foreground poller: diff the view per tick, toast on change, one quiet nudge
     format.ts       # TTY-aware colour + the grouped status renderer (display only)
-    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/toasts)
+    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject)
 ```
 
 ## How it works
 
-**Dispatch** (`fanout`): per issue — worktree + cmux workspace + a brief containing the issue,
-the `<workflow>` pipeline (plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` →
-`/pr-babysitter`), the finishing protocol, and fleet memory. The agent self-drives; nothing
-external types commands into it.
+**Start** (`captain start`, `runStart`): routes on its first token — a Linear issue id/URL →
+`runLinearWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
+free-form task in the **current checkout**, no Linear, no worktree). Either way the agent gets the
+same brief: the `<workflow>` pipeline (plan → implement → the configured skills → verifier
+finish), the finishing protocol, and fleet memory. The skills run between implement and finish are
+config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
+`.skills` > the default `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`); plan,
+implement, and the verdict finish stay fixed because `status` derives from them. The agent
+self-drives; nothing external types commands into it.
+
+For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot) — one such
+dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.md`/`verdict.json`.
+The rubric degrades gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed
+verify procedure).
 
 **Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
 
-- membership: a cmux workspace whose cwd has a `.captain/` dir (fanout writes the rubric there)
+- membership: a cmux workspace whose cwd has a `.captain/` dir (start writes the rubric there)
 - busy/idle: `cmux top --all --flat --format tsv` run-state tags (one call, all workspaces)
 - gates: the newest **unresolved** `feed.list` item per cwd (`resolved_at` absent = pending);
   `exitPlan` → the plan gate, `question`/`notification` → blocked
@@ -63,11 +73,6 @@ external types commands into it.
 `approve` replies to the exit-plan feed item directly; `reject` replies false **and** types the
 feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
 intent queue, no daemon to race.
-
-**Notify** (`captain notify`, optional): a foreground 30s poller (`CAPTAIN_POLL_SECS`) that diffs
-the view in memory and toasts on a new gate, a fresh verdict, or a worktree idle-and-unchanged
-past `CAPTAIN_QUIET_SECS` (default 1800; one nudge, never repeated). `--once` runs a single pass.
-Kill/restart freely — worst case is one repeat toast.
 
 ## The verdict gate & fleet memory (the agent-side loops)
 
@@ -104,18 +109,26 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill
   can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.
-- **`.captain/` never reaches a diff**: `fanout` appends it to the repo's shared
+- **`.captain/` never reaches a diff**: `start` appends it to the repo's shared
   `.git/info/exclude` (one append covers all linked worktrees) — don't move the rubric/verdict
   into tracked paths. It doubles as the membership marker `surface.ts` filters by.
-- **Tests must not touch the real `$HOME`**: `memory.ts` honours `CAPTAIN_MEMORY_DIR` and
-  `log.ts` honours `CAPTAIN_HOME` — runner/commands/notify tests set both to temp dirs and drive
-  the real modules through a fake `CmuxPort` (no mocking library).
+- **Tests must not touch the real `$HOME`**: `home.ts` `captainHome` resolves `CAPTAIN_HOME` >
+  `~/.claude/captain` (the base for both `log.ts` and `memory.ts`; `memory.ts` also honours
+  `CAPTAIN_MEMORY_DIR`), and `config.ts` honours `CAPTAIN_CONFIG` (point it at a temp file) —
+  runner/commands/config tests set these to temp dirs and drive the real modules through a fake
+  `CmuxPort` (no mocking library).
+- **Skills config is fail-safe**: `loadSkills` (`config.ts`) never throws — a missing/garbage
+  config file or empty array degrades to `DEFAULT_SKILLS`; only a non-empty string array (or a
+  non-empty `CAPTAIN_SKILLS`) overrides. The config lives at `~/.config/captain/config.json`
+  (XDG, **not** under `~/.claude`), `CAPTAIN_CONFIG` redirects the path.
 - **No daemon, ever**: there is no watcher process, no pidfile, no state.json. If you find
   yourself adding persisted fleet state, stop — derive it from cmux + the filesystem instead.
-- **Behaviour parity**: preserve the inherited `fanout` modes (single-issue, fan-out, `--print`).
+- **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
+  free-form current-dir dispatch, and `--print` for each.
 
 ## Env knobs
 
 `LINEAR_API_KEY` (issue fetch + screenshots) · `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
-`CAPTAIN_HOME` (log.jsonl override) · `CAPTAIN_POLL_SECS` / `CAPTAIN_QUIET_SECS` (notify) ·
-`CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
+`CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
+skills, overrides the config file) · `CAPTAIN_CONFIG` (config.json path override) ·
+`XDG_CONFIG_HOME` (config dir) · `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.

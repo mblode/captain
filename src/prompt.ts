@@ -1,3 +1,4 @@
+import { DEFAULT_SKILLS } from "./config";
 import type { LinearIssue, LinearRelatedIssue } from "./types";
 
 const renderRelatedIssue = (
@@ -63,6 +64,9 @@ export interface PromptExtras {
   // include the self-drive workflow section (fan-out briefs set this; Captain
   // has no watcher — the agent drives its own pipeline end to end)
   workflow?: boolean;
+  // the configured skills run between *implement* and the verifier/verdict
+  // finish (empty/undefined → DEFAULT_SKILLS)
+  skills?: string[];
   // worktree-relative path to the rubric written at fan-out
   rubricPath?: string;
   // the injected excerpt of the per-repo memory file (empty → section omitted)
@@ -81,6 +85,15 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
   let out = "";
 
   if (extras.workflow) {
+    const skills =
+      extras.skills && extras.skills.length > 0
+        ? extras.skills
+        : DEFAULT_SKILLS;
+    // Fixed scaffold: plan + implement are steps 1-2, the configured skills run
+    // next (one numbered step each), then the verifier/verdict finish. Captain's
+    // status derives from the plan gate and verdict, so only the middle steps
+    // are data-driven.
+    const skillSteps = skills.map((skill, i) => `${i + 3}. Run ${skill}.`);
     out += "\n<workflow>\n";
     out += [
       "You own this ticket end to end. Drive the whole pipeline yourself, in order,",
@@ -88,11 +101,8 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       "",
       "1. Plan first (you are launched in plan mode) and present the plan for approval.",
       "2. Once the plan is approved, implement it.",
-      "3. Run /simplify to clean up the diff.",
-      "4. Run /pr-reviewer and fix every finding it reports.",
-      "5. Run /pr-creator to open the PR.",
-      "6. Run /pr-babysitter until the PR is green (CI passing, conflicts resolved).",
-      "7. Finish with the finishing protocol below (verifier + verdict).",
+      ...skillSteps,
+      `${skills.length + 3}. Finish with the finishing protocol below (verifier + verdict).`,
       "",
       "If you are ever blocked on a decision only a human can make, ask the question",
       "and wait — otherwise keep moving to the next step on your own.",

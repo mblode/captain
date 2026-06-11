@@ -26,11 +26,11 @@ captain doctor                        # check your setup
 ## Use
 
 ```bash
-captain fanout TIG-430 TIG-431        # one worktree + agent per issue
+captain start TIG-430 TIG-431         # Linear issues → one worktree + agent each
+captain start "tidy the README"       # a free-form task, no Linear, current dir
 captain status                        # what's blocked, in flight, and ready
-captain approve --plans tig-430       # or --plans all
-captain reject --ref tig-431 --note "don't touch auth"
-captain notify                        # optional: toast when something needs you
+captain approve tig-430               # or: captain approve all
+captain reject tig-431 --note "don't touch auth"
 ```
 
 `captain --help` lists every command and flag.

@@ -77,6 +77,17 @@ const TOP_STATES: Record<string, RunState> = {
 // A `cmux top` tag row's ref: workspace:<UUID>:tag:claude_code
 const TAG_REF = /^workspace:([^:]+):tag:/iu;
 
+// Parse cmux RPC stdout, falling back on garbage. The RPC is unreliable: a
+// status-0 response with malformed stdout must read as "no data this tick", not
+// a thrown exception (every reader downstream — status, notify — depends on it).
+const safeJson = <T>(text: string, fallback: T): T => {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return fallback;
+  }
+};
+
 // The default port: spawnSync against the real cmux CLI.
 export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
   // Pending blocks across the fleet (questions / plan approvals / permissions).
@@ -85,17 +96,20 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     if (raw.status !== 0) {
       return [];
     }
-    const parsed = JSON.parse(raw.stdout) as {
-      items?: {
-        id: string;
-        cwd?: string;
-        kind?: string;
-        status?: string;
-        question_prompt?: string | null;
-        text?: string | null;
-        resolved_at?: string | null;
-      }[];
-    };
+    const parsed = safeJson(
+      raw.stdout,
+      {} as {
+        items?: {
+          id: string;
+          cwd?: string;
+          kind?: string;
+          status?: string;
+          question_prompt?: string | null;
+          text?: string | null;
+          resolved_at?: string | null;
+        }[];
+      }
+    );
     return (parsed.items ?? []).map((i) => ({
       cwd: i.cwd ?? "",
       id: i.id,
@@ -112,20 +126,17 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     if (raw.status !== 0) {
       return [];
     }
-    let parsed: {
-      workspaces?: {
-        id: string;
-        ref: string;
-        description?: string | null;
-        current_directory?: string | null;
-      }[];
-    };
-    try {
-      parsed = JSON.parse(raw.stdout) as typeof parsed;
-    } catch {
-      // garbage from an unreliable RPC reads as "no data this tick"
-      return [];
-    }
+    const parsed = safeJson(
+      raw.stdout,
+      {} as {
+        workspaces?: {
+          id: string;
+          ref: string;
+          description?: string | null;
+          current_directory?: string | null;
+        }[];
+      }
+    );
     return (parsed.workspaces ?? []).map((w) => {
       const cwd = w.current_directory ?? "";
       return {

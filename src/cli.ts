@@ -7,9 +7,8 @@ import { Command } from "commander";
 import { approve, reject, status } from "./captain/commands";
 import { doctor } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
-import { notifyLoop } from "./captain/notify";
 import { CliError } from "./errors";
-import { runLinearWorktree } from "./runner";
+import { runStart } from "./runner";
 
 const packageJson = JSON.parse(
   readFileSync(join(import.meta.dirname, "..", "package.json"), "utf-8")
@@ -25,42 +24,59 @@ program
     "after",
     `
 Workflow:
-  $ captain doctor                       check prerequisites before your first fanout
-  $ captain fanout TIG-430 TIG-431       worktrees + agents, each self-driving to PR-ready
+  $ captain doctor                       check prerequisites before your first start
+  $ captain start TIG-430 TIG-431        Linear issues → worktrees + agents, self-driving
+  $ captain start "tidy the README"      a free-form task in the current dir (no Linear)
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
   $ captain status --repo linkiq         one repo's worktrees only
-  $ captain approve --plans tig-430      approve plan(s)  (or a repo, or: all)
-  $ captain reject --ref tig-430 --note "…"   send a plan back with feedback
-  $ captain notify                       optional foreground toaster (Ctrl-C stops)
+  $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
+  $ captain reject tig-430 --note "…"    send a plan back with feedback
 
-Each agent's brief carries the whole pipeline (plan → implement → /simplify →
-/pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict); Captain keeps
-no state — status is derived live from cmux and the worktrees. You only make
-the gated decisions: approve plans, answer questions, merge.
+start routes on its first argument: a Linear issue id/URL fans out worktrees;
+anything else is a free-form task run in the current checkout. Each agent's brief
+carries the whole pipeline (plan → implement → the configured skills → verifier
+verdict); Captain keeps no state — status is derived live from cmux and the
+worktrees. You only make the gated decisions: approve plans, answer questions,
+merge. Configure the skills in ~/.config/captain/config.json (.skills) or with
+CAPTAIN_SKILLS=/simplify,/pr-creator.
 Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
   );
 
-// Inherited: create a worktree + cmux workspace per Linear issue (fan-out).
+// Start agents on work. A Linear issue id/URL fans out worktrees (one per
+// issue); anything else is a free-form task run in the current checkout. Both
+// hand the agent the same self-drive brief.
 program
-  .command("fanout")
-  .description("create git worktrees for Linear issues and launch agents")
-  .option(
-    "--print",
-    "create the worktree and print the prompt without launching"
+  .command("start")
+  .description(
+    "start agents: Linear issue id(s)/URL → worktrees, or a free-form task"
   )
+  .argument(
+    "[input...]",
+    "Linear issue id(s)/URL, or a free-form task description"
+  )
+  .option("--print", "write the brief without launching")
   .option("--repo <path>", "force the git repo for this command")
   .option(
-    "--base <ref>",
-    "branch new worktrees off this ref (e.g. a prerequisite ticket's branch) instead of origin's default"
+    "--name <slug>",
+    "free-form task only: workspace label (default: a slug of the task)"
   )
-  .argument("[input...]", "Linear issue ID, URL, or multiple bare issue IDs")
+  .option(
+    "--base <ref>",
+    "Linear only: branch new worktrees off this ref instead of origin's default"
+  )
   .action(
     async (
       input: string[],
-      options: { print?: boolean; repo?: string; base?: string }
+      options: {
+        print?: boolean;
+        repo?: string;
+        name?: string;
+        base?: string;
+      }
     ) => {
-      process.exitCode = await runLinearWorktree({
+      process.exitCode = await runStart({
         base: options.base,
+        name: options.name,
         print: Boolean(options.print),
         repoOverride: options.repo,
         tokens: input,
@@ -98,32 +114,18 @@ program
 program
   .command("approve")
   .description("approve plan(s): all, or comma-separated ticket names")
-  .requiredOption("--plans <refs>", 'ticket names, or "all"')
-  .action((options: { plans: string }) => {
-    approve(options.plans, process.stdout);
+  .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
+  .action((refs: string) => {
+    approve(refs, process.stdout);
   });
 
 program
   .command("reject")
   .description("send a plan back to planning with feedback")
-  .requiredOption("--ref <ticket>", "the worktree's ticket name")
+  .argument("<ref>", "the worktree's ticket name")
   .requiredOption("--note <text>", "what to change")
-  .action((options: { note: string; ref: string }) => {
-    reject(options.ref, options.note, process.stdout);
-  });
-
-program
-  .command("notify")
-  .description(
-    "foreground poller: toast on new gates, verdicts, and quiet worktrees"
-  )
-  .option("--once", "run a single poll pass and exit")
-  .action((options: { once?: boolean }) => {
-    notifyLoop({
-      env: process.env,
-      log: (m) => process.stderr.write(`[captain] ${m}\n`),
-      once: options.once,
-    });
+  .action((ref: string, options: { note: string }) => {
+    reject(ref, options.note, process.stdout);
   });
 
 const main = async (): Promise<void> => {
