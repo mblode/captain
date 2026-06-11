@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CliError } from "../errors";
 import { renderRubric } from "../rubric";
 import { approve, reject, resolveTargets, status } from "./commands";
 import type {
@@ -75,10 +76,18 @@ interface FakePort extends CmuxPort {
   toasts: { title: string; body: string }[];
 }
 
+interface FakePortOpts {
+  runs?: Record<string, RunState>;
+  // false simulates a dead cmux daemon (status probes false)
+  reachable?: boolean;
+  // throw from send() to simulate a failed feedback delivery
+  sendThrows?: boolean;
+}
+
 const fakePort = (
   workspaces: CmuxWorkspace[],
   feed: CmuxFeedItem[],
-  runs: Record<string, RunState> = {}
+  opts: FakePortOpts = {}
 ): FakePort => {
   const replies: FakePort["replies"] = [];
   const sent: FakePort["sent"] = [];
@@ -89,12 +98,16 @@ const fakePort = (
     notify: (title, body) => {
       toasts.push({ body, title });
     },
+    reachable: () => opts.reachable ?? true,
     replies,
     replyExitPlan: (id, isApproved) => {
       replies.push({ approve: isApproved, id });
     },
-    runStates: () => runs,
+    runStates: () => opts.runs ?? {},
     send: (workspaceId, text) => {
+      if (opts.sendThrows) {
+        throw new Error("cmux send failed");
+      }
       sent.push({ text, workspaceId });
     },
     sent,
@@ -253,7 +266,7 @@ describe("stateless approve/reject/status over the real surface", () => {
         { cwd: managed, id: "WS-AGENT", name: "tig-491", ref: "r" },
       ],
       [],
-      { "ws-agent": "needs-input" }
+      { runs: { "ws-agent": "needs-input" } }
     );
     const { out, text } = capture();
     status({ json: true }, out, port);
@@ -281,6 +294,141 @@ describe("stateless approve/reject/status over the real surface", () => {
     const rows = JSON.parse(text()) as FleetRow[];
     expect(rows).toHaveLength(1);
     expect(rows[0].workspaceId).toBe("ws-1");
+  });
+
+  it("status --json --summary returns counts + needs-you detail only", () => {
+    const gated = worktree("tig-430");
+    const ready = worktree("tig-431", { prUrl: "https://x/pr/1" });
+    const flowing = worktree("tig-432");
+    const port = fakePort(
+      [
+        { cwd: gated, id: "ws-1", name: "tig-430", ref: "r" },
+        { cwd: ready, id: "ws-2", name: "tig-431", ref: "r" },
+        { cwd: flowing, id: "ws-3", name: "tig-432", ref: "r" },
+      ],
+      [{ cwd: gated, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    status({ json: true, summary: true }, out, port);
+    const parsed = JSON.parse(text()) as {
+      counts: { needsYou: number; inFlight: number; ready: number };
+      needsYou: FleetRow[];
+    };
+    expect(parsed.counts).toEqual({ inFlight: 1, needsYou: 1, ready: 1 });
+    expect(parsed.needsYou).toHaveLength(1);
+    expect(parsed.needsYou[0]).toMatchObject({
+      gate: { kind: "plan" },
+      group: "needs-you",
+    });
+  });
+
+  it("status --summary (TTY) shows counts and only the NEEDS YOU rows", () => {
+    const gated = worktree("tig-430");
+    const flowing = worktree("tig-432");
+    const port = fakePort(
+      [
+        { cwd: gated, id: "ws-1", name: "tig-430", ref: "r" },
+        { cwd: flowing, id: "ws-3", name: "tig-432", ref: "r" },
+      ],
+      [{ cwd: gated, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    status({ summary: true }, out, port);
+    const rendered = text();
+    expect(rendered).toContain("NEEDS YOU");
+    expect(rendered).toContain("captain approve tig-430");
+    expect(rendered).toContain("1 need you");
+    // the in-flight row is counted but not detailed
+    expect(rendered).not.toContain("tig-432");
+  });
+
+  it("approve --json emits approved + unknown, no prose", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    approve("tig-430,tig-999", out, port, { json: true });
+    expect(port.replies).toEqual([{ approve: true, id: "feed-1" }]);
+    const parsed = JSON.parse(text()) as {
+      approved: string[];
+      unknown: string[];
+    };
+    expect(parsed).toEqual({ approved: ["tig-430"], unknown: ["tig-999"] });
+    expect(text()).not.toContain("next:");
+  });
+
+  it("reject --json emits rejected + note, or unknown when no match", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const ok = capture();
+    reject("tig-430", "split it", ok.out, port, { json: true });
+    expect(JSON.parse(ok.text())).toEqual({
+      feedbackDelivered: true,
+      note: "split it",
+      rejected: "tig-430",
+    });
+    const miss = capture();
+    reject("tig-999", "n/a", miss.out, port, { json: true });
+    expect(JSON.parse(miss.text())).toEqual({ unknown: ["tig-999"] });
+  });
+
+  it("reject still replies false when the feedback send fails, flagging it", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }],
+      { sendThrows: true }
+    );
+    const { out, text } = capture();
+    reject("tig-430", "split it", out, port, { json: true });
+    // The rejection still went through even though the feedback didn't land.
+    expect(port.replies).toEqual([{ approve: false, id: "feed-1" }]);
+    expect(JSON.parse(text())).toEqual({
+      feedbackDelivered: false,
+      note: "split it",
+      rejected: "tig-430",
+    });
+  });
+
+  it("approve --json throws a typed BAD_REF (exit 2) for a fully-bad ref", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out } = capture();
+    try {
+      approve("tig-999", out, port, { json: true });
+      throw new Error("expected approve to throw");
+    } catch (error) {
+      const e = error as CliError;
+      expect(e).toBeInstanceOf(CliError);
+      expect(e.errorType).toBe("BAD_REF");
+      expect(e.exitCode).toBe(2);
+    }
+    // The bad ref was unresolvable, so nothing was approved.
+    expect(port.replies).toEqual([]);
+  });
+
+  it("status reports a structured error + exit 11 when cmux is unreachable", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }],
+      { reachable: false }
+    );
+    const prev = process.exitCode;
+    const { out, text } = capture();
+    status({ json: true }, out, port);
+    const parsed = JSON.parse(text()) as { error: { type: string } };
+    expect(parsed.error.type).toBe("CMUX_UNREACHABLE");
+    expect(process.exitCode).toBe(11);
+    process.exitCode = prev;
   });
 
   it("status --json stays plain and machine-readable", () => {

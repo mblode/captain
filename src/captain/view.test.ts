@@ -5,9 +5,11 @@ import type { Verdict } from "./verdict";
 import {
   identityOf,
   mergeOrderHints,
+  nextCommand,
   pendingGate,
   pickAgentWorkspaces,
   rowOf,
+  stateHash,
   ticketFrom,
 } from "./view";
 import type { RowInput } from "./view";
@@ -160,6 +162,68 @@ describe("rowOf grouping", () => {
     expect(rowOf(input({ run: "running" })).group).toBe("in-flight");
     expect(rowOf(input({ run: "idle" })).group).toBe("in-flight");
     expect(rowOf(input({ run: "unknown" })).group).toBe("in-flight");
+  });
+});
+
+describe("nextCommand", () => {
+  it("a plan gate offers captain approve <ticket>", () => {
+    const row = rowOf(input({ feed: [feedItem()] }));
+    expect(row.nextCommand).toBe("captain approve tig-1");
+    expect(nextCommand(row)).toBe("captain approve tig-1");
+  });
+
+  it("a blocked/question row inspects the screen first", () => {
+    const row = rowOf(input({ feed: [feedItem({ kind: "question" })] }));
+    expect(row.nextCommand).toBe("cmux read-screen --workspace ws-1");
+  });
+
+  it("a needs-input row (no feed) inspects the screen", () => {
+    const row = rowOf(input({ run: "needs-input" }));
+    expect(row.nextCommand).toBe("cmux read-screen --workspace ws-1");
+  });
+
+  it("a ready row with a PR offers the merge command", () => {
+    const row = rowOf(input({ verdict: verdict({ prUrl: "https://x/pr/1" }) }));
+    expect(row.nextCommand).toBe("gh pr merge https://x/pr/1 --squash");
+  });
+
+  it("a ready row without a PR falls back to status --ready", () => {
+    const row = rowOf(input({ verdict: verdict() }));
+    expect(row.nextCommand).toBe("captain status --ready");
+  });
+
+  it("an in-flight row offers a screen peek", () => {
+    const row = rowOf(input({ run: "running" }));
+    expect(row.nextCommand).toBe("cmux read-screen --workspace ws-1");
+  });
+});
+
+describe("stateHash", () => {
+  it("two rows with identical actionable state share a hash", () => {
+    const a = rowOf(input({ feed: [feedItem({ id: "feed-1" })] }));
+    const b = rowOf(
+      input({
+        cwd: "/wt/tig-2",
+        fallbackName: "tig-2",
+        feed: [feedItem({ cwd: "/wt/tig-2", id: "feed-1" })],
+        workspaceId: "ws-2",
+      })
+    );
+    // identity (name/cwd/ws) differs, actionable state does not
+    expect(a.stateHash).toBe(b.stateHash);
+  });
+
+  it("a gate change flips the hash", () => {
+    const before = rowOf(input({ run: "running" }));
+    const after = rowOf(input({ feed: [feedItem()], run: "running" }));
+    expect(after.stateHash).not.toBe(before.stateHash);
+  });
+
+  it("a verdict transition flips the hash", () => {
+    const flowing = rowOf(input({ run: "idle" }));
+    const ready = rowOf(input({ run: "idle", verdict: verdict() }));
+    expect(ready.stateHash).not.toBe(flowing.stateHash);
+    expect(stateHash(ready)).toBe(ready.stateHash);
   });
 });
 

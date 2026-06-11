@@ -1,3 +1,4 @@
+import { nextCommand } from "./view";
 import type { FleetRow, Group } from "./view";
 
 // ANSI styling that no-ops when output isn't a TTY or NO_COLOR is set, so piped
@@ -93,10 +94,12 @@ const shortName = (row: FleetRow): string => row.ticket ?? row.name;
 // is ready to merge — so the one status view is also the runbook. cmux
 // commands take the workspace UUID; the display name is not a valid handle.
 const actionLines = (row: FleetRow, s: Style): string[] => {
+  // The primary command is owned by view.ts's nextCommand (single source of
+  // truth, also emitted on --json) — the lines below decorate it for the TTY.
   if (row.gate?.kind === "plan") {
     return [
       `      ${s.dim("read:")}    cmux read-screen --workspace ${row.workspaceId} --scrollback`,
-      `      ${s.dim("approve:")} captain approve ${shortName(row)}`,
+      `      ${s.dim("approve:")} ${nextCommand(row)}`,
       `      ${s.dim("reject:")}  captain reject ${shortName(row)} --note "…"`,
     ];
   }
@@ -107,7 +110,7 @@ const actionLines = (row: FleetRow, s: Style): string[] => {
   }
   if (row.group === "ready") {
     return row.prUrl
-      ? [`      ${s.dim("merge:")}   gh pr merge ${row.prUrl} --squash`]
+      ? [`      ${s.dim("merge:")}   ${nextCommand(row)}`]
       : [`      ${s.dim("(PR url pending)")}`];
   }
   return [];
@@ -205,6 +208,42 @@ export const renderStatus = (
 
   if (needs === 0 && ready === 0) {
     lines.push(s.dim("→ all worktrees flowing; nothing needs you."));
+  }
+  return `${lines.join("\n")}\n`;
+};
+
+// The compact poll view: a one-line group tally + the NEEDS YOU rows only
+// (with their inline resolve commands). For a driver that polls often and only
+// needs to act when something is blocked. `rows` is the full (repo-filtered)
+// set so the counts stay honest; only needs-you rows are detailed.
+export const renderSummary = (rows: FleetRow[], s: Style): string => {
+  const needs = rows.filter((r) => r.group === "needs-you");
+  const inFlight = rows.filter((r) => r.group === "in-flight").length;
+  const ready = rows.filter((r) => r.group === "ready").length;
+  const counts = [
+    needs.length ? s.yellow(`${needs.length} need you`) : "",
+    inFlight ? s.cyan(`${inFlight} in flight`) : "",
+    ready ? s.green(`${ready} ready`) : "",
+  ]
+    .filter(Boolean)
+    .join(s.dim(" · "));
+  const lines = [`${s.bold("Captain")}    ${counts || s.dim("no worktrees")}`];
+  if (needs.length === 0) {
+    lines.push(s.dim("→ nothing needs you."));
+    return `${lines.join("\n")}\n`;
+  }
+  const width = Math.min(40, Math.max(...needs.map((r) => r.name.length), 8));
+  const repos = new Set(needs.map((r) => r.repo ?? "?"));
+  const repoPad =
+    repos.size > 1 ? Math.max(...[...repos].map((r) => r.length)) : 0;
+  lines.push("", s.dim("NEEDS YOU"));
+  for (const row of needs.toSorted((a, b) => a.name.localeCompare(b.name))) {
+    lines.push(renderRow(row, s, width, repoPad));
+    const note = row.gate?.hint ?? row.summary;
+    if (note) {
+      lines.push(`      ${s.dim(note)}`);
+    }
+    lines.push(...actionLines(row, s));
   }
   return `${lines.join("\n")}\n`;
 };

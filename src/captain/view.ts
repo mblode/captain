@@ -37,6 +37,15 @@ export interface FleetRow {
   summary?: string;
   prUrl?: string;
   group: Group;
+  // the single executable next-action for this row (the same command the TTY
+  // renderer leads with) — so a driver consuming --json acts without parsing
+  // the human view. Always set by rowOf; optional only so hand-built test
+  // fixtures stay terse.
+  nextCommand?: string;
+  // a deterministic fingerprint of this row's *actionable* state — a polling
+  // driver diffs snapshots and acts only on transitions. A pure string join
+  // (no crypto: the pure core may not import node:crypto). Always set by rowOf.
+  stateHash?: string;
 }
 
 // The canonical ticket id inside a name/path ("tig-494"), lowercased.
@@ -120,6 +129,46 @@ export interface RowInput {
   expectedHash?: string;
 }
 
+// PURE: the single executable next-action for a row, matching what the TTY
+// renderer leads with per group (format.ts's actionLines builds its primary
+// line from this — ONE definition of the command string). cmux commands take
+// the workspace UUID; the display name is not a valid handle.
+//   plan gate    → captain approve <name>   (reject is the alternative)
+//   question /
+//   needs-input  → cmux read-screen … (inspect, then cmux send the answer)
+//   ready        → the merge hint (gh pr merge <prUrl>) when a PR exists, else
+//                  captain status --ready
+//   in-flight    → cmux read-screen … to peek at the running agent
+export const nextCommand = (row: FleetRow): string => {
+  if (row.gate?.kind === "plan") {
+    return `captain approve ${row.ticket ?? row.name}`;
+  }
+  if (row.group === "needs-you") {
+    return `cmux read-screen --workspace ${row.workspaceId}`;
+  }
+  if (row.group === "ready") {
+    return row.prUrl
+      ? `gh pr merge ${row.prUrl} --squash`
+      : "captain status --ready";
+  }
+  return `cmux read-screen --workspace ${row.workspaceId}`;
+};
+
+// PURE: a deterministic fingerprint of the row's *actionable* state — the
+// fields that decide whether a driver must act. A plain string join (the pure
+// core may not import node:crypto); equal joins ⇒ same actionable state, so a
+// poller can diff two snapshots and skip rows that haven't transitioned.
+export const stateHash = (
+  row: Pick<FleetRow, "group" | "gate" | "verdict" | "run">
+): string =>
+  [
+    row.group,
+    row.gate?.kind ?? "",
+    row.gate?.id ?? "",
+    row.verdict ?? "",
+    row.run,
+  ].join("|");
+
 // The grouping rule — the whole "state machine" that's left:
 //   a pending gate, a failed verdict, or an agent stuck on input → needs-you
 //   a valid passing verdict → ready (the human merge gate stays authoritative)
@@ -140,17 +189,23 @@ export const rowOf = (input: RowInput): FleetRow => {
     // permission prompt) — still a "needs you", just without a hint
     group = "needs-you";
   }
-  return {
+  const row: FleetRow = {
     cwd: input.cwd,
     gate,
     group,
+    // placeholders; filled below once the row's shape is known
+    nextCommand: "",
     prUrl: verdict?.prUrl,
     run: input.run,
+    stateHash: "",
     summary: verdict?.summary,
     verdict: verdict?.verdict,
     workspaceId: input.workspaceId,
     ...identityOf(input.cwd, input.fallbackName, input.repo),
   };
+  row.nextCommand = nextCommand(row);
+  row.stateHash = stateHash(row);
+  return row;
 };
 
 // PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO

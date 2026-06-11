@@ -385,6 +385,112 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
   });
 });
 
+describe("start --json", () => {
+  it("--print --json emits the brief metadata as one JSON value (Linear)", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    await runLinearWorktree({
+      cwd: repo,
+      env: safeEnv(),
+      json: true,
+      print: true,
+      stdout: output.stream,
+      tokens: ["TST-123"],
+    });
+
+    const parsed = JSON.parse(output.value().trim()) as {
+      cwd: string;
+      name: string;
+      prompt: string;
+    };
+    expect(parsed.name).toBe("tst-123");
+    expect(parsed.cwd).toBe(join(root, "src-tst-123"));
+    expect(parsed.prompt).toContain("Work on Linear issue TST-123.");
+    // No human hint lines leak into the JSON value.
+    expect(output.value()).not.toContain("copied:");
+  });
+
+  it("fans out and emits { started: [...] } with workspace ids", async () => {
+    const { repo, root } = await createGitRepo("src");
+    const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+    cleanup.push(root, binDir);
+
+    // A fake cmux that reports a workspace per worktree on workspace.list, so
+    // --json can resolve each cwd to an id.
+    await writeExecutable(
+      join(binDir, "cmux"),
+      `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+if [ "$1" = "rpc" ] && [ "$2" = "workspace.list" ]; then
+  printf '{"workspaces":[{"id":"WS-1","ref":"r","current_directory":"%s/src-tst-1"},{"id":"WS-2","ref":"r","current_directory":"%s/src-tst-2"}]}' "$ROOT" "$ROOT"
+  exit 0
+fi
+exit 0
+`
+    );
+    await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+
+    const output = captureWritable();
+    await runLinearWorktree({
+      cwd: repo,
+      env: {
+        ...safeEnv(),
+        PATH: `${binDir}:${safeEnv().PATH}`,
+        ROOT: root,
+      },
+      json: true,
+      repoOverride: repo,
+      stdout: output.stream,
+      tokens: ["TST-1", "TST-2"],
+    });
+
+    const parsed = JSON.parse(output.value().trim()) as {
+      started: {
+        name: string;
+        branch: string;
+        cwd: string;
+        workspaceId?: string;
+      }[];
+    };
+    expect(parsed.started).toHaveLength(2);
+    expect(parsed.started[0]).toMatchObject({
+      branch: "tst-1",
+      name: "tst-1",
+      workspaceId: "WS-1",
+    });
+    expect(parsed.started[1].workspaceId).toBe("WS-2");
+    expect(output.value()).not.toContain("follow along");
+  });
+
+  it("dispatch --print --json omits branch (runs in the checkout)", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    await runDispatch({
+      cwd: repo,
+      env: safeEnv(),
+      json: true,
+      print: true,
+      stdout: output.stream,
+      task: "tidy the README",
+    });
+
+    const parsed = JSON.parse(output.value().trim()) as {
+      cwd: string;
+      name: string;
+      prompt: string;
+      branch?: string;
+    };
+    expect(parsed.name).toBe("tidy-the-readme");
+    expect(parsed.cwd).toBe(repo);
+    expect(parsed.branch).toBeUndefined();
+    expect(parsed.prompt).toContain("Task:\n\ntidy the README");
+  });
+});
+
 describe("runDispatch (non-Linear, current dir)", () => {
   it("--print writes the task brief into the current checkout, no worktree", async () => {
     const { repo, root } = await createGitRepo("src");

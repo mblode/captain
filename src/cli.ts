@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 
 import { approve, reject, status } from "./captain/commands";
 import { doctor } from "./captain/doctor";
@@ -28,6 +28,7 @@ Workflow:
   $ captain start TIG-430 TIG-431        Linear issues → worktrees + agents, self-driving
   $ captain start "tidy the README"      a free-form task in the current dir (no Linear)
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
+  $ captain status --summary             compact: counts + only what needs you
   $ captain status --repo linkiq         one repo's worktrees only
   $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
   $ captain reject tig-430 --note "…"    send a plan back with feedback
@@ -55,7 +56,15 @@ program
     "Linear issue id(s)/URL, or a free-form task description"
   )
   .option("--print", "write the brief without launching")
-  .option("--repo <path>", "force the git repo for this command")
+  .option("--json", "emit JSON: { started: [...] }")
+  .option(
+    "--repo-path <path>",
+    "force the git repo (filesystem path) this start runs against"
+  )
+  // Back-compat alias for the old name; hidden so help only shows --repo-path.
+  // (status's --repo is a label FILTER, not a path — different meaning, hence
+  // the rename to keep the two unambiguous for an unattended driver.)
+  .addOption(new Option("--repo <path>", "alias for --repo-path").hideHelp())
   .option(
     "--name <slug>",
     "free-form task only: workspace label (default: a slug of the task)"
@@ -69,6 +78,8 @@ program
       input: string[],
       options: {
         print?: boolean;
+        json?: boolean;
+        repoPath?: string;
         repo?: string;
         name?: string;
         base?: string;
@@ -76,9 +87,11 @@ program
     ) => {
       process.exitCode = await runStart({
         base: options.base,
+        json: Boolean(options.json),
         name: options.name,
         print: Boolean(options.print),
-        repoOverride: options.repo,
+        // --repo-path is canonical; --repo is the hidden legacy alias.
+        repoOverride: options.repoPath ?? options.repo,
         tokens: input,
       });
     }
@@ -97,15 +110,23 @@ program
     "the one view: NEEDS YOU / IN FLIGHT / READY, with resolve commands"
   )
   .option("--json", "emit JSON")
-  .option("--repo <name>", "only one repo's worktrees, e.g. linkiq")
+  .option(
+    "--repo <name>",
+    "filter to one repo by LABEL, e.g. linkiq (not a path; cf. start --repo-path)"
+  )
   .option("--needs", "only the NEEDS YOU group")
   .option("--ready", "only the READY group")
+  .option(
+    "--summary",
+    "compact: group counts + NEEDS YOU detail only (a cheap poll)"
+  )
   .action(
     (options: {
       json?: boolean;
       repo?: string;
       needs?: boolean;
       ready?: boolean;
+      summary?: boolean;
     }) => {
       status(options, process.stdout);
     }
@@ -115,8 +136,9 @@ program
   .command("approve")
   .description("approve plan(s): all, or comma-separated ticket names")
   .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
-  .action((refs: string) => {
-    approve(refs, process.stdout);
+  .option("--json", "emit JSON: { approved, unknown }")
+  .action((refs: string, options: { json?: boolean }) => {
+    approve(refs, process.stdout, undefined, { json: options.json });
   });
 
 program
@@ -124,27 +146,49 @@ program
   .description("send a plan back to planning with feedback")
   .argument("<ref>", "the worktree's ticket name")
   .requiredOption("--note <text>", "what to change")
-  .action((ref: string, options: { note: string }) => {
-    reject(ref, options.note, process.stdout);
+  .option("--json", "emit JSON: { rejected, note } or { unknown }")
+  .action((ref: string, options: { note: string; json?: boolean }) => {
+    reject(ref, options.note, process.stdout, undefined, {
+      json: options.json,
+    });
   });
+
+// The JSON contract on failure: when the command was invoked with --json, the
+// ONE value on stdout must be {error:{type,message}} — never prose on stderr
+// (that would leave a driver's JSON.parse with nothing). We read --json off
+// argv since the parsed options aren't in scope here.
+const wantsJson = (): boolean => process.argv.includes("--json");
 
 const main = async (): Promise<void> => {
   try {
     await program.parseAsync();
   } catch (error) {
+    const json = wantsJson();
     const s = style(useColor(process.stderr));
     if (error instanceof CliError) {
-      process.stderr.write(`${msg.err(s, error.message)}\n`);
+      if (json) {
+        process.stdout.write(
+          `${JSON.stringify({ error: { message: error.message, type: error.errorType ?? "ERROR" } })}\n`
+        );
+      } else {
+        process.stderr.write(`${msg.err(s, error.message)}\n`);
+      }
       process.exitCode = error.exitCode;
       return;
     }
     // An unexpected failure: one readable line, never a raw stack — unless
     // CAPTAIN_DEBUG=1 asks for it.
     const detail = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`${msg.err(s, `unexpected error: ${detail}`)}\n`);
+    if (json) {
+      process.stdout.write(
+        `${JSON.stringify({ error: { message: detail, type: "UNEXPECTED" } })}\n`
+      );
+    } else {
+      process.stderr.write(`${msg.err(s, `unexpected error: ${detail}`)}\n`);
+    }
     if (process.env.CAPTAIN_DEBUG) {
       process.stderr.write(`${error instanceof Error ? error.stack : ""}\n`);
-    } else {
+    } else if (!json) {
       process.stderr.write(
         `${msg.hint(s, "set CAPTAIN_DEBUG=1 for the stack")}\n`
       );

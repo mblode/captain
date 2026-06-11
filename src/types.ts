@@ -57,6 +57,8 @@ export interface CliOptions {
   repoOverride?: string;
   // branch new worktrees off this ref instead of origin's default branch
   base?: string;
+  // machine output: emit a single {started:[...]} JSON value, suppress hints
+  json?: boolean;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   tokens: string[];
@@ -69,6 +71,8 @@ export interface DispatchOptions {
   env?: NodeJS.ProcessEnv;
   print?: boolean;
   repoOverride?: string;
+  // machine output: emit a single {started:[...]} JSON value, suppress hints
+  json?: boolean;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   // the plain-text task the agent should drive to PR-ready

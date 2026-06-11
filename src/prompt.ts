@@ -104,8 +104,9 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       ...skillSteps,
       `${skills.length + 3}. Finish with the finishing protocol below (verifier + verdict).`,
       "",
-      "If you are ever blocked on a decision only a human can make, ask the question",
-      "and wait — otherwise keep moving to the next step on your own.",
+      "If you are ever blocked on a decision only a human can make, surface it via the",
+      "AskUserQuestion tool and wait for the answer — never guess, and never just print the",
+      "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
     ].join("\n");
     out += "\n</workflow>\n";
   }
@@ -119,6 +120,10 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       "fix and re-verify until it passes, then write the verdict file exactly as the " +
       'rubric\'s "Verdict" section specifies. Captain will not mark this worktree ' +
       "PR-ready without a passing verdict.\n";
+    out +=
+      "Once the verdict is written your work on this ticket is complete — stop and wait; the " +
+      "captain driver sees the verdict on its next `captain status` and owns the merge decision. " +
+      "Do not merge or open further work yourself.\n";
     out += "</finishing-protocol>\n";
   }
 

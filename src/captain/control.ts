@@ -1,5 +1,7 @@
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 
+import { cmuxReachable } from "../cmux";
+import { CliError, EXIT } from "../errors";
 import { run, runRequired } from "../shell";
 
 // Short repo label for a worktree path: a linked worktree's --git-common-dir
@@ -58,6 +60,11 @@ export type RunState = "running" | "needs-input" | "idle" | "unknown";
 // `realCmux(env)` folds the env in once at the entrypoint, keeping every call
 // site free of env threading.
 export interface CmuxPort {
+  // Is the cmux daemon up? Probed BEFORE building a fleet view so a dead cmux
+  // reads as an error, not an empty (= "all done") fleet. The list/feed/runState
+  // calls all fail soft to []/{}, which is indistinguishable from a quiet fleet
+  // — this is the one signal that tells them apart.
+  reachable(): boolean;
   listWorkspaces(): CmuxWorkspace[];
   send(workspaceId: string, text: string): void;
   notify(title: string, body: string): void;
@@ -152,12 +159,23 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     run("cmux", ["notify", "--title", title, "--body", body], { env });
   },
 
+  // Is cmux up? Reuses the shared reachability probe (commandExists + `ping`).
+  reachable: (): boolean => cmuxReachable(env),
+
   replyExitPlan: (id: string, approve: boolean): void => {
-    runRequired(
-      "cmux",
-      ["rpc", "feed.exit_plan.reply", JSON.stringify({ approve, id })],
-      { env }
-    );
+    try {
+      runRequired(
+        "cmux",
+        ["rpc", "feed.exit_plan.reply", JSON.stringify({ approve, id })],
+        { env }
+      );
+    } catch (error) {
+      throw new CliError(
+        `failed to reply to the plan gate via cmux: ${error instanceof Error ? error.message : String(error)}`,
+        EXIT.CMUX_UNREACHABLE,
+        "CMUX_UNREACHABLE"
+      );
+    }
   },
 
   // Every workspace's agent run state from `cmux top`'s status tag rows:
@@ -186,8 +204,16 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
 
   // `send` types text into a workspace's focused surface; \n submits.
   send: (workspaceId: string, text: string): void => {
-    runRequired("cmux", ["send", "--workspace", workspaceId, `${text}\n`], {
-      env,
-    });
+    try {
+      runRequired("cmux", ["send", "--workspace", workspaceId, `${text}\n`], {
+        env,
+      });
+    } catch (error) {
+      throw new CliError(
+        `failed to send to workspace ${workspaceId} via cmux: ${error instanceof Error ? error.message : String(error)}`,
+        EXIT.CMUX_UNREACHABLE,
+        "CMUX_UNREACHABLE"
+      );
+    }
   },
 });

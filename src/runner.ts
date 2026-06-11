@@ -6,7 +6,7 @@ import { realCmux } from "./captain/control";
 import { ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { loadSkills } from "./config";
-import { CliError } from "./errors";
+import { CliError, EXIT } from "./errors";
 import { ensureWorktree, fetchOrigin } from "./git";
 import { downloadIssueImages } from "./images";
 import { isIssueId, parseIssueInput, slugify } from "./issue";
@@ -26,6 +26,39 @@ interface PreparedIssue {
   prompt: string;
   worktree: WorktreeResult;
 }
+
+// One launched target's machine-readable identity for `start --json`. Fields
+// absent on a given path are omitted (never undefined) so the value stays valid
+// JSON: dispatch has no branch, an inline fallback launch has no workspaceId.
+interface StartedEntry {
+  name: string;
+  cwd: string;
+  branch?: string;
+  workspaceId?: string;
+}
+
+// Resolve the cmux workspace id that owns a worktree cwd (best-effort), so
+// `start --json` can hand a driver the id to address later. Matches the same
+// way collapse detection does: exact cwd, or a workspace whose cwd ends in the
+// worktree's basename. Undefined when cmux can't be reached or nothing matches.
+const workspaceIdForCwd = (
+  cwd: string,
+  workspaces: { id: string; cwd: string }[]
+): string | undefined =>
+  workspaces.find((w) => w.cwd === cwd || w.cwd.endsWith(`/${basename(cwd)}`))
+    ?.id;
+
+// Drop undefined-valued fields so the emitted JSON never carries `undefined`.
+const compactEntry = (entry: StartedEntry): StartedEntry => {
+  const out: StartedEntry = { cwd: entry.cwd, name: entry.name };
+  if (entry.branch !== undefined) {
+    out.branch = entry.branch;
+  }
+  if (entry.workspaceId !== undefined) {
+    out.workspaceId = entry.workspaceId;
+  }
+  return out;
+};
 
 interface PrepareContext {
   cwd: string;
@@ -123,23 +156,60 @@ const launchViaCmux = async (
 // cmux if reachable, else inline plan mode. (The multi-issue loop calls
 // launchViaCmux directly — a refused workspace there surfaces as a collapse note,
 // not a fallback.)
+// Identity for the single-target --json payload. workspaceId is resolved after
+// a successful cmux launch; on the inline-fallback path there is no workspace,
+// so it stays absent.
+interface StartedMeta {
+  name: string;
+  cwd: string;
+  branch?: string;
+  json: boolean;
+}
+
 const launchOrFallback = async (
   target: LaunchTarget,
-  stdout: NodeJS.WritableStream
+  stdout: NodeJS.WritableStream,
+  meta?: StartedMeta
 ): Promise<number> => {
   const { env, progress } = target;
+  const emitStarted = (workspaceId?: string): void => {
+    if (!meta?.json) {
+      return;
+    }
+    stdout.write(
+      `${JSON.stringify({
+        started: [
+          compactEntry({
+            branch: meta.branch,
+            cwd: meta.cwd,
+            name: meta.name,
+            workspaceId,
+          }),
+        ],
+      })}\n`
+    );
+  };
   if (cmuxReachable(env) && commandExists("claude", env)) {
     try {
       await launchViaCmux(target, true);
       progress.done(`opened cmux workspace ${target.label}`);
-      stdout.write("follow along: captain status\n");
+      if (meta?.json) {
+        emitStarted(
+          workspaceIdForCwd(target.cwd, realCmux(env).listWorkspaces())
+        );
+      } else {
+        stdout.write("follow along: captain status\n");
+      }
       return 0;
     } catch {
       // fall through to inline launch if cmux refuses the workspace
     }
   }
   progress.done();
-  return launchPlanMode(target.cwd, target.prompt, env);
+  const status = launchPlanMode(target.cwd, target.prompt, env);
+  // Inline launch: no cmux workspace to address, so workspaceId is omitted.
+  emitStarted();
+  return status;
 };
 
 const targetOf = (
@@ -272,16 +342,21 @@ const dispatch = async ({
   if (isFanOutInput(tokens, Boolean(options.print))) {
     if (!cmuxReachable(env)) {
       throw new CliError(
-        "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain doctor`"
+        "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain doctor`",
+        EXIT.CMUX_UNREACHABLE,
+        "CMUX_UNREACHABLE"
       );
     }
     if (!commandExists("claude", env)) {
       throw new CliError(
-        "claude is not on PATH — install it, then `captain doctor`"
+        "claude is not on PATH — install it, then `captain doctor`",
+        EXIT.USAGE,
+        "MISSING_DEPENDENCY"
       );
     }
 
     const worktreePaths: string[] = [];
+    const launched: { name: string; branch: string; cwd: string }[] = [];
     let index = 0;
     for (const token of tokens) {
       index += 1;
@@ -295,18 +370,32 @@ const dispatch = async ({
       });
       worktreePaths.push(prepared.worktree.worktreePath);
       await launchViaCmux(targetOf(prepared, scoped, env), false);
+      launched.push({
+        branch: prepared.worktree.branch,
+        cwd: prepared.worktree.worktreePath,
+        name: prepared.worktree.branch,
+      });
       progress.done(
         `opened ${prepared.worktree.branch} (${index}/${tokens.length})`
       );
     }
 
+    // One workspace listing serves both collapse detection and --json id lookup.
+    const workspaces = realCmux(env).listWorkspaces();
+    if (options.json) {
+      const started = launched.map((l) =>
+        compactEntry({
+          ...l,
+          workspaceId: workspaceIdForCwd(l.cwd, workspaces),
+        })
+      );
+      stdout.write(`${JSON.stringify({ started })}\n`);
+      return 0;
+    }
     stdout.write(
       `spawned ${tokens.length} workspaces — each agent drives its own pipeline to PR-ready\n`
     );
-    for (const note of collapsedWorktreeNotes(
-      worktreePaths,
-      realCmux(env).listWorkspaces()
-    )) {
+    for (const note of collapsedWorktreeNotes(worktreePaths, workspaces)) {
       stdout.write(`  ${note}\n`);
     }
     stdout.write("follow along: captain status\n");
@@ -319,13 +408,28 @@ const dispatch = async ({
     const cdCommand = `cd ${prepared.worktree.worktreePath}`;
     copyCommand(cdCommand, env);
     progress.done();
+    if (options.json) {
+      stdout.write(
+        `${JSON.stringify({
+          cwd: prepared.worktree.worktreePath,
+          name: prepared.worktree.branch,
+          prompt: prepared.prompt,
+        })}\n`
+      );
+      return 0;
+    }
     stdout.write(
       `agent prompt:\n${prepared.prompt}\n\ncopied:\n${cdCommand}\n`
     );
     return 0;
   }
 
-  return launchOrFallback(targetOf(prepared, progress, env), stdout);
+  return launchOrFallback(targetOf(prepared, progress, env), stdout, {
+    branch: prepared.worktree.branch,
+    cwd: prepared.worktree.worktreePath,
+    json: Boolean(options.json),
+    name: prepared.worktree.branch,
+  });
 };
 
 export const runLinearWorktree = async (
@@ -338,8 +442,9 @@ export const runLinearWorktree = async (
 
   if (tokens.length === 0) {
     throw new CliError(
-      "usage: captain start [--print] [--repo <path>] <issue-id|url> [more issue-ids...]",
-      2
+      "usage: captain start [--print] [--repo-path <path>] <issue-id|url> [more issue-ids...]",
+      EXIT.USAGE,
+      "USAGE"
     );
   }
 
@@ -375,8 +480,9 @@ export const runDispatch = async (
 
   if (!task) {
     throw new CliError(
-      'usage: captain start "<task>" [--name <slug>] [--repo <path>]',
-      2
+      'usage: captain start "<task>" [--name <slug>] [--repo-path <path>]',
+      EXIT.USAGE,
+      "USAGE"
     );
   }
 
@@ -389,7 +495,8 @@ export const runDispatch = async (
     if (!name) {
       throw new CliError(
         "could not derive a workspace name from the task — pass --name <slug>",
-        2
+        EXIT.USAGE,
+        "USAGE"
       );
     }
 
@@ -406,6 +513,13 @@ export const runDispatch = async (
 
     if (options.print) {
       progress.done();
+      if (options.json) {
+        // Dispatch runs in the checkout itself — no branch, so omit it.
+        stdout.write(
+          `${JSON.stringify({ cwd: repo.repoRoot, name, prompt })}\n`
+        );
+        return 0;
+      }
       stdout.write(`agent prompt:\n${prompt}\n`);
       return 0;
     }
@@ -419,7 +533,9 @@ export const runDispatch = async (
         progress,
         prompt,
       },
-      stdout
+      stdout,
+      // Dispatch runs in the checkout itself — no branch to report.
+      { cwd: repo.repoRoot, json: Boolean(options.json), name }
     );
   } catch (error) {
     progress.done();
@@ -444,6 +560,7 @@ export const runStart = (
     return runDispatch({
       cwd: options.cwd,
       env: options.env,
+      json: options.json,
       name: options.name,
       print: options.print,
       repoOverride: options.repoOverride,
