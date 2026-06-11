@@ -1,5 +1,11 @@
 # linear-worktree
 
+## 0.3.1
+
+### Patch Changes
+
+- 321efe0: Release recent captain CLI updates, including configurable skill selection, the unified start command, and quality refinements.
+
 ## 0.3.0
 
 ### Minor Changes
