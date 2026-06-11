@@ -72,6 +72,11 @@ low-level [`cmux`](../cmux/SKILL.md) skill (the four verbs).
   you want push notifications, run `captain notify` yourself (it's safe to kill any time).
 - **Workspace ids, not names.** `cmux read-screen` / `cmux send` take the workspace UUID —
   `captain status` prints the right command per row; copy it.
+- **Never close an apparent duplicate workspace.** A cmux sidebar group's anchor is a real
+  workspace whose cwd can be a fleet worktree; closing it dissolves the group and ungroups the
+  whole fleet. `status` collapses same-cwd rows to the agent's row (fix shipped 2026-06-11), so
+  seeing a duplicate means a stale binary — rebuild (`cd ~/Code/mblode/captain && npm run build`)
+  instead of closing anything. Identify anchors with `cmux rpc workspace.group.list '{}'`.
 
 ## Reference
 
