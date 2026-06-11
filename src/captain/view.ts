@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 
-import type { CmuxFeedItem, RunState } from "./control";
+import type { CmuxFeedItem, CmuxWorkspace, RunState } from "./control";
 import type { Verdict } from "./verdict";
 import { verdictCounts } from "./verdict";
 
@@ -56,6 +56,28 @@ export const identityOf = (
   const ticket = ticketFrom(basename(cwd)) ?? ticketFrom(fallback);
   const name = repo && ticket ? `${repo}-${ticket}` : fallback;
   return { name, repo, ticket };
+};
+
+// PURE: collapse workspaces that share a cwd into the one that actually hosts
+// the agent. cmux sidebar groups are anchored to a real workspace, and a
+// group's anchor can be an idle shell spawned in a worktree's dir — without
+// this it reads as a second row for that worktree and the overlap hints report
+// the worktree conflicting with itself (closing the "duplicate" then dissolves
+// the group). The agent workspace is the one `cmux top` tags with a run state;
+// an anchor or stray shell has none. Ties keep the first listed.
+export const pickAgentWorkspaces = (
+  workspaces: CmuxWorkspace[],
+  runs: Record<string, RunState>
+): CmuxWorkspace[] => {
+  const hasAgent = (w: CmuxWorkspace): boolean => w.id.toLowerCase() in runs;
+  const byCwd = new Map<string, CmuxWorkspace>();
+  for (const w of workspaces) {
+    const prev = byCwd.get(w.cwd);
+    if (!prev || (!hasAgent(prev) && hasAgent(w))) {
+      byCwd.set(w.cwd, w);
+    }
+  }
+  return workspaces.filter((w) => byCwd.get(w.cwd) === w);
 };
 
 // Feed kinds that gate on a human: a plan awaiting approval, or a question /

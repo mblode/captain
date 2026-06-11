@@ -11,7 +11,7 @@ import { repoLabel } from "./control";
 import type { CmuxPort } from "./control";
 import { parseVerdict } from "./verdict";
 import type { Verdict } from "./verdict";
-import { rowOf } from "./view";
+import { pickAgentWorkspaces, rowOf } from "./view";
 import type { FleetRow } from "./view";
 
 // The stateless read surface: the fleet view derived live from cmux + the
@@ -58,19 +58,19 @@ export const fleetRows = (
 ): FleetRow[] => {
   const feed = port.feedList();
   const runs = port.runStates();
-  return port
-    .listWorkspaces()
-    .filter((w) => isManaged(w.cwd))
-    .map((w) =>
-      rowOf({
-        cwd: w.cwd,
-        expectedHash: expectedRubricHash(w.cwd),
-        fallbackName: w.name,
-        feed,
-        repo: repoLabel(w.cwd, env),
-        run: runs[w.id.toLowerCase()] ?? "unknown",
-        verdict: readVerdict(w.cwd),
-        workspaceId: w.id,
-      })
-    );
+  return pickAgentWorkspaces(
+    port.listWorkspaces().filter((w) => isManaged(w.cwd)),
+    runs
+  ).map((w) =>
+    rowOf({
+      cwd: w.cwd,
+      expectedHash: expectedRubricHash(w.cwd),
+      fallbackName: w.name,
+      feed,
+      repo: repoLabel(w.cwd, env),
+      run: runs[w.id.toLowerCase()] ?? "unknown",
+      verdict: readVerdict(w.cwd),
+      workspaceId: w.id,
+    })
+  );
 };

@@ -8,7 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderRubric } from "../rubric";
 import { approve, reject, resolveTargets, status } from "./commands";
-import type { CmuxFeedItem, CmuxPort, CmuxWorkspace } from "./control";
+import type {
+  CmuxFeedItem,
+  CmuxPort,
+  CmuxWorkspace,
+  RunState,
+} from "./control";
 import type { FleetRow } from "./view";
 
 const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
@@ -72,7 +77,8 @@ interface FakePort extends CmuxPort {
 
 const fakePort = (
   workspaces: CmuxWorkspace[],
-  feed: CmuxFeedItem[]
+  feed: CmuxFeedItem[],
+  runs: Record<string, RunState> = {}
 ): FakePort => {
   const replies: FakePort["replies"] = [];
   const sent: FakePort["sent"] = [];
@@ -87,7 +93,7 @@ const fakePort = (
     replyExitPlan: (id, isApproved) => {
       replies.push({ approve: isApproved, id });
     },
-    runStates: () => ({}),
+    runStates: () => runs,
     send: (workspaceId, text) => {
       sent.push({ text, workspaceId });
     },
@@ -235,6 +241,25 @@ describe("stateless approve/reject/status over the real surface", () => {
     expect(rendered).toContain("READY TO MERGE");
     expect(rendered).toContain("gh pr merge https://x/pr/1 --squash");
     expect(rendered).toContain("captain approve tig-430");
+  });
+
+  it("status collapses a group-anchor workspace sharing a worktree cwd", () => {
+    const managed = worktree("tig-491");
+    const port = fakePort(
+      [
+        // the sidebar group's anchor: an idle shell in the same worktree dir,
+        // with no claude_code tag in `cmux top`
+        { cwd: managed, id: "WS-ANCHOR", name: "Group 1", ref: "r" },
+        { cwd: managed, id: "WS-AGENT", name: "tig-491", ref: "r" },
+      ],
+      [],
+      { "ws-agent": "needs-input" }
+    );
+    const { out, text } = capture();
+    status({ json: true }, out, port);
+    const rows = JSON.parse(text()) as FleetRow[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].workspaceId).toBe("WS-AGENT");
   });
 
   it("status ignores cmux workspaces without a .captain marker", () => {

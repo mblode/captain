@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { CmuxFeedItem } from "./control";
+import type { CmuxFeedItem, CmuxWorkspace } from "./control";
 import type { Verdict } from "./verdict";
 import {
   identityOf,
   mergeOrderHints,
   pendingGate,
+  pickAgentWorkspaces,
   rowOf,
   ticketFrom,
 } from "./view";
@@ -159,6 +160,35 @@ describe("rowOf grouping", () => {
     expect(rowOf(input({ run: "running" })).group).toBe("in-flight");
     expect(rowOf(input({ run: "idle" })).group).toBe("in-flight");
     expect(rowOf(input({ run: "unknown" })).group).toBe("in-flight");
+  });
+});
+
+const ws = (id: string, cwd: string, name = id): CmuxWorkspace => ({
+  cwd,
+  id,
+  name,
+  ref: `workspace:${id}`,
+});
+
+describe("pickAgentWorkspaces", () => {
+  it("drops a group-anchor shell sharing the agent's cwd, either order", () => {
+    const anchor = ws("WS-ANCHOR", "/wt/tig-491", "Group 1");
+    const agent = ws("WS-AGENT", "/wt/tig-491", "tig-491");
+    const runs = { "ws-agent": "needs-input" as const };
+    expect(pickAgentWorkspaces([anchor, agent], runs)).toEqual([agent]);
+    expect(pickAgentWorkspaces([agent, anchor], runs)).toEqual([agent]);
+  });
+
+  it("keeps the first workspace when none has an agent run state", () => {
+    const a = ws("WS-A", "/wt/tig-1");
+    const b = ws("WS-B", "/wt/tig-1");
+    expect(pickAgentWorkspaces([a, b], {})).toEqual([a]);
+  });
+
+  it("never collapses distinct cwds and preserves order", () => {
+    const a = ws("WS-A", "/wt/tig-1");
+    const b = ws("WS-B", "/wt/tig-2");
+    expect(pickAgentWorkspaces([a, b], { "ws-a": "running" })).toEqual([a, b]);
   });
 });
 
