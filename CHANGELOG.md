@@ -1,5 +1,11 @@
 # linear-worktree
 
+## 0.3.2
+
+### Patch Changes
+
+- 10323da: Expose machine-readable captain driver surfaces for starting, polling, approving, and rejecting work. Status rows now carry deterministic next-command and state-hash fields, compact summary polling is available, and cmux connectivity failures report structured JSON errors for unattended drivers.
+
 ## 0.3.1
 
 ### Patch Changes
