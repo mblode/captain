@@ -1,0 +1,19 @@
+{
+  "$schema": "https://blode.md/docs.json",
+  "name": "Captain",
+  "slug": "captain",
+  "description": "Captain a fleet of cmux worktrees from one Claude Code session, one worktree per Linear ticket",
+  "navbar": {
+    "links": [
+      { "label": "GitHub", "href": "https://github.com/mblode/captain" }
+    ]
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": ["index", "usage"]
+      }
+    ]
+  }
+}
