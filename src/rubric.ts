@@ -28,7 +28,8 @@ export const rubricBody = (text: string): string => {
 
 const criteriaFor = (
   issue: LinearIssue | undefined,
-  displayId: string
+  displayId: string,
+  dataScope?: string
 ): string[] => {
   const criteria: string[] = [
     issue?.title
@@ -45,6 +46,11 @@ const criteriaFor = (
     "The repo's typecheck and lint commands pass.",
     `A PR is open with "${displayId}" in the title and a description that matches the diff.`
   );
+  if (dataScope) {
+    criteria.push(
+      "The diff stays within the stated data-scope guardrail: no customer data, secrets, credentials, payment information, or PII is accessed, logged, or committed."
+    );
+  }
   return criteria;
 };
 
@@ -55,14 +61,19 @@ const criteriaFor = (
 // standard is set by captain once, not improvised per agent.
 export const renderRubric = (
   issue: LinearIssue | undefined,
-  displayId: string
+  displayId: string,
+  dataScope?: string
 ): { text: string; hash: string } => {
   let body = `# Definition of done — ${displayId}\n\n`;
   body +=
     "Captain wrote this file at fan-out. Do not edit it; your verdict must cite its hash.\n\n";
 
   body += "## Acceptance criteria\n\n";
-  for (const [i, criterion] of criteriaFor(issue, displayId).entries()) {
+  for (const [i, criterion] of criteriaFor(
+    issue,
+    displayId,
+    dataScope
+  ).entries()) {
     body += `${i + 1}. ${criterion}\n`;
   }
   if (issue?.description) {

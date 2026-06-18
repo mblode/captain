@@ -8,13 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CliError } from "../errors";
 import { renderRubric } from "../rubric";
-import { approve, reject, resolveTargets, status } from "./commands";
+import { approve, gain, reject, resolveTargets, status } from "./commands";
 import type {
   CmuxFeedItem,
   CmuxPort,
   CmuxWorkspace,
   RunState,
 } from "./control";
+import { appendLog } from "./log";
 import type { FleetRow } from "./view";
 
 const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
@@ -444,5 +445,134 @@ describe("stateless approve/reject/status over the real surface", () => {
       gate: { id: "feed-1", kind: "plan" },
       group: "needs-you",
     });
+  });
+
+  // gain: stateless telemetry derived over the SAME real surface, with the
+  // decision log pre-seeded under the CAPTAIN_HOME temp.
+  interface GainJson {
+    decisions: {
+      approvals: number;
+      rejections: number;
+      approvalRate: number;
+      recentRejectReasons: { name: string; note: string; ts: number }[];
+      cadence: { day: string; count: number }[];
+      window?: { since: number };
+    };
+    fleet: {
+      needsYou: number;
+      inFlight: number;
+      ready: number;
+      total: number;
+      byRepo: { repo: string; total: number }[];
+    };
+    verdicts: {
+      pass: number;
+      fail: number;
+      failingCriteria: { name: string; count: number }[];
+      openPrs: string[];
+    };
+    merged?: { repo: string; count: number }[];
+    caveats: string[];
+  }
+
+  const fleetOfThree = (): {
+    port: ReturnType<typeof fakePort>;
+  } => {
+    const gated = worktree("tig-430");
+    const ready = worktree("tig-431", { prUrl: "https://x/pr/1" });
+    const flowing = worktree("tig-432");
+    const port = fakePort(
+      [
+        { cwd: gated, id: "ws-1", name: "tig-430", ref: "r" },
+        { cwd: ready, id: "ws-2", name: "tig-431", ref: "r" },
+        { cwd: flowing, id: "ws-3", name: "tig-432", ref: "r" },
+      ],
+      [{ cwd: gated, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    return { port };
+  };
+
+  it("gain --json matches live fleet counts, openPrs, and the seeded decisions", () => {
+    const { port } = fleetOfThree();
+    appendLog({ kind: "approve", name: "tig-431", ts: 1000 });
+    appendLog({ kind: "approve", name: "tig-431", ts: 2000 });
+    appendLog({ kind: "reject", name: "tig-430", note: "split it", ts: 3000 });
+    const { out, text } = capture();
+    gain({ json: true }, out, port);
+    const m = JSON.parse(text()) as GainJson;
+    expect(m.fleet).toMatchObject({ needsYou: 1, ready: 1, total: 3 });
+    expect(m.verdicts.pass).toBe(1);
+    expect(m.verdicts.openPrs).toEqual(["https://x/pr/1"]);
+    expect(m.decisions).toMatchObject({ approvals: 2, rejections: 1 });
+    expect(m.decisions.approvalRate).toBeCloseTo(2 / 3);
+    expect(m.decisions.recentRejectReasons[0].note).toBe("split it");
+    expect(m.caveats.length).toBeGreaterThan(0);
+    // no --git ⇒ merged omitted entirely
+    expect(m.merged).toBeUndefined();
+  });
+
+  it("gain skips a malformed log line instead of throwing", () => {
+    const { port } = fleetOfThree();
+    appendLog({ kind: "approve", name: "tig-431", ts: 1000 });
+    // append a truncated/garbage tail line directly
+    writeFileSync(
+      join(root, "home", "log.jsonl"),
+      `${readFileSync(join(root, "home", "log.jsonl"), "utf-8")}{not json\n`
+    );
+    const { out, text } = capture();
+    expect(() => gain({ json: true }, out, port)).not.toThrow();
+    const m = JSON.parse(text()) as GainJson;
+    expect(m.decisions.approvals).toBe(1);
+  });
+
+  it("gain --since windows the decision metrics and records the floor", () => {
+    const { port } = fleetOfThree();
+    // an old approval well outside any recent window, one fresh approval
+    appendLog({ kind: "approve", name: "tig-431", ts: 1000 });
+    appendLog({
+      kind: "approve",
+      name: "tig-431",
+      ts: Math.floor(Date.now() / 1000),
+    });
+    const { out, text } = capture();
+    gain({ json: true, since: "1d" }, out, port);
+    const m = JSON.parse(text()) as GainJson;
+    expect(m.decisions.approvals).toBe(1);
+    expect(m.decisions.window).toBeDefined();
+  });
+
+  it("gain --json output is pure JSON, no prose", () => {
+    const { port } = fleetOfThree();
+    const { out, text } = capture();
+    gain({ json: true }, out, port);
+    // parses cleanly and the whole buffer is exactly that JSON + newline
+    const parsed = JSON.parse(text()) as GainJson;
+    expect(JSON.stringify(parsed, null, 2)).toBe(text().trimEnd());
+  });
+
+  it("gain reports a structured CMUX_UNREACHABLE + exit 11 when cmux is down", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [],
+      { reachable: false }
+    );
+    const prev = process.exitCode;
+    const { out, text } = capture();
+    gain({ json: true }, out, port);
+    const parsed = JSON.parse(text()) as { error: { type: string } };
+    expect(parsed.error.type).toBe("CMUX_UNREACHABLE");
+    expect(process.exitCode).toBe(11);
+    process.exitCode = prev;
+  });
+
+  it("gain (TTY) renders the honesty caveats as a footer", () => {
+    const { port } = fleetOfThree();
+    const { out, text } = capture();
+    gain({}, out, port);
+    const rendered = text();
+    expect(rendered).toContain("Captain — gain");
+    expect(rendered).toContain("LIVE SNAPSHOT");
+    expect(rendered).toContain("ledger");
   });
 });

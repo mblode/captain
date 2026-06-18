@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { Command, Option } from "commander";
 
-import { approve, reject, status } from "./captain/commands";
+import { approve, gain, reject, status } from "./captain/commands";
 import { doctor } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
 import { CliError } from "./errors";
@@ -131,6 +131,22 @@ program
       status(options, process.stdout);
     }
   );
+
+program
+  .command("gain")
+  .alias("audit")
+  .description(
+    "fleet telemetry, derived live: decisions ledger + fleet/verdict snapshot"
+  )
+  .option("--json", "emit JSON")
+  .option(
+    "--since <when>",
+    "window the decision metrics: 7d / 24h / an ISO date"
+  )
+  .option("--git", "also approximate merged-PR counts per repo via gh (opt-in)")
+  .action((options: { json?: boolean; since?: string; git?: boolean }) => {
+    gain(options, process.stdout);
+  });
 
 program
   .command("approve")

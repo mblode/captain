@@ -28,8 +28,8 @@ src/
   cli.ts            # Commander entry: doctor | start | status | approve | reject
   runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief
   cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
-  config.ts         # PURE-ish: loadSkills (CAPTAIN_SKILLS > ~/.config/captain/config.json .skills > DEFAULT_SKILLS), parseSkills
-  prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <finishing-protocol> + <fleet-memory>
+  config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE), loadRepoMap (.repoMap: team-prefix → repo path, for multi-repo fan-out)
+  prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <data-scope> guardrail + <finishing-protocol> + <fleet-memory>
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
   memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
   captain/
@@ -37,10 +37,11 @@ src/
     verdict.ts      # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
     surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
-    commands.ts     # stateless status/approve/reject + friendly-id resolution
+    commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
+    gain.ts         # 100% PURE: computeGain (decisions ledger + live fleet snapshot + verdict tallies → metrics); the gain command's fs/cmux edge lives in commands.ts
     doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + render; realDeps reads the world
-    format.ts       # TTY-aware colour + the grouped status renderer (display only)
-    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject)
+    format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
+    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject); readLog feeds gain
 ```
 
 ## How it works
@@ -49,7 +50,8 @@ src/
 `runLinearWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
 free-form task in the **current checkout**, no Linear, no worktree). Either way the agent gets the
 same brief: the `<workflow>` pipeline (plan → implement → the configured skills → verifier
-finish), the finishing protocol, and fleet memory. The skills run between implement and finish are
+finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
+`loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
 config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
 `.skills` > the default `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`); plan,
 implement, and the verdict finish stay fixed because `status` derives from them. The agent
@@ -59,6 +61,13 @@ For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot
 dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.md`/`verdict.json`.
 The rubric degrades gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed
 verify procedure).
+
+**Multi-repo fan-out** (additive): one `captain start` can span repos. `config.ts` `loadRepoMap`
+reads `config.json` `.repoMap` (issue team-prefix → repo path); `runner.ts` resolves a repo **per
+issue** (`teamPrefixOf` → map hit calls `resolveRepo` with that path, else falls back to today's
+single-repo resolution), and worktree/rubric/memory all key off the per-issue `repoRoot`. With no
+`.repoMap`, behaviour is byte-identical to single-repo. (`memory.ts` keys per-repo by basename, now
+disambiguated by a path hash on collision while keeping any existing legacy dir.)
 
 **Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
 
@@ -73,6 +82,12 @@ verify procedure).
 `approve` replies to the exit-plan feed item directly; `reject` replies false **and** types the
 feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
 intent queue, no daemon to race.
+
+`gain` (alias `audit`) derives fleet telemetry the same stateless way: a gap-free decisions
+ledger from `log.jsonl` (`readLog`) + a live fleet snapshot + verdict tallies → `computeGain`
+(PURE), with an honesty footer (`--json` plain). `--git` opt-in approximates merged-PR counts via
+`gh`, fail-soft. No counters, no event stream — operation-level throughput is not recorded, by
+design.
 
 ## The verdict gate & fleet memory (the agent-side loops)
 
@@ -123,12 +138,23 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
   (XDG, **not** under `~/.claude`), `CAPTAIN_CONFIG` redirects the path.
 - **No daemon, ever**: there is no watcher process, no pidfile, no state.json. If you find
   yourself adding persisted fleet state, stop — derive it from cmux + the filesystem instead.
+  This is a deliberate boundary against Builderbot-style bets: Slack/webhook ticket ingestion,
+  real-time multi-user steering, and two-way conversational control **all** require a persistent
+  listener — the exact watcher-daemon class deleted June 2026, where every live-session bug lived
+  (daemon death, fleet-wipe on a flaky RPC, gate-flap, two-writer clobber). A **one-way**
+  `notify`→external push is the only thesis-safe slice; two-way control stays a non-goal. The
+  reasoning is written up in `research/builderbot-audit.md`.
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
-  free-form current-dir dispatch, and `--print` for each.
+  free-form current-dir dispatch, multi-repo fan-out (via `.repoMap`), and `--print` for each.
+  Multi-repo is purely additive: with no `.repoMap`, every path stays byte-identical to single-repo.
 
 ## Env knobs
 
 `LINEAR_API_KEY` (issue fetch + screenshots) · `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
-skills, overrides the config file) · `CAPTAIN_CONFIG` (config.json path override) ·
-`XDG_CONFIG_HOME` (config dir) · `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
+skills, overrides the config file) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
+`CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
+`CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
+
+`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string),
+`.repoMap` (`{ "<TEAM-PREFIX>": "<repo path>" }`, for multi-repo fan-out).

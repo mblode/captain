@@ -56,6 +56,15 @@ describe("renderRubric", () => {
       renderRubric(issue, "ENG-403")
     );
   });
+
+  it("adds a data-scope criterion only when a guardrail is passed", () => {
+    const without = renderRubric(issue, "ENG-403");
+    const withScope = renderRubric(issue, "ENG-403", "no customer data");
+    expect(without.text).not.toContain("data-scope guardrail");
+    expect(withScope.text).toContain("data-scope guardrail");
+    // a criterion change must move the body hash (it gates the verdict)
+    expect(withScope.hash).not.toBe(without.hash);
+  });
 });
 
 describe("rubricBody", () => {

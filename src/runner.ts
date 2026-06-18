@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { realCmux } from "./captain/control";
 import { ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
-import { loadSkills } from "./config";
+import { loadDataScope, loadRepoMap, loadSkills } from "./config";
 import { CliError, EXIT } from "./errors";
 import { ensureWorktree, fetchOrigin } from "./git";
 import { downloadIssueImages } from "./images";
@@ -68,6 +68,11 @@ interface PrepareContext {
   base?: string;
   // the configured post-implementation skills, loaded once per run
   skills: string[];
+  // the data-scope guardrail injected into the brief + rubric, loaded once per run
+  dataScope: string;
+  // optional UPPERCASE team-prefix → absolute repo path map; empty = single-repo
+  // (today's behaviour). Resolved per issue inside the fan-out.
+  repoMap: Record<string, string>;
 }
 
 interface DispatchArgs {
@@ -251,9 +256,10 @@ const withLoopExtras = async (
   issue: Parameters<typeof renderRubric>[0],
   displayId: string,
   env: NodeJS.ProcessEnv,
-  skills: string[]
+  skills: string[],
+  dataScope: string
 ): Promise<string> => {
-  const { text } = renderRubric(issue, displayId);
+  const { text } = renderRubric(issue, displayId, dataScope);
   await mkdir(join(worktreePath, ".captain"), { recursive: true });
   await writeFile(join(worktreePath, RUBRIC_RELPATH), text);
   await excludeCaptainDir(repoRoot);
@@ -261,6 +267,7 @@ const withLoopExtras = async (
   return (
     prompt +
     renderPromptExtras({
+      dataScope,
       memory: readMemoryExcerpt(repoRoot, env),
       memoryPath,
       rubricPath: RUBRIC_RELPATH,
@@ -270,20 +277,44 @@ const withLoopExtras = async (
   );
 };
 
+// The team prefix of a Linear displayId is the part before the dash, uppercased
+// (e.g. "TIG-430" → "TIG"). Used to look an issue up in the repo map.
+export const teamPrefixOf = (displayId: string): string =>
+  (displayId.split("-")[0] ?? "").toUpperCase();
+
+// Resolve the per-issue repo: a repo-map hit for the issue's team prefix wins
+// (validated through the existing resolveRepo git check), else fall back to
+// exactly today's resolution (--repo override > cwd). An empty map or an
+// unmapped prefix is byte-identical to the pre-multi-repo path.
+const resolveIssueRepo = (
+  displayId: string,
+  context: PrepareContext
+): ReturnType<typeof resolveRepo> => {
+  const mapped = context.repoMap[teamPrefixOf(displayId)];
+  if (mapped) {
+    return resolveRepo({
+      cwd: context.cwd,
+      env: context.env,
+      repoOverride: mapped,
+    });
+  }
+  return resolveRepo({
+    cwd: context.cwd,
+    env: context.env,
+    repoOverride: context.repoOverride,
+  });
+};
+
 const prepareIssue = async (
   token: string,
   context: PrepareContext
 ): Promise<PreparedIssue> => {
-  const { cwd, env, progress } = context;
+  const { env, progress } = context;
 
   const parsedIssue = parseIssueInput(token);
 
   progress.step("resolving repo");
-  const repo = resolveRepo({
-    cwd,
-    env,
-    repoOverride: context.repoOverride,
-  });
+  const repo = resolveIssueRepo(parsedIssue.displayId, context);
 
   // Dispatch the Linear request first (async, non-blocking) so it travels the
   // network while the synchronous `git fetch origin` blocks the main thread.
@@ -325,7 +356,8 @@ const prepareIssue = async (
     issue,
     parsedIssue.displayId,
     env,
-    context.skills
+    context.skills,
+    context.dataScope
   );
 
   return { displayId: parsedIssue.displayId, prompt, worktree };
@@ -452,8 +484,10 @@ export const runLinearWorktree = async (
   const context: PrepareContext = {
     base: options.base,
     cwd,
+    dataScope: loadDataScope(env),
     env,
     progress,
+    repoMap: loadRepoMap(env),
     repoOverride: options.repoOverride,
     skills: loadSkills(env),
   };
@@ -508,7 +542,8 @@ export const runDispatch = async (
       undefined,
       name,
       env,
-      loadSkills(env)
+      loadSkills(env),
+      loadDataScope(env)
     );
 
     if (options.print) {

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { captainHome } from "../home";
@@ -26,4 +26,42 @@ export const appendLog = (
 ): void => {
   mkdirSync(captainHome(env), { recursive: true });
   appendFileSync(logPath(env), `${JSON.stringify(rec)}\n`);
+};
+
+// One LogRecord per non-empty line if its shape checks out, else skipped — the
+// file's own contract: it's append-only from any process, so a truncated tail
+// line (or any garbage) is just dropped, never thrown. A missing file is [].
+const isLogRecord = (raw: unknown): raw is LogRecord =>
+  typeof raw === "object" &&
+  raw !== null &&
+  typeof (raw as { ts?: unknown }).ts === "number" &&
+  ((raw as { kind?: unknown }).kind === "approve" ||
+    (raw as { kind?: unknown }).kind === "reject") &&
+  typeof (raw as { name?: unknown }).name === "string";
+
+// Read the full audit trail. This is captain's ONE gap-free history: every
+// approve/reject was appended here, so decision metrics are a true ledger (the
+// fleet/verdict signals, by contrast, are a live snapshot — see gain.ts).
+export const readLog = (env: NodeJS.ProcessEnv = process.env): LogRecord[] => {
+  let text: string;
+  try {
+    text = readFileSync(logPath(env), "utf-8");
+  } catch {
+    return [];
+  }
+  const records: LogRecord[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const raw: unknown = JSON.parse(line);
+      if (isLogRecord(raw)) {
+        records.push(raw);
+      }
+    } catch {
+      // a bad line (e.g. a partial write) is skipped, never fatal
+    }
+  }
+  return records;
 };

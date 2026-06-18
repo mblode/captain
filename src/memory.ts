@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
@@ -31,15 +32,23 @@ ${INBOX_HEADING}
 // Scoped per repo (worktrees of one repo share it; repos never cross-contaminate)
 // and kept OUTSIDE the worktrees so it survives `git worktree remove`.
 // CAPTAIN_MEMORY_DIR overrides the root — tests use it to stay out of real $HOME.
+//
+// Multi-repo disambiguation: keying on `basename(repoRoot)` alone collides when
+// two repos share a basename under different parents. We disambiguate with a
+// short hash of the full repoRoot, but keep returning the LEGACY bare-basename
+// path when it already exists, so existing users' memory keeps working untouched.
 export const memoryPath = (
   repoRoot: string,
   env: NodeJS.ProcessEnv = process.env
-): string =>
-  join(
-    env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory"),
-    basename(repoRoot),
-    "learnings.md"
-  );
+): string => {
+  const base = env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory");
+  const legacy = join(base, basename(repoRoot), "learnings.md");
+  if (existsSync(legacy)) {
+    return legacy;
+  }
+  const hash = createHash("sha256").update(repoRoot).digest("hex").slice(0, 8);
+  return join(base, `${basename(repoRoot)}-${hash}`, "learnings.md");
+};
 
 export const ensureMemoryFile = (
   repoRoot: string,

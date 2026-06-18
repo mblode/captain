@@ -1,7 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -27,17 +33,35 @@ const tmpEnv = (): NodeJS.ProcessEnv => {
 };
 
 describe("memoryPath", () => {
-  it("scopes per repo by basename", () => {
-    const env = { CAPTAIN_MEMORY_DIR: "/mem" };
-    expect(memoryPath("/code/frontyard", env)).toBe(
-      "/mem/frontyard/learnings.md"
+  it("reuses the legacy bare-basename path when it already exists", () => {
+    const env = tmpEnv();
+    const legacy = join(
+      env.CAPTAIN_MEMORY_DIR as string,
+      "frontyard",
+      "learnings.md"
     );
-    expect(memoryPath("/elsewhere/frontyard", env)).toBe(
-      "/mem/frontyard/learnings.md"
-    );
-    expect(memoryPath("/code/other-repo", env)).toBe(
-      "/mem/other-repo/learnings.md"
-    );
+    mkdirSync(dirname(legacy), { recursive: true });
+    writeFileSync(legacy, "old learnings\n");
+    expect(memoryPath("/code/frontyard", env)).toBe(legacy);
+  });
+
+  it("disambiguates with a repoRoot hash when no legacy path exists", () => {
+    const env = tmpEnv();
+    const path = memoryPath("/code/frontyard", env);
+    expect(path.startsWith(env.CAPTAIN_MEMORY_DIR as string)).toBe(true);
+    expect(path.endsWith("/learnings.md")).toBe(true);
+    // basename(repoRoot) + an 8-char hex suffix
+    expect(/\/frontyard-[0-9a-f]{8}\/learnings\.md$/u.test(path)).toBe(true);
+  });
+
+  it("gives two same-basename repos distinct memory paths", () => {
+    const env = tmpEnv();
+    const a = memoryPath("/code/frontyard", env);
+    const b = memoryPath("/elsewhere/frontyard", env);
+    expect(a).not.toBe(b);
+    // both still live under a frontyard-* directory, just disambiguated
+    expect(a).toContain("/frontyard-");
+    expect(b).toContain("/frontyard-");
   });
 });
 

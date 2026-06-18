@@ -13,11 +13,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { launchPlanMode } from "./launch";
+import { memoryPath } from "./memory";
 import {
   collapsedWorktreeNotes,
   runDispatch,
   runLinearWorktree,
   runStart,
+  teamPrefixOf,
 } from "./runner";
 import { runRequired } from "./shell";
 
@@ -145,12 +147,9 @@ describe("runner integration", () => {
     expect(
       await readFile(join(repo, ".git", "info", "exclude"), "utf-8")
     ).toContain(".captain/");
-    // The fleet memory file exists and the prompt closes both loops.
-    const memory = join(
-      env.CAPTAIN_MEMORY_DIR as string,
-      "src",
-      "learnings.md"
-    );
+    // The fleet memory file exists and the prompt closes both loops. The path is
+    // derived (disambiguated by repoRoot hash), not the legacy bare basename.
+    const memory = memoryPath(repo, env);
     expect(await readFile(memory, "utf-8")).toContain("## Inbox");
     expect(output.value()).toContain("<workflow>");
     expect(output.value()).toContain("<finishing-protocol>");
@@ -566,6 +565,60 @@ describe("runStart routing", () => {
     expect(
       await readFile(join(repo, ".captain", "rubric.md"), "utf-8")
     ).toContain("# Definition of done — tidy-the-readme");
+  });
+});
+
+describe("teamPrefixOf", () => {
+  it("uppercases the part before the first dash", () => {
+    expect(teamPrefixOf("TIG-430")).toBe("TIG");
+    expect(teamPrefixOf("eng-12")).toBe("ENG");
+    expect(teamPrefixOf("TST-1")).toBe("TST");
+  });
+
+  it("returns the whole id uppercased when there is no dash, so it misses the map and falls back", () => {
+    expect(teamPrefixOf("noprefix")).toBe("NOPREFIX");
+    expect(teamPrefixOf("")).toBe("");
+  });
+});
+
+describe("multi-repo fan-out routing", () => {
+  it("routes a mapped prefix to the mapped repo, unmapped to the cwd repo", async () => {
+    // Two separate repos under distinct parents; cwd is repoA.
+    const a = await createGitRepo("alpha");
+    const b = await createGitRepo("beta");
+    cleanup.push(a.root, b.root);
+
+    // Map the BETA team prefix to repoB; ALPHA stays unmapped (falls back to cwd).
+    const configDir = await mkdtemp(join(tmpdir(), "lw-cfg-"));
+    cleanup.push(configDir);
+    const configPath = join(configDir, "config.json");
+    await writeFile(configPath, JSON.stringify({ repoMap: { BETA: b.repo } }));
+
+    const env = { ...safeEnv(), CAPTAIN_CONFIG: configPath };
+
+    // Mapped: BETA-7 should land as a sibling of repoB.
+    const mappedOut = captureWritable();
+    await runLinearWorktree({
+      cwd: a.repo,
+      env,
+      print: true,
+      stdout: mappedOut.stream,
+      tokens: ["BETA-7"],
+    });
+    expect(mappedOut.value()).toContain(`cd ${join(b.root, "beta-beta-7")}`);
+
+    // Unmapped: ALPHA-3 has no map entry, so it resolves against the cwd repo.
+    const fallbackOut = captureWritable();
+    await runLinearWorktree({
+      cwd: a.repo,
+      env,
+      print: true,
+      stdout: fallbackOut.stream,
+      tokens: ["ALPHA-3"],
+    });
+    expect(fallbackOut.value()).toContain(
+      `cd ${join(a.root, "alpha-alpha-3")}`
+    );
   });
 });
 

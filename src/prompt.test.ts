@@ -120,4 +120,34 @@ describe("prompt extras", () => {
     expect(out).not.toContain("consult these");
     expect(out).toContain("append 1-3 distilled learnings");
   });
+
+  it("renders the data-scope guardrail when set", () => {
+    const out = renderPromptExtras({
+      dataScope: "Operate on repo source only; no customer data.",
+    });
+    expect(out).toContain("<data-scope>");
+    expect(out).toContain("Operate on repo source only; no customer data.");
+    expect(out).toContain("</data-scope>");
+  });
+
+  it("omits the data-scope block when unset and stays empty for {}", () => {
+    expect(renderPromptExtras({ workflow: true })).not.toContain(
+      "<data-scope>"
+    );
+    expect(renderPromptExtras({})).toBe("");
+  });
+
+  it("places the data-scope block between workflow and finishing-protocol", () => {
+    const out = renderPromptExtras({
+      dataScope: "no PII",
+      rubricPath: ".captain/rubric.md",
+      workflow: true,
+    });
+    const workflowAt = out.indexOf("</workflow>");
+    const scopeAt = out.indexOf("<data-scope>");
+    const protocolAt = out.indexOf("<finishing-protocol>");
+    expect(workflowAt).toBeGreaterThanOrEqual(0);
+    expect(scopeAt).toBeGreaterThan(workflowAt);
+    expect(protocolAt).toBeGreaterThan(scopeAt);
+  });
 });

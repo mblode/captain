@@ -1,9 +1,38 @@
 import { describe, expect, it } from "vitest";
 
-import { fmtDuration, renderStatus, style } from "./format";
+import { fmtDuration, renderGain, renderStatus, style } from "./format";
+import type { GainMetrics } from "./gain";
 import type { FleetRow } from "./view";
 
 const plain = style(false);
+
+const metrics = (over: Partial<GainMetrics> = {}): GainMetrics => ({
+  caveats: [
+    "decisions are a true ledger",
+    "fleet composition is a LIVE SNAPSHOT",
+  ],
+  decisions: {
+    approvalRate: 0.5,
+    approvals: 2,
+    cadence: [{ count: 2, day: "2026-06-18" }],
+    recentRejectReasons: [{ name: "tig-1", note: "split it", ts: 1000 }],
+    rejections: 2,
+  },
+  fleet: {
+    byRepo: [{ repo: "linkiq", total: 3 }],
+    inFlight: 1,
+    needsYou: 1,
+    ready: 1,
+    total: 3,
+  },
+  verdicts: {
+    fail: 1,
+    failingCriteria: [{ count: 1, name: "tests pass" }],
+    openPrs: ["https://x/pr/1"],
+    pass: 1,
+  },
+  ...over,
+});
 
 const row = (over: Partial<FleetRow> = {}): FleetRow => ({
   cwd: "/wt/tig-1",
@@ -142,5 +171,52 @@ describe("renderStatus", () => {
   it("reassures when nothing needs you and nothing is ready", () => {
     const out = renderStatus([row()], plain);
     expect(out).toContain("all worktrees flowing");
+  });
+});
+
+describe("renderGain", () => {
+  it("renders the sections in order: decisions, fleet, verdicts, then the caveats footer", () => {
+    const out = renderGain(metrics(), plain);
+    expect(out.indexOf("DECISIONS")).toBeLessThan(out.indexOf("FLEET"));
+    expect(out.indexOf("FLEET")).toBeLessThan(out.indexOf("VERDICTS"));
+    expect(out.indexOf("VERDICTS")).toBeLessThan(out.indexOf("notes:"));
+  });
+
+  it("omits the MERGED section unless --git supplied merged counts", () => {
+    expect(renderGain(metrics(), plain)).not.toContain("MERGED");
+    expect(
+      renderGain(metrics({ merged: [{ count: 3, repo: "linkiq" }] }), plain)
+    ).toContain("MERGED");
+  });
+
+  it("shows a placeholder instead of a rate when no decisions are recorded", () => {
+    const out = renderGain(
+      metrics({
+        decisions: {
+          approvalRate: 0,
+          approvals: 0,
+          cadence: [],
+          recentRejectReasons: [],
+          rejections: 0,
+        },
+      }),
+      plain
+    );
+    expect(out).toContain("no approve/reject decisions recorded yet");
+    expect(out).not.toContain("approval rate");
+  });
+
+  it("always prints the honesty caveats as a footer", () => {
+    const out = renderGain(metrics(), plain);
+    for (const caveat of metrics().caveats) {
+      expect(out).toContain(caveat);
+    }
+  });
+
+  it("adds colour only when the style is coloured", () => {
+    const coloured = renderGain(metrics(), style(true));
+    const flat = renderGain(metrics(), plain);
+    expect(flat).not.toContain("[");
+    expect(coloured.length).toBeGreaterThan(flat.length);
   });
 });

@@ -73,6 +73,8 @@ export interface PromptExtras {
   memory?: string;
   // absolute path agents append end-of-run learnings to
   memoryPath?: string;
+  // the data-scope guardrail (empty/undefined → section omitted)
+  dataScope?: string;
 }
 
 // The sections appended after the issue context: the self-drive workflow (the
@@ -109,6 +111,12 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
     ].join("\n");
     out += "\n</workflow>\n";
+  }
+
+  if (extras.dataScope) {
+    out += "\n<data-scope>\n";
+    out += `${extras.dataScope}\n`;
+    out += "</data-scope>\n";
   }
 
   if (extras.rubricPath) {

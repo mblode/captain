@@ -2,10 +2,20 @@ import { CliError, EXIT } from "../errors";
 import { run } from "../shell";
 import { realCmux } from "./control";
 import type { CmuxPort } from "./control";
-import { msg, renderStatus, renderSummary, style, useColor } from "./format";
+import {
+  msg,
+  renderGain,
+  renderStatus,
+  renderSummary,
+  style,
+  useColor,
+} from "./format";
 import type { Style } from "./format";
-import { appendLog, now } from "./log";
-import { fleetRows } from "./surface";
+import { computeGain, parseSince } from "./gain";
+import { appendLog, now, readLog } from "./log";
+import { expectedRubricHash, fleetRows, readVerdict } from "./surface";
+import { verdictCounts } from "./verdict";
+import type { Verdict } from "./verdict";
 import { mergeOrderHints } from "./view";
 import type { FleetRow } from "./view";
 
@@ -268,4 +278,107 @@ export const reject = (
     );
   }
   out.write(`${msg.hint(s, "next: captain status")}\n`);
+};
+
+export interface GainOptions {
+  json?: boolean;
+  // a "since" window for the decision-based metrics: "7d" / "24h" / ISO date
+  since?: string;
+  // opt in to the gh/git merged-PR approximation (one call per unique repo)
+  git?: boolean;
+}
+
+// Per-row valid verdicts (hash-checked against the rubric as it exists NOW, so
+// an edited rubric voids the verdict — same gate `status` applies). Most fleet
+// counts come straight off the rows; only criteria-level detail needs the raw
+// verdict re-read here.
+const validVerdicts = (
+  rows: FleetRow[]
+): { repo?: string; verdict: Verdict }[] => {
+  const out: { repo?: string; verdict: Verdict }[] = [];
+  for (const row of rows) {
+    const verdict = readVerdict(row.cwd);
+    if (verdict && verdictCounts(verdict, expectedRubricHash(row.cwd))) {
+      out.push({ repo: row.repo, verdict });
+    }
+  }
+  return out;
+};
+
+// The opt-in --git approximation: per unique repo, count merged PRs via `gh`.
+// Fail-soft per repo (gh missing / not authed / non-repo → skipped), so a
+// partial answer beats an error, and CI without gh just omits the block. Lives
+// in this edge, never in the pure gain.ts.
+const mergedCounts = (
+  rows: FleetRow[],
+  env: NodeJS.ProcessEnv
+): { repo: string; count: number }[] => {
+  const byRepo = new Map<string, string>();
+  for (const row of rows) {
+    if (row.repo && !byRepo.has(row.repo)) {
+      byRepo.set(row.repo, row.cwd);
+    }
+  }
+  const counts: { repo: string; count: number }[] = [];
+  for (const [repo, cwd] of byRepo) {
+    const res = run(
+      "gh",
+      ["pr", "list", "--state", "merged", "--limit", "100", "--json", "number"],
+      { cwd, env }
+    );
+    if (res.status !== 0) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(res.stdout) as unknown[];
+      if (Array.isArray(parsed)) {
+        counts.push({ count: parsed.length, repo });
+      }
+    } catch {
+      // gh returned non-JSON (e.g. an auth nudge on stdout) — skip this repo
+    }
+  }
+  return counts;
+};
+
+// Stateless fleet telemetry: every metric derived ON DEMAND from the decision
+// log (the one gap-free ledger), the live cmux fleet, and the verdict files —
+// no daemon, no persisted counter, no event stream. The honesty caveats name
+// exactly what each number is so a snapshot is never read as a trend.
+export const gain = (
+  options: GainOptions,
+  out: NodeJS.WritableStream,
+  port: CmuxPort = realCmux(process.env)
+): void => {
+  // Probe cmux first — same reason as `status`: a dead daemon fails every
+  // list/feed call soft to empty, which would read as an honest "empty fleet".
+  if (!port.reachable()) {
+    process.exitCode = EXIT.CMUX_UNREACHABLE;
+    const message =
+      "cmux is not reachable — is it running? run 'captain doctor'";
+    if (options.json) {
+      out.write(
+        `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
+      );
+      return;
+    }
+    out.write(`${msg.err(styleFor(out), message)}\n`);
+    return;
+  }
+  const { env } = process;
+  const rows = fleetRows(port);
+  const at = now();
+  const metrics = computeGain({
+    decisions: readLog(env),
+    merged: options.git ? mergedCounts(rows, env) : undefined,
+    now: at,
+    rows,
+    since: parseSince(options.since, at),
+    verdicts: validVerdicts(rows),
+  });
+  if (options.json) {
+    out.write(`${JSON.stringify(metrics, null, 2)}\n`);
+    return;
+  }
+  out.write(renderGain(metrics, styleFor(out)));
 };

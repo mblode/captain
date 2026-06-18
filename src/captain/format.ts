@@ -1,3 +1,4 @@
+import type { GainMetrics } from "./gain";
 import { nextCommand } from "./view";
 import type { FleetRow, Group } from "./view";
 
@@ -244,6 +245,85 @@ export const renderSummary = (rows: FleetRow[], s: Style): string => {
       lines.push(`      ${s.dim(note)}`);
     }
     lines.push(...actionLines(row, s));
+  }
+  return `${lines.join("\n")}\n`;
+};
+
+// A 0..1 rate → "87%".
+const pct = (rate: number): string => `${Math.round(rate * 100)}%`;
+
+// The telemetry view: derived-on-demand fleet metrics with their honesty labels
+// as a dimmed footer. Plain on a pipe / under --json (those paths never reach
+// here); coloured on a TTY. Display only — every number is computed in gain.ts.
+export const renderGain = (m: GainMetrics, s: Style): string => {
+  const lines: string[] = [s.bold("Captain — gain")];
+
+  // Decisions: the one true ledger.
+  const window = m.decisions.window
+    ? s.dim(
+        ` (since ${new Date(m.decisions.window.since * 1000).toISOString().slice(0, 10)})`
+      )
+    : "";
+  lines.push("", `${s.dim("DECISIONS")}${window}`);
+  const total = m.decisions.approvals + m.decisions.rejections;
+  if (total === 0) {
+    lines.push(`  ${s.dim("no approve/reject decisions recorded yet")}`);
+  } else {
+    lines.push(
+      `  ${s.green(`${m.decisions.approvals} approved`)} ${s.dim("·")} ${s.yellow(`${m.decisions.rejections} rejected`)} ${s.dim("·")} ${pct(m.decisions.approvalRate)} approval rate`
+    );
+    for (const r of m.decisions.recentRejectReasons) {
+      const note = r.note ? `: ${r.note}` : "";
+      lines.push(`  ${s.yellow("↩")} ${s.bold(r.name)}${s.dim(note)}`);
+    }
+    if (m.decisions.cadence.length > 0) {
+      const recent = m.decisions.cadence
+        .slice(-7)
+        .map((d) => `${d.day} ${d.count}`)
+        .join(s.dim(" · "));
+      lines.push(`  ${s.dim(`cadence: ${recent}`)}`);
+    }
+  }
+
+  // Fleet: a live snapshot.
+  lines.push("", s.dim("FLEET (live snapshot)"));
+  lines.push(
+    `  ${m.fleet.total} worktrees ${s.dim("·")} ${s.yellow(`${m.fleet.needsYou} need you`)} ${s.dim("·")} ${s.cyan(`${m.fleet.inFlight} in flight`)} ${s.dim("·")} ${s.green(`${m.fleet.ready} ready`)}`
+  );
+  for (const r of m.fleet.byRepo) {
+    lines.push(`  ${s.dim(`${r.repo}: ${r.total}`)}`);
+  }
+
+  // Verdicts: a live read, not a ledger.
+  lines.push("", s.dim("VERDICTS (live read)"));
+  lines.push(
+    `  ${s.green(`${m.verdicts.pass} pass`)} ${s.dim("·")} ${s.red(`${m.verdicts.fail} fail`)}`
+  );
+  for (const c of m.verdicts.failingCriteria) {
+    lines.push(`  ${s.red("✗")} ${c.name} ${s.dim(`(×${c.count})`)}`);
+  }
+  if (m.verdicts.openPrs.length > 0) {
+    lines.push(`  ${s.dim(`open PRs: ${m.verdicts.openPrs.length}`)}`);
+    for (const url of m.verdicts.openPrs) {
+      lines.push(`  ${s.dim(url)}`);
+    }
+  }
+
+  // Merged: the opt-in --git approximation.
+  if (m.merged) {
+    lines.push("", s.dim("MERGED (--git approximation)"));
+    if (m.merged.length === 0) {
+      lines.push(`  ${s.dim("none found")}`);
+    }
+    for (const r of m.merged) {
+      lines.push(`  ${s.dim(`${r.repo}: ${r.count}`)}`);
+    }
+  }
+
+  // The honesty contract, dimmed at the foot.
+  lines.push("", s.dim("notes:"));
+  for (const c of m.caveats) {
+    lines.push(`  ${s.dim(`· ${c}`)}`);
   }
   return `${lines.join("\n")}\n`;
 };
