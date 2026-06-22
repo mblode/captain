@@ -5,7 +5,13 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { buildChecks, doctor, realDeps, renderDoctor } from "./doctor";
+import {
+  buildChecks,
+  install,
+  missingBundles,
+  realDeps,
+  renderDoctor,
+} from "./doctor";
 import type { DoctorDeps } from "./doctor";
 import { style } from "./format";
 
@@ -13,6 +19,7 @@ const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   cmuxReachable: () => true,
   env: { LINEAR_API_KEY: "k" },
   hasCommand: () => true,
+  installBundle: () => true,
   nodeMajor: 22,
   nodeVersion: "v22.0.0",
   skillInstalled: () => true,
@@ -93,13 +100,88 @@ describe("renderDoctor", () => {
   });
 });
 
-describe("doctor entry", () => {
+describe("missingBundles", () => {
+  it("names a bundle once per failing skill check, deduped", () => {
+    // All three pipeline skills missing → still one mblode/agent-skills bundle.
+    const bundles = missingBundles(
+      buildChecks(deps({ skillInstalled: () => false }))
+    );
+    expect(bundles).toContain("mblode/agent-skills");
+    expect(bundles).toContain("mblode/captain");
+    expect(bundles).toHaveLength(2);
+  });
+
+  it("is empty when every skill is present", () => {
+    expect(missingBundles(buildChecks(deps()))).toEqual([]);
+  });
+
+  it("ignores required gaps it can't install (node/git/cmux)", () => {
+    const bundles = missingBundles(
+      buildChecks(deps({ cmuxReachable: () => false, hasCommand: () => false }))
+    );
+    expect(bundles).toEqual([]);
+  });
+});
+
+describe("install entry", () => {
   it("writes the report and returns the exit code", () => {
     const { out, text } = capture();
-    const code = doctor(out, deps({ hasCommand: () => false }));
+    const code = install(out, deps({ hasCommand: () => false }));
     expect(code).toBe(1);
-    expect(text()).toContain("Captain doctor");
+    expect(text()).toContain("Captain setup");
     expect(text()).toContain("required check(s) failed");
+  });
+
+  it("installs each missing skill bundle, then re-checks", () => {
+    const { out, text } = capture();
+    const installed: string[] = [];
+    const code = install(
+      out,
+      deps({
+        installBundle: (bundle) => {
+          installed.push(bundle);
+          return true;
+        },
+        skillInstalled: () => false,
+      })
+    );
+    expect(installed).toHaveLength(2);
+    expect(installed).toContain("mblode/agent-skills");
+    expect(installed).toContain("mblode/captain");
+    // recommended-only gaps still exit 0; the report renders after the install
+    expect(code).toBe(0);
+    expect(text()).toContain("Installing fleet skills");
+    expect(text()).toContain("Captain setup");
+  });
+
+  it("reports each bundle whose install fails", () => {
+    const { out, text } = capture();
+    install(
+      out,
+      deps({
+        // agent-skills fails, captain succeeds — both are still attempted.
+        installBundle: (bundle) => bundle !== "mblode/agent-skills",
+        skillInstalled: () => false,
+      })
+    );
+    expect(text()).toContain("failed to install mblode/agent-skills");
+    expect(text()).not.toContain("failed to install mblode/captain");
+  });
+
+  it("skips the installer when every skill is present", () => {
+    const { out, text } = capture();
+    let calls = 0;
+    install(
+      out,
+      deps({
+        installBundle: () => {
+          calls += 1;
+          return true;
+        },
+      })
+    );
+    expect(calls).toBe(0);
+    expect(text()).toContain("skills already installed");
   });
 });
 

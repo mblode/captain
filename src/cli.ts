@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Command, Option } from "commander";
 
 import { approve, gain, reject, status } from "./captain/commands";
-import { doctor } from "./captain/doctor";
+import { install } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
 import { CliError } from "./errors";
 import { runStart } from "./runner";
@@ -24,7 +24,7 @@ program
     "after",
     `
 Workflow:
-  $ captain doctor                       check prerequisites before your first start
+  $ captain install                      install the /captain + pipeline skills, then check setup
   $ captain start TIG-430 TIG-431        Linear issues → worktrees + agents, self-driving
   $ captain start "tidy the README"      a free-form task in the current dir (no Linear)
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
@@ -98,10 +98,12 @@ program
   );
 
 program
-  .command("doctor")
-  .description("check prerequisites: node, git, claude, cmux, key, skills")
+  .command("install")
+  .description(
+    "install the /captain + pipeline skills the fleet needs, then check setup"
+  )
   .action(() => {
-    process.exitCode = doctor(process.stdout);
+    process.exitCode = install(process.stdout);
   });
 
 program

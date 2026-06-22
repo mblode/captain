@@ -12,11 +12,10 @@ Run `/captain` from a Claude Code session and steer in plain language: _"fan out
 ## Install
 
 ```bash
-npx skills add mblode/captain -g      # the /captain skill (what you drive)
-npm install -g cmux-captain           # the CLI it runs underneath
-npx skills add mblode/agent-skills -g # the review/PR skills the brief invokes
-captain doctor                        # check your setup
+npm install -g cmux-captain && captain install
 ```
+
+`captain install` adds the skills the fleet needs (the `/captain` skill you drive, plus the `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` skills each brief invokes) and checks your setup. It's idempotent — re-run it any time to re-check.
 
 You need Node 22+, plus `git`, `claude`, and [`cmux`](https://cmux.com/) on your PATH. Set `LINEAR_API_KEY` to pull ticket details into each brief.
 
@@ -24,13 +23,13 @@ You need Node 22+, plus `git`, `claude`, and [`cmux`](https://cmux.com/) on your
 
 Run `/captain` and ask for what you want:
 
-| You say                       | Captain does                                              |
-| ----------------------------- | -------------------------------------------------------- |
-| "fan out TIG-430 and TIG-431" | a worktree + self-driving agent per issue                |
-| "what's blocked"              | the live view, each gate shown with how to resolve it    |
-| "show me the plans"           | reads each pending plan and returns a decision card      |
-| "approve all the plans"       | replies to every pending plan gate                       |
-| "send 431 back: skip auth"    | rejects the plan and types the feedback to the agent     |
+| You say                       | Captain does                                          |
+| ----------------------------- | ----------------------------------------------------- |
+| "fan out TIG-430 and TIG-431" | a worktree + self-driving agent per issue             |
+| "what's blocked"              | the live view, each gate shown with how to resolve it |
+| "show me the plans"           | reads each pending plan and returns a decision card   |
+| "approve all the plans"       | replies to every pending plan gate                    |
+| "send 431 back: skip auth"    | rejects the plan and types the feedback to the agent  |
 
 You stay in control of three gates: approving each plan, answering anything an agent asks, and the merge itself.
 

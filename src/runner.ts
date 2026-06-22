@@ -374,14 +374,14 @@ const dispatch = async ({
   if (isFanOutInput(tokens, Boolean(options.print))) {
     if (!cmuxReachable(env)) {
       throw new CliError(
-        "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain doctor`",
+        "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain install`",
         EXIT.CMUX_UNREACHABLE,
         "CMUX_UNREACHABLE"
       );
     }
     if (!commandExists("claude", env)) {
       throw new CliError(
-        "claude is not on PATH — install it, then `captain doctor`",
+        "claude is not on PATH — install it, then `captain install`",
         EXIT.USAGE,
         "MISSING_DEPENDENCY"
       );

@@ -25,7 +25,7 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: doctor | start | status | approve | reject
+  cli.ts            # Commander entry: install | start | status | approve | reject
   runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief
   cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
   config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE), loadRepoMap (.repoMap: team-prefix → repo path, for multi-repo fan-out)
@@ -39,7 +39,7 @@ src/
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
     commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
     gain.ts         # 100% PURE: computeGain (decisions ledger + live fleet snapshot + verdict tallies → metrics); the gain command's fs/cmux edge lives in commands.ts
-    doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + render; realDeps reads the world
+    doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
     format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
     log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject); readLog feeds gain
 ```

@@ -22,7 +22,7 @@ export const launchPlanMode = (
 ): number => {
   if (!commandExists("claude", env)) {
     throw new CliError(
-      "claude is not on PATH (use --print to skip launching, or run `captain doctor`)"
+      "claude is not on PATH (use --print to skip launching, or run `captain install`)"
     );
   }
 

@@ -126,7 +126,7 @@ export const status = (
   if (!port.reachable()) {
     process.exitCode = EXIT.CMUX_UNREACHABLE;
     const message =
-      "cmux is not reachable — is it running? run 'captain doctor'";
+      "cmux is not reachable — is it running? run 'captain install'";
     if (options.json) {
       out.write(
         `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
@@ -355,7 +355,7 @@ export const gain = (
   if (!port.reachable()) {
     process.exitCode = EXIT.CMUX_UNREACHABLE;
     const message =
-      "cmux is not reachable — is it running? run 'captain doctor'";
+      "cmux is not reachable — is it running? run 'captain install'";
     if (options.json) {
       out.write(
         `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
