@@ -1,5 +1,11 @@
 # linear-worktree
 
+## 0.4.1
+
+### Patch Changes
+
+- c3c5421: Collapse setup to one command: `captain install` installs the skills the fleet needs (`mblode/captain` + the pipeline skills) and then checks the environment. Replaces `captain doctor` (the old check-only command, now removed).
+
 ## 0.4.0
 
 ### Minor Changes
