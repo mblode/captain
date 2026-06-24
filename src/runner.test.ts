@@ -19,7 +19,6 @@ import {
   runDispatch,
   runLinearWorktree,
   runStart,
-  teamPrefixOf,
 } from "./runner";
 import { runRequired } from "./shell";
 
@@ -120,6 +119,10 @@ describe("runner integration", () => {
     ).toBe("tst-123");
     expect(output.value()).toContain("Work on Linear issue TST-123.");
     expect(output.value()).toContain(`cd ${worktree}`);
+    // The captured stream is not a TTY, so the cd command is printed (`run:`)
+    // but never copied to the real clipboard (which would say `copied:`).
+    expect(output.value()).toContain("run:");
+    expect(output.value()).not.toContain("copied:");
   });
 
   it("writes the rubric, wires memory, and injects both loop sections", async () => {
@@ -565,60 +568,6 @@ describe("runStart routing", () => {
     expect(
       await readFile(join(repo, ".captain", "rubric.md"), "utf-8")
     ).toContain("# Definition of done — tidy-the-readme");
-  });
-});
-
-describe("teamPrefixOf", () => {
-  it("uppercases the part before the first dash", () => {
-    expect(teamPrefixOf("TIG-430")).toBe("TIG");
-    expect(teamPrefixOf("eng-12")).toBe("ENG");
-    expect(teamPrefixOf("TST-1")).toBe("TST");
-  });
-
-  it("returns the whole id uppercased when there is no dash, so it misses the map and falls back", () => {
-    expect(teamPrefixOf("noprefix")).toBe("NOPREFIX");
-    expect(teamPrefixOf("")).toBe("");
-  });
-});
-
-describe("multi-repo fan-out routing", () => {
-  it("routes a mapped prefix to the mapped repo, unmapped to the cwd repo", async () => {
-    // Two separate repos under distinct parents; cwd is repoA.
-    const a = await createGitRepo("alpha");
-    const b = await createGitRepo("beta");
-    cleanup.push(a.root, b.root);
-
-    // Map the BETA team prefix to repoB; ALPHA stays unmapped (falls back to cwd).
-    const configDir = await mkdtemp(join(tmpdir(), "lw-cfg-"));
-    cleanup.push(configDir);
-    const configPath = join(configDir, "config.json");
-    await writeFile(configPath, JSON.stringify({ repoMap: { BETA: b.repo } }));
-
-    const env = { ...safeEnv(), CAPTAIN_CONFIG: configPath };
-
-    // Mapped: BETA-7 should land as a sibling of repoB.
-    const mappedOut = captureWritable();
-    await runLinearWorktree({
-      cwd: a.repo,
-      env,
-      print: true,
-      stdout: mappedOut.stream,
-      tokens: ["BETA-7"],
-    });
-    expect(mappedOut.value()).toContain(`cd ${join(b.root, "beta-beta-7")}`);
-
-    // Unmapped: ALPHA-3 has no map entry, so it resolves against the cwd repo.
-    const fallbackOut = captureWritable();
-    await runLinearWorktree({
-      cwd: a.repo,
-      env,
-      print: true,
-      stdout: fallbackOut.stream,
-      tokens: ["ALPHA-3"],
-    });
-    expect(fallbackOut.value()).toContain(
-      `cd ${join(a.root, "alpha-alpha-3")}`
-    );
   });
 });
 

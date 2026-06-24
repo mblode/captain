@@ -28,7 +28,7 @@ src/
   cli.ts            # Commander entry: install | start | status | approve | reject
   runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief
   cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
-  config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE), loadRepoMap (.repoMap: team-prefix → repo path, for multi-repo fan-out)
+  config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE)
   prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <data-scope> guardrail + <finishing-protocol> + <fleet-memory>
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
   memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
@@ -62,12 +62,13 @@ dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.m
 The rubric degrades gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed
 verify procedure).
 
-**Multi-repo fan-out** (additive): one `captain start` can span repos. `config.ts` `loadRepoMap`
-reads `config.json` `.repoMap` (issue team-prefix → repo path); `runner.ts` resolves a repo **per
-issue** (`teamPrefixOf` → map hit calls `resolveRepo` with that path, else falls back to today's
-single-repo resolution), and worktree/rubric/memory all key off the per-issue `repoRoot`. With no
-`.repoMap`, behaviour is byte-identical to single-repo. (`memory.ts` keys per-repo by basename, now
-disambiguated by a path hash on collision while keeping any existing legacy dir.)
+**Repo selection**: `runner.ts` resolves a run's repo from `--repo-path` (`repoOverride`), else the
+cwd git toplevel (`resolveRepo`) — there is **no** config-based routing. Spanning several repos in
+one session is the `/captain` driver's job: it reads each ticket and passes `--repo-path` per repo,
+because routing can't be a static map — a Linear team _and_ a single project both span repos (see
+the `/captain` skill). worktree/rubric/memory key off the resolved `repoRoot`. (`memory.ts` keys
+per-repo by basename, now disambiguated by a path hash on collision while keeping any existing
+legacy dir.)
 
 **Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
 
@@ -145,8 +146,9 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
   `notify`→external push is the only thesis-safe slice; two-way control stays a non-goal. The
   reasoning is written up in `research/builderbot-audit.md`.
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
-  free-form current-dir dispatch, multi-repo fan-out (via `.repoMap`), and `--print` for each.
-  Multi-repo is purely additive: with no `.repoMap`, every path stays byte-identical to single-repo.
+  free-form current-dir dispatch, an explicit `--repo-path`, and `--print` for each. Repo selection
+  is `--repo-path` else cwd; spanning repos in one session is the driver's job (per-ticket
+  `--repo-path`), not config.
 
 ## Env knobs
 
@@ -156,5 +158,4 @@ skills, overrides the config file) · `CAPTAIN_DATA_SCOPE` (overrides the data-s
 `CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
-`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string),
-`.repoMap` (`{ "<TEAM-PREFIX>": "<repo path>" }`, for multi-repo fan-out).
+`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string).

@@ -99,37 +99,3 @@ export const loadDataScope = (env: NodeJS.ProcessEnv = process.env): string => {
     return DEFAULT_DATA_SCOPE;
   }
 };
-
-// Pure: pull a string→string map out of the config's `.repoMap` field, keeping
-// only string-keyed string-valued entries (non-strings are ignored, never
-// throw). Returns null when there is no usable map so callers fall back to {}.
-export const parseRepoMap = (raw: unknown): Record<string, string> | null => {
-  const map = (raw as { repoMap?: unknown } | null)?.repoMap;
-  if (typeof map !== "object" || map === null || Array.isArray(map)) {
-    return null;
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(map as Record<string, unknown>)) {
-    if (typeof value === "string" && value.trim().length > 0) {
-      out[key] = value.trim();
-    }
-  }
-  return out;
-};
-
-// Resolve the per-team repo map (UPPERCASE issue-team-prefix → absolute repo
-// path), fail-safe: config file `.repoMap` only — any read/parse error or
-// missing/garbage map degrades to `{}` (no map = today's single-repo behaviour).
-// Never throws.
-export const loadRepoMap = (
-  env: NodeJS.ProcessEnv = process.env
-): Record<string, string> => {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(configPath(env), "utf-8")
-    ) as unknown;
-    return parseRepoMap(parsed) ?? {};
-  } catch {
-    return {};
-  }
-};

@@ -8,10 +8,8 @@ import {
   DEFAULT_DATA_SCOPE,
   DEFAULT_SKILLS,
   loadDataScope,
-  loadRepoMap,
   loadSkills,
   parseDataScope,
-  parseRepoMap,
   parseSkills,
 } from "./config";
 
@@ -122,56 +120,5 @@ describe("loadDataScope precedence", () => {
     expect(
       loadDataScope({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })
     ).toBe(DEFAULT_DATA_SCOPE);
-  });
-});
-
-describe("parseRepoMap", () => {
-  it("keeps only string→string entries (trimmed)", () => {
-    expect(
-      parseRepoMap({
-        repoMap: { BAD: 42, ENG: "/code/eng ", TIG: "/code/tig" },
-      })
-    ).toEqual({ ENG: "/code/eng", TIG: "/code/tig" });
-  });
-
-  it("returns null for a missing, non-object, or array repoMap", () => {
-    expect(parseRepoMap({})).toBeNull();
-    expect(parseRepoMap({ repoMap: "nope" })).toBeNull();
-    expect(parseRepoMap({ repoMap: ["/a"] })).toBeNull();
-    expect(parseRepoMap(null)).toBeNull();
-  });
-
-  it("returns an empty object when every entry is dropped", () => {
-    expect(parseRepoMap({ repoMap: { A: 1, B: "  " } })).toEqual({});
-  });
-});
-
-describe("loadRepoMap", () => {
-  it("reads a valid repoMap from the config file", () => {
-    const path = writeConfig(
-      '{"repoMap":{"ENG":"/code/eng","TIG":"/code/tig"}}'
-    );
-    expect(loadRepoMap({ CAPTAIN_CONFIG: path })).toEqual({
-      ENG: "/code/eng",
-      TIG: "/code/tig",
-    });
-  });
-
-  it("falls back to {} on malformed JSON", () => {
-    const path = writeConfig("{not json");
-    expect(loadRepoMap({ CAPTAIN_CONFIG: path })).toEqual({});
-  });
-
-  it("falls back to {} when the file is missing", () => {
-    expect(
-      loadRepoMap({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })
-    ).toEqual({});
-  });
-
-  it("ignores non-string entries in the map", () => {
-    const path = writeConfig('{"repoMap":{"ENG":"/code/eng","BAD":123}}');
-    expect(loadRepoMap({ CAPTAIN_CONFIG: path })).toEqual({
-      ENG: "/code/eng",
-    });
   });
 });

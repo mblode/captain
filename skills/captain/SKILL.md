@@ -5,6 +5,12 @@ description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and
 
 # Captain
 
+**IS:** conducting a fleet via the `captain` CLI — fan out Linear tickets to worktrees, poll
+`captain status`, batch plan approvals and off-script questions into human decisions, nudge
+stalled agents, distill fleet memory. **IS NOT:** typing the four low-level cmux verbs by hand
+(use [`cmux`](../cmux/SKILL.md)) or running any pipeline step yourself — the agent self-drives
+plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verdict.
+
 Dispatch a fleet of cmux worktrees from Linear ticket to PR-ready, then surface the few
 decisions that are yours. Each agent's start brief carries the **whole pipeline** and the
 agent self-drives it; Captain keeps **no state** — `status` is derived live from cmux-native
@@ -36,16 +42,29 @@ low-level [`cmux`](../cmux/SKILL.md) skill (the four verbs).
 
 ## Setup
 
-1. **Check prerequisites:** `captain doctor` verifies node, git, claude, cmux, `LINEAR_API_KEY`,
-   and the review/PR skills the brief invokes (`/pr-reviewer`, `/pr-creator`, `/pr-babysitter`
-   from `mblode/agent-skills`; `/simplify` ships with Claude Code). Required gaps exit non-zero;
-   fix them first.
-2. **Ensure the CLI is installed:** `captain --version`. If missing: `npm i -g cmux-captain`
-   (or build + link from a checkout: `cd ~/Code/mblode/captain && npm run build && npm link`).
-3. **Fan out work:** `captain start TIG-401 TIG-402 …` (worktree + workspace + self-driving
-   agent per issue). A non-Linear argument starts a free-form task in the current checkout
-   instead. `--base <ref>` stacks on a prerequisite branch; `--print` previews the brief
-   without launching.
+1. **Check prerequisites:** `captain install` installs the pipeline skills the brief invokes
+   (`/pr-reviewer`, `/pr-creator`, `/pr-babysitter` from `mblode/agent-skills`; `/simplify` ships
+   with Claude Code) and then verifies node, git, claude, cmux, and `LINEAR_API_KEY`. Required
+   gaps exit non-zero; fix them first. (`captain --version` confirms the CLI is on PATH; if
+   missing, `npm i -g cmux-captain`, or build + link from a checkout:
+   `cd ~/Code/mblode/captain && npm run build && npm link`.)
+2. **Pick each ticket's repo semantically, from the ticket itself.** A `captain start` worktree
+   lands in whatever repo it resolves to, and **your cwd is almost never the ticket's repo** (you
+   run from the session home or the captain checkout). There is **no lookup that picks the repo
+   for you** — not the team, not the Linear project: a team spans many repos, a single project
+   spans repos (Pulse v0 work lives in linkiq, chat _and_ frontyard), and some tickets carry no
+   project at all. So **read the ticket and decide semantically** — its description, the code paths
+   and symbols it names, its linked PRs/branches — which repo's codebase the work actually touches.
+   When the ticket is thin, open its linked PR or grep the candidate repos for the symbols it names
+   before committing. Then pass that repo as `--repo-path <repo>`. The driver's read of the prompt
+   is the router; cwd, team, and project are not.
+3. **Fan out work:** decide each ticket's repo (step 2), then launch — group tickets by the repo
+   you chose and run one `captain start <ids…> --repo-path <repo>` per repo (one worktree,
+   workspace, and self-driving agent per issue). **Never rely on cwd for a Linear ticket.** A
+   non-Linear argument starts a free-form task in the current checkout instead. `--base <ref>`
+   stacks on a prerequisite branch; `--print` previews the brief without launching. After
+   launching, confirm each `started[].cwd` (use `--json`) sits under the intended repo before
+   approving any plan — a worktree in the wrong repo can never pass its rubric.
 4. **Arm the loop:** the agent driver self-arms with **native Claude Code scheduling**
    (ScheduleWakeup / cron / the `/loop` skill) — not a foreground watcher pane, in keeping with
    captain's no-daemon ethos. On each wakeup it polls `captain status --summary --json`, diffs
@@ -54,6 +73,11 @@ low-level [`cmux`](../cmux/SKILL.md) skill (the four verbs).
    snapshot it holds in context, and acts only on transitions.
 
 ## The loop (what you do)
+
+**Poll by default.** Once a fleet is running, self-arm the wakeup and start polling without
+asking — never stop to ask the human whether to poll `captain status` or leave the plans for
+them to review in cmux directly. Polling _is_ the captain loop; batching gates into a single
+AskUserQuestion (below) is how the human stays in control, so there is nothing to opt into.
 
 Self-arm a wakeup (ScheduleWakeup / cron / `/loop`) → `captain status --summary --json` → diff
 each row's `stateHash` against the snapshot you hold in context → act only on **transitions**
@@ -89,6 +113,14 @@ interrupt the human once per gate.
 
 ## Gotchas
 
+- **Wrong dir is the #1 silent failure.** Your session cwd is not the ticket's repo. `captain
+start` with no `.repoMap` and no `--repo-path` fans the worktree into your current directory —
+  a repo with none of the ticket's code, whose rubric the agent can then never pass. Route every
+  Linear ticket explicitly: read the ticket and decide its repo semantically from the prompt, then
+  pass `--repo-path` — never trust cwd, team, or project to pick the repo (a project's tickets span
+  repos). If a ticket lands wrong, see the re-route procedure in fleet memory (close the workspace
+  — never if it's a group anchor — `git worktree remove --force`, delete the branch, relaunch
+  with the correct `--repo-path`).
 - **Never approve a plan you haven't read.** The plan gate is the one place under-planning
   hurts most. The read-only subagent reads it for you and returns a decision card; surface the
   card, get the call, then approve — but never approve a gate with no card behind it.
