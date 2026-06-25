@@ -31,7 +31,19 @@ Run `/captain` and ask for what you want:
 | "approve all the plans"       | replies to every pending plan gate                    |
 | "send 431 back: skip auth"    | rejects the plan and types the feedback to the agent  |
 
-You stay in control of three gates: approving each plan, answering anything an agent asks, and the merge itself.
+You stay in control of three gates: approving each plan, answering anything an agent asks, and the merge itself. Everything else flows on its own.
+
+## The pipeline
+
+Each agent's brief carries the whole software dev lifecycle and the agent self-drives it:
+
+```text
+plan → implement → /simplify → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict
+```
+
+Plan, implement, and the verifier verdict are fixed (`status` derives from them); the skills in between are yours to configure — set `.skills` in `~/.config/captain/config.json`, or `CAPTAIN_SKILLS=/simplify,/pr-creator`. Each worktree gets a definition of done (`.captain/rubric.md`, from the Linear issue); the agent runs a fresh-context verifier against it and writes a verdict, so a pass surfaces as READY TO MERGE and a fail as NEEDS YOU. Captain itself keeps **no state** — every view is derived live from cmux and the worktrees, so there's no daemon to start or go stale.
+
+See the [docs](docs/) for the full command and configuration reference.
 
 ## License
 

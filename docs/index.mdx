@@ -16,10 +16,10 @@ Each worktree runs its own agent on a brief covering the whole job: plan, implem
 ## Install
 
 ```bash
-npm i -g cmux-captain                 # the CLI
-npx skills add mblode/captain -g      # the captain skill
-npx skills add mblode/agent-skills -g # the PR skills the brief runs
-captain doctor                        # check your setup
+npm i -g cmux-captain   # the CLI
+captain install         # add the skills the fleet needs, then check your setup
 ```
+
+`captain install` adds the `/captain` skill you drive plus the pipeline skills each brief invokes (`/pr-reviewer` → `/pr-creator` → `/pr-babysitter`), then verifies node, git, claude, cmux, and `LINEAR_API_KEY`. It's idempotent — re-run it any time to re-check.
 
 See [Usage](/usage) for the commands and how a worktree reaches "ready to merge".
