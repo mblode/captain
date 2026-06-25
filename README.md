@@ -23,7 +23,7 @@ Each agent gets a brief covering the whole job: plan, implement, review, open a 
 
 You configure the review skills that run between implement and PR; the rest is fixed. Captain keeps no state. Every view is derived live from cmux, so there is no daemon to start or go stale.
 
-See the [docs](https://captain.blode.co) for the commands and configuration.
+See the [docs](https://captain.blode.md) for the commands and configuration.
 
 ## License
 
