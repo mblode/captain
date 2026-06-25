@@ -5,16 +5,16 @@ description: Captain's commands and how agents finish.
 
 ## Steer in plain language
 
-The usual way to drive Captain is the `/captain` skill from a Claude Code session — ask for what you want and it runs the commands below:
+The usual way to drive Captain is the `/captain` skill from a Claude Code session. Ask for what you want and it runs the commands below:
 
-> _"fan out TIG-430 and TIG-431"_ · _"what's blocked"_ · _"show me the plans"_ · _"approve all the plans"_ · _"send 431 back: skip auth"_ · _"what's ready to merge"_
+> "fan out TIG-430 and TIG-431", "what's blocked", "show me the plans", "approve all the plans", "send 431 back: skip auth", "what's ready to merge"
 
-You stay in control of three gates: approving each plan, answering anything an agent asks, and the merge itself. Everything else flows on its own.
+You control three gates: approving each plan, answering questions, and the merge.
 
 ## Commands
 
 ```bash
-captain start TIG-430 TIG-431         # Linear issues → one worktree + agent each
+captain start TIG-430 TIG-431         # Linear issues: one worktree + agent each
 captain start "tidy the README"       # a free-form task, no Linear, current dir
 captain status                        # what's blocked, in flight, and ready
 captain approve tig-430               # or: captain approve all
@@ -29,13 +29,13 @@ captain gain                          # fleet telemetry, derived live (alias: au
 Each agent's brief carries the whole software dev lifecycle and the agent self-drives it:
 
 ```text
-plan → implement → /simplify → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict
+plan, implement, /simplify, /pr-reviewer, /pr-creator, /pr-babysitter, verifier verdict
 ```
 
 The plan, implement, and verifier steps are fixed (`status` derives from them); the skills in between are configurable. Set them in `~/.config/captain/config.json` (`.skills`) or with `CAPTAIN_SKILLS=/simplify,/pr-creator`. An empty or missing config falls back to the default chain above.
 
 ## How agents finish
 
-Each worktree gets a definition of done (`.captain/rubric.md`, rendered from the Linear issue — no LLM call). The agent runs a fresh-context verifier sub-agent against it and writes `.captain/verdict.json` citing the rubric's hash: a valid pass shows READY TO MERGE with `✓ verified`, a fail shows NEEDS YOU with the verifier's summary. Verified learnings are saved per repo (`~/.claude/captain/memory/<repo>/learnings.md`) and fed into the next brief.
+Each worktree gets a definition of done (`.captain/rubric.md`, rendered from the Linear issue, no LLM call). The agent runs a fresh-context verifier sub-agent against it and writes `.captain/verdict.json` citing the rubric's hash: a valid pass shows READY TO MERGE with `✓ verified`, a fail shows NEEDS YOU with the verifier's summary. Verified learnings are saved per repo (`~/.claude/captain/memory/<repo>/learnings.md`) and fed into the next brief.
 
-Captain keeps **no state** — `status`, `approve`, `reject`, and `gain` are all derived fresh on every call from cmux signals and the per-worktree `.captain/` files. There is no daemon to start, restart, or go stale.
+Captain keeps **no state**. `status`, `approve`, `reject`, and `gain` are all derived fresh on every call from cmux signals and the per-worktree `.captain/` files. There is no daemon to start, restart, or go stale.
