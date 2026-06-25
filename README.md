@@ -1,13 +1,13 @@
 <h1 align="center">captain</h1>
 
-<p align="center">Conduct a fleet of <a href="https://cmux.com/">cmux</a> worktrees from one Claude Code session. Linear ticket to PR-ready, steered in plain language.</p>
+<p align="center">Run a fleet of <a href="https://cmux.com/">cmux</a> worktrees from one Claude Code session — Linear ticket to PR, steered in plain language.</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/cmux-captain"><img src="https://img.shields.io/npm/v/cmux-captain.svg" alt="npm version"></a>
   <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
-Run `/captain` from a Claude Code session and steer in plain language: _"fan out these tickets"_, _"what's blocked"_, _"approve all the plans"_, _"what's ready to merge"_. Each ticket gets its own worktree and a self-driving agent that takes it from plan to PR. The agents do the work, you make the calls.
+Run `/captain` from a Claude Code session and ask for what you want — _"fan out these tickets"_, _"what's blocked"_, _"approve all the plans"_, _"what's ready to merge"_. Each ticket gets its own worktree and an agent that drives it from plan to PR. The agents do the work; you make the calls.
 
 ## Install
 
@@ -15,23 +15,15 @@ Run `/captain` from a Claude Code session and steer in plain language: _"fan out
 npm install -g cmux-captain && captain install
 ```
 
-`captain install` adds the skills the fleet needs (the `/captain` skill you drive, plus the `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` skills each brief invokes) and checks your setup. It's idempotent — re-run it any time to re-check.
+`captain install` adds the skills the fleet needs and checks your setup. You need Node 22+ and `git`, `claude`, and [`cmux`](https://cmux.com/) on your PATH. Set `LINEAR_API_KEY` to pull ticket details into each brief.
 
-You need Node 22+, plus `git`, `claude`, and [`cmux`](https://cmux.com/) on your PATH. Set `LINEAR_API_KEY` to pull ticket details into each brief.
+## How it works
 
-## Usage
+Each agent gets a brief covering the whole job — plan, implement, review, open a PR — and drives it itself. You stay in control of three gates: approving each plan, answering anything an agent asks, and the merge. Everything else flows on its own.
 
-Run `/captain` and ask for what you want:
+You configure the review skills that run between implement and PR; the rest is fixed. Captain keeps no state — every view is derived live from cmux, so there's no daemon to start or go stale.
 
-| You say                       | Captain does                                          |
-| ----------------------------- | ----------------------------------------------------- |
-| "fan out TIG-430 and TIG-431" | a worktree + self-driving agent per issue             |
-| "what's blocked"              | the live view, each gate shown with how to resolve it |
-| "show me the plans"           | reads each pending plan and returns a decision card   |
-| "approve all the plans"       | replies to every pending plan gate                    |
-| "send 431 back: skip auth"    | rejects the plan and types the feedback to the agent  |
-
-You stay in control of three gates: approving each plan, answering anything an agent asks, and the merge itself.
+See the [docs](docs/) for the commands and configuration.
 
 ## License
 
