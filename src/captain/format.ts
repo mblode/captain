@@ -88,8 +88,11 @@ const meta = (row: FleetRow): { glyph: string; label: string } => {
   return { glyph: "○", label: row.run === "idle" ? "idle" : "—" };
 };
 
-// A short, friendly handle for command examples (the ticket part of the name).
-const shortName = (row: FleetRow): string => row.ticket ?? row.name;
+// A short, friendly handle for command examples — the ticket, unless it
+// collides with another repo's worktree, in which case withHandles upgraded it
+// to the full `${repo}-${ticket}` name so approve/reject stay unambiguous.
+const shortName = (row: FleetRow): string =>
+  row.handle ?? row.ticket ?? row.name;
 
 // The inline "how to resolve this" lines shown under a row that needs you or
 // is ready to merge — so the one status view is also the runbook. cmux

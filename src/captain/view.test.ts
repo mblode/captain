@@ -11,6 +11,7 @@ import {
   rowOf,
   stateHash,
   ticketFrom,
+  withHandles,
 } from "./view";
 import type { RowInput } from "./view";
 
@@ -195,6 +196,33 @@ describe("nextCommand", () => {
   it("an in-flight row offers a screen peek", () => {
     const row = rowOf(input({ run: "running" }));
     expect(row.nextCommand).toBe("cmux read-screen --workspace ws-1");
+  });
+});
+
+describe("withHandles", () => {
+  const planRow = (over: Partial<RowInput>) =>
+    rowOf(input({ feed: [feedItem({ cwd: over.cwd })], ...over }));
+
+  it("keeps the bare ticket as the handle when it's unique in the fleet", () => {
+    const [a, b] = withHandles([
+      planRow({ cwd: "/wt/frontyard-tig-430", repo: "frontyard" }),
+      planRow({ cwd: "/wt/chat-tig-431", repo: "chat" }),
+    ]);
+    expect(a.handle).toBe("tig-430");
+    expect(b.handle).toBe("tig-431");
+    expect(a.nextCommand).toBe("captain approve tig-430");
+  });
+
+  it("upgrades to the qualified name when a ticket collides across repos", () => {
+    const [fy, lf] = withHandles([
+      planRow({ cwd: "/wt/frontyard-tig-424", repo: "frontyard" }),
+      planRow({ cwd: "/wt/ltfollowers-tig-424", repo: "ltfollowers" }),
+    ]);
+    expect(fy.handle).toBe("frontyard-tig-424");
+    expect(lf.handle).toBe("ltfollowers-tig-424");
+    // the displayed approve command is therefore resolvable, not the bare id
+    expect(fy.nextCommand).toBe("captain approve frontyard-tig-424");
+    expect(lf.nextCommand).toBe("captain approve ltfollowers-tig-424");
   });
 });
 

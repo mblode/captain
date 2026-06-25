@@ -46,6 +46,11 @@ export interface FleetRow {
   // driver diffs snapshots and acts only on transitions. A pure string join
   // (no crypto: the pure core may not import node:crypto). Always set by rowOf.
   stateHash?: string;
+  // the unambiguous handle to pass to approve/reject: the bare ticket when it's
+  // unique in the fleet, else the full `${repo}-${ticket}` name (the cross-repo
+  // collision case — same ticket fanned into two repos). Set by withHandles
+  // once the whole pool is known; never a workspace uuid.
+  handle?: string;
 }
 
 // The canonical ticket id inside a name/path ("tig-494"), lowercased.
@@ -141,7 +146,7 @@ export interface RowInput {
 //   in-flight    → cmux read-screen … to peek at the running agent
 export const nextCommand = (row: FleetRow): string => {
   if (row.gate?.kind === "plan") {
-    return `captain approve ${row.ticket ?? row.name}`;
+    return `captain approve ${row.handle ?? row.ticket ?? row.name}`;
   }
   if (row.group === "needs-you") {
     return `cmux read-screen --workspace ${row.workspaceId}`;
@@ -206,6 +211,31 @@ export const rowOf = (input: RowInput): FleetRow => {
   row.nextCommand = nextCommand(row);
   row.stateHash = stateHash(row);
   return row;
+};
+
+// PURE: assign every row its unambiguous command handle. A bare ticket is a
+// fine handle until the SAME ticket is fanned into two repos (TIG-424 →
+// frontyard + ltfollowers): then `tig-424` addresses two worktrees and a
+// silent first-match would resolve to the wrong one. Those colliding rows get
+// the full `${repo}-${ticket}` name as their handle; tickets unique in the
+// fleet keep the short form. This is the cross-repo answer instead of forcing a
+// workspace uuid. nextCommand is recomputed so the displayed runbook command
+// matches the handle resolveTargets will accept.
+export const withHandles = (rows: FleetRow[]): FleetRow[] => {
+  const ticketCounts = new Map<string, number>();
+  for (const r of rows) {
+    if (r.ticket) {
+      ticketCounts.set(r.ticket, (ticketCounts.get(r.ticket) ?? 0) + 1);
+    }
+  }
+  return rows.map((r) => {
+    const collides =
+      Boolean(r.ticket) && (ticketCounts.get(r.ticket ?? "") ?? 0) > 1;
+    const handle = collides ? r.name : (r.ticket ?? r.name);
+    const withHandle: FleetRow = { ...r, handle };
+    withHandle.nextCommand = nextCommand(withHandle);
+    return withHandle;
+  });
 };
 
 // PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO

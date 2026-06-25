@@ -21,18 +21,40 @@ import type { FleetRow } from "./view";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
 
+// A token that loosely matched more than one worktree (the same ticket fanned
+// into two repos). We refuse to guess; `candidates` are the fully-qualified
+// `${repo}-${ticket}` names to retype.
+export interface Ambiguity {
+  token: string;
+  candidates: string[];
+}
+
+export interface ResolvedTargets {
+  matched: FleetRow[];
+  unknown: string[];
+  ambiguous: Ambiguity[];
+}
+
 // Resolve a user-friendly target spec to rows. Accepts "all", a repo label
 // ("linkiq" → every matching row in the pool), or a comma-separated list of
-// ticket names ("tig-430"), substrings, or workspace ids — never a pasted uuid.
+// fully-qualified names ("frontyard-tig-424"), bare tickets ("tig-430"),
+// substrings, or workspace ids — never a pasted uuid.
+//
+// Cross-repo collisions resolve natively: a fully-qualified name or a workspace
+// id always picks exactly one row, so it disambiguates a ticket that runs in
+// two repos. A bare/substring token that hits more than one worktree is
+// reported as `ambiguous` (with the qualified names to retype) instead of being
+// silently first-matched to the wrong one.
 export const resolveTargets = (
   pool: FleetRow[],
   spec: string
-): { matched: FleetRow[]; unknown: string[] } => {
+): ResolvedTargets => {
   if (spec === "all") {
-    return { matched: pool, unknown: [] };
+    return { ambiguous: [], matched: pool, unknown: [] };
   }
   const matched: FleetRow[] = [];
   const unknown: string[] = [];
+  const ambiguous: Ambiguity[] = [];
   const push = (hit: FleetRow): void => {
     if (!matched.includes(hit)) {
       matched.push(hit);
@@ -51,19 +73,37 @@ export const resolveTargets = (
       }
       continue;
     }
-    const hit = pool.find(
+    // A fully-qualified handle — the `${repo}-${ticket}` name or a workspace id
+    // — resolves to exactly one row. This is how you target one of several
+    // worktrees that share a ticket across repos, no uuid needed.
+    const exact = pool.find(
       (r) =>
-        r.workspaceId.toLowerCase() === token ||
-        r.name.toLowerCase() === token ||
-        r.name.toLowerCase().includes(token)
+        r.workspaceId.toLowerCase() === token || r.name.toLowerCase() === token
     );
-    if (hit) {
-      push(hit);
+    if (exact) {
+      push(exact);
+      continue;
+    }
+    // Otherwise a loose match (bare ticket or substring): unique → take it,
+    // colliding → refuse to guess and report the qualified names.
+    const loose = pool.filter(
+      (r) =>
+        r.ticket?.toLowerCase() === token ||
+        r.name.toLowerCase().includes(token) ||
+        r.workspaceId.toLowerCase().includes(token)
+    );
+    if (loose.length === 1) {
+      push(loose[0]);
+    } else if (loose.length > 1) {
+      ambiguous.push({
+        candidates: loose.map((r) => r.name),
+        token: raw.trim(),
+      });
     } else {
       unknown.push(raw.trim());
     }
   }
-  return { matched, unknown };
+  return { ambiguous, matched, unknown };
 };
 
 export interface StatusOptions {
@@ -196,17 +236,28 @@ export const approve = (
   port: CmuxPort = realCmux(process.env),
   options: { json?: boolean } = {}
 ): void => {
-  const { matched, unknown } = resolveTargets(planGated(port), spec);
+  const { matched, unknown, ambiguous } = resolveTargets(planGated(port), spec);
   // A fully-unresolvable ref under --json is a usage error, not an empty
   // success — surface it as a structured {error} (exit 2) so a driver can tell
-  // "I typed a bad ref" apart from "there was nothing to approve". A partial
-  // match still succeeds (the good refs are approved, the bad ones reported).
-  if (options.json && matched.length === 0 && unknown.length > 0) {
-    throw new CliError(
-      `no plan-ready worktree matches: ${unknown.join(", ")}`,
-      EXIT.USAGE,
-      "BAD_REF"
-    );
+  // "I typed a bad ref" apart from "there was nothing to approve". An ambiguous
+  // ref is the same class of usage error: it never picks one silently. A
+  // partial match still succeeds (the good refs are approved, the rest
+  // reported).
+  if (
+    options.json &&
+    matched.length === 0 &&
+    (unknown.length > 0 || ambiguous.length > 0)
+  ) {
+    const parts = [
+      unknown.length > 0
+        ? `no plan-ready worktree matches: ${unknown.join(", ")}`
+        : "",
+      ...ambiguous.map(
+        (a) =>
+          `"${a.token}" is ambiguous — qualify it: ${a.candidates.join(", ")}`
+      ),
+    ].filter(Boolean);
+    throw new CliError(parts.join("; "), EXIT.USAGE, "BAD_REF");
   }
   // The reply IS the approval (no state), so do it regardless of output mode.
   for (const row of matched) {
@@ -215,11 +266,16 @@ export const approve = (
   }
   if (options.json) {
     out.write(
-      `${JSON.stringify({ approved: matched.map((r) => r.name), unknown })}\n`
+      `${JSON.stringify({ ambiguous, approved: matched.map((r) => r.name), unknown })}\n`
     );
     return;
   }
   const s = styleFor(out);
+  for (const a of ambiguous) {
+    out.write(
+      `  ${msg.warn(s, `"${a.token}" matches ${a.candidates.length} worktrees — qualify it: ${a.candidates.join(", ")}`)}\n`
+    );
+  }
   for (const u of unknown) {
     out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
   }
@@ -243,9 +299,22 @@ export const reject = (
   options: { json?: boolean } = {}
 ): void => {
   const s = styleFor(out);
-  const { matched } = resolveTargets(planGated(port), ref);
+  const { matched, ambiguous } = resolveTargets(planGated(port), ref);
   const [row] = matched;
   if (!row) {
+    // An ambiguous ref (a ticket shared across repos) gets the qualified names
+    // to retype — reject acts on exactly one worktree, so we never guess.
+    const [collision] = ambiguous;
+    if (collision) {
+      if (options.json) {
+        out.write(`${JSON.stringify({ ambiguous })}\n`);
+        return;
+      }
+      out.write(
+        `${msg.warn(s, `"${collision.token}" matches ${collision.candidates.length} worktrees — qualify it: ${collision.candidates.join(", ")}`)}\n`
+      );
+      return;
+    }
     if (options.json) {
       out.write(`${JSON.stringify({ unknown: [ref] })}\n`);
       return;

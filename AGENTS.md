@@ -125,6 +125,11 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill
   can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.
+  When one ticket is fanned into two repos (e.g. `tig-424` → frontyard **+** ltfollowers), the
+  bare ticket is ambiguous: `resolveTargets` refuses to guess and reports the qualified
+  `${repo}-${ticket}` names (`frontyard-tig-424`, `ltfollowers-tig-424`) — pass one of those, not
+  a workspace uuid. `status` already prints the qualified handle for colliding tickets
+  (`withHandles` in `view.ts`), so the displayed approve/reject command is always resolvable.
 - **`.captain/` never reaches a diff**: `start` appends it to the repo's shared
   `.git/info/exclude` (one append covers all linked worktrees) — don't move the rubric/verdict
   into tracked paths. It doubles as the membership marker `surface.ts` filters by.

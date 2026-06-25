@@ -66,6 +66,48 @@ describe("resolveTargets", () => {
     const tagged = pool.map((r) => ({ ...r, repo: "frontyard" }));
     expect(resolveTargets(tagged, "frontyard").matched).toHaveLength(2);
   });
+
+  // One ticket fanned into two repos — the cross-repo case captain must handle
+  // natively, without a workspace uuid.
+  const crossRepo = [
+    fleetRow({
+      name: "frontyard-tig-424",
+      repo: "frontyard",
+      ticket: "tig-424",
+      workspaceId: "ws-fy",
+    }),
+    fleetRow({
+      name: "ltfollowers-tig-424",
+      repo: "ltfollowers",
+      ticket: "tig-424",
+      workspaceId: "ws-lf",
+    }),
+  ];
+
+  it("a bare ticket shared across repos is ambiguous, not first-matched", () => {
+    const { matched, ambiguous, unknown } = resolveTargets(
+      crossRepo,
+      "tig-424"
+    );
+    expect(matched).toHaveLength(0);
+    expect(unknown).toEqual([]);
+    expect(ambiguous).toEqual([
+      {
+        candidates: ["frontyard-tig-424", "ltfollowers-tig-424"],
+        token: "tig-424",
+      },
+    ]);
+  });
+
+  it("the qualified name disambiguates without a uuid", () => {
+    const { matched } = resolveTargets(crossRepo, "ltfollowers-tig-424");
+    expect(matched.map((r) => r.name)).toEqual(["ltfollowers-tig-424"]);
+  });
+
+  it("the workspace id still resolves the cross-repo collision too", () => {
+    const { matched } = resolveTargets(crossRepo, "ws-fy");
+    expect(matched.map((r) => r.name)).toEqual(["frontyard-tig-424"]);
+  });
 });
 
 // approve/reject/status driven end to end through the REAL surface (fleetRows
@@ -355,8 +397,13 @@ describe("stateless approve/reject/status over the real surface", () => {
     const parsed = JSON.parse(text()) as {
       approved: string[];
       unknown: string[];
+      ambiguous: unknown[];
     };
-    expect(parsed).toEqual({ approved: ["tig-430"], unknown: ["tig-999"] });
+    expect(parsed).toEqual({
+      ambiguous: [],
+      approved: ["tig-430"],
+      unknown: ["tig-999"],
+    });
     expect(text()).not.toContain("next:");
   });
 
