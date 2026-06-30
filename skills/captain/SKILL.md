@@ -5,144 +5,107 @@ description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and
 
 # Captain
 
-**IS:** conducting a fleet via the `captain` CLI — fan out Linear tickets to worktrees, poll
-`captain status`, batch plan approvals and off-script questions into human decisions, nudge
-stalled agents, distill fleet memory. **IS NOT:** typing the four low-level cmux verbs by hand
-(use [`cmux`](../cmux/SKILL.md)) or running any pipeline step yourself — the agent self-drives
-plan → implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verdict.
-
-Dispatch a fleet of cmux worktrees from Linear ticket to PR-ready, then surface the few
-decisions that are yours. Each agent's start brief carries the **whole pipeline** and the
-agent self-drives it; Captain keeps **no state** — `status` is derived live from cmux-native
-signals and the per-worktree `.captain/` files. This skill is the steering wheel — the
-`captain` CLI is the engine (it owns the worktree + Linear + fan-out itself). The real driver
-of this skill is a long-lived Claude Code session, not a human at a keyboard. Pairs with the
-low-level [`cmux`](../cmux/SKILL.md) skill (the four verbs).
+**IS:** conducting a fleet via the `captain` CLI — fan out Linear tickets, poll `captain status`,
+batch plan approvals and off-script questions into human decisions, nudge stalled agents, distill
+fleet memory. **IS NOT:** typing low-level cmux verbs by hand (use [`cmux`](../cmux/SKILL.md)) or
+running any pipeline step yourself — the agent self-drives plan → implement → `/simplify` →
+`/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verdict. The driver is a long-lived Claude Code
+session, not a human at a keyboard; Captain keeps **no state** (`status` derives live from cmux +
+each worktree's `.captain/`).
 
 ## Mental model
 
-- **Agents self-drive.** The brief's `<workflow>` section orders the pipeline: plan →
-  implement → `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → finishing
-  protocol. Nothing external types commands into a workspace; if an agent stalls, you nudge it.
-- **Status is stateless.** A captain worktree is any cmux workspace whose cwd has a
-  `.captain/` dir. Busy/idle comes from `cmux top` run-state tags; gates are the newest
-  _unresolved_ feed items (plan approvals, questions); done is a hash-checked
-  `.captain/verdict.json`. Re-run `captain status` any time — there is nothing to desync.
+- **Agents self-drive** the whole pipeline; nothing types into a workspace — if one stalls, nudge
+  it.
+- **Status is stateless**, derived fresh each call: membership = a cmux workspace whose cwd has a
+  `.captain/` dir; busy/idle = `cmux top` run-state tags; gates = the newest _unresolved_ feed item
+  per cwd; done = a hash-checked `.captain/verdict.json`. Re-run any time — nothing desyncs.
 - **Human gates**: plan approval (mandatory — implementation never starts un-approved),
-  questions/blocked agents, and the merge itself. Everything else flows on its own.
-- **The verdict gate.** Fan-out writes a definition of done into each worktree — the rubric, a
-  markdown file at `<worktree>/.captain/rubric.md`; the agent must run a fresh-context verifier
-  sub-agent against it and write `.captain/verdict.json` citing the rubric's hash. `status` shows
-  READY TO MERGE +
-  `✓ verified` only on a valid pass; a failed verdict surfaces as NEEDS YOU with the verifier's
-  summary. No verdict = the worktree just reads as in flight.
-- **Fleet memory.** `~/.claude/captain/memory/<repo>/learnings.md` is shared across every run
-  on a repo: fan-out injects its `## Rules` (curated) and recent `## Inbox` (raw) into each
-  agent's brief, and agents append verified learnings to the Inbox at end of run.
+  questions/blocked agents, and the merge. Everything else flows on its own.
+- **Verdict gate**: fan-out writes the definition of done to `.captain/rubric.md`; the agent's
+  fresh-context verifier writes `.captain/verdict.json` citing the rubric's hash. A valid pass shows
+  READY with the `✓ verified` label; a fail → NEEDS YOU and its summary; no verdict → in flight.
+- **Fleet memory**: `~/.claude/captain/memory/<repo>/learnings.md` (shared per repo) — fan-out
+  injects `## Rules` + recent `## Inbox`; agents append verified learnings at end of run.
 
 ## Setup
 
-1. **Check prerequisites:** `captain install` installs the pipeline skills the brief invokes
-   (`/pr-reviewer`, `/pr-creator`, `/pr-babysitter` from `mblode/agent-skills`; `/simplify` ships
-   with Claude Code) and then verifies node, git, claude, cmux, and `LINEAR_API_KEY`. Required
-   gaps exit non-zero; fix them first. (`captain --version` confirms the CLI is on PATH; if
-   missing, `npm i -g cmux-captain`, or build + link from a checkout:
-   `cd ~/Code/mblode/captain && npm run build && npm link`.)
-2. **Pick each ticket's repo semantically, from the ticket itself.** A `captain start` worktree
-   lands in whatever repo it resolves to, and **your cwd is almost never the ticket's repo** (you
-   run from the session home or the captain checkout). There is **no lookup that picks the repo
-   for you** — not the team, not the Linear project: a team spans many repos, a single project
-   spans repos (Pulse v0 work lives in linkiq, chat _and_ frontyard), and some tickets carry no
-   project at all. So **read the ticket and decide semantically** — its description, the code paths
-   and symbols it names, its linked PRs/branches — which repo's codebase the work actually touches.
-   When the ticket is thin, open its linked PR or grep the candidate repos for the symbols it names
-   before committing. Then pass that repo as `--repo-path <repo>`. The driver's read of the prompt
-   is the router; cwd, team, and project are not.
-3. **Fan out work:** decide each ticket's repo (step 2), then launch — group tickets by the repo
-   you chose and run one `captain start <ids…> --repo-path <repo>` per repo (one worktree,
-   workspace, and self-driving agent per issue). **Never rely on cwd for a Linear ticket.** A
-   non-Linear argument starts a free-form task in the current checkout instead. `--base <ref>`
-   stacks on a prerequisite branch; `--print` previews the brief without launching. After
-   launching, confirm each `started[].cwd` (use `--json`) sits under the intended repo before
-   approving any plan — a worktree in the wrong repo can never pass its rubric.
-4. **Arm the loop:** the agent driver self-arms with **native Claude Code scheduling**
-   (ScheduleWakeup / cron / the `/loop` skill) — not a foreground watcher pane, in keeping with
-   captain's no-daemon ethos. On each wakeup it polls `captain status --summary --json`, diffs
-   each row's `stateHash` (the deterministic per-row fingerprint of a row's actionable state —
-   gate + verdict + run-state — that a polling driver diffs to detect transitions) against the
-   snapshot it holds in context, and acts only on transitions.
+1. **Prereqs:** `captain install` adds the pipeline skills (`/pr-reviewer`, `/pr-creator`,
+   `/pr-babysitter` from `mblode/agent-skills`; `/simplify` ships with Claude Code) and checks node,
+   git, claude, cmux, `LINEAR_API_KEY`. If the CLI is missing: `npm i -g cmux-captain`, or
+   `npm run build && npm link` from a checkout.
+2. **Route each ticket semantically.** Your cwd is almost never the ticket's repo, and **nothing
+   picks it for you** — a team spans repos, a project spans repos (Pulse v0 lives in linkiq, chat
+   _and_ frontyard), some tickets carry no project. Read the ticket — description, the code
+   paths/symbols it names, its linked PRs — to decide which repo the work touches (grep candidates
+   when thin), then pass `--repo-path <repo>`.
+3. **Fan out:** group tickets by repo, run one `captain start <ids…> --repo-path <repo>` per repo
+   (one worktree + workspace + self-driving agent each). A non-Linear arg starts a free-form task in
+   the current checkout. `--base <ref>` stacks on a prerequisite branch; `--print` previews. Confirm
+   each `started[].cwd` (`--json`) before approving any plan — a worktree in the wrong repo can never
+   pass its rubric.
+4. **Arm the heartbeat** — the driver re-invokes itself on a timer (no daemon, no foreground pane;
+   each wake re-derives status fresh). Take the first available rung; never skip a missing rung to
+   "ask the human to ping me":
+   1. **Backgrounded sleep (default, universal).** `Bash` `sleep 210` with `run_in_background: true`
+      — the exit delivers a new turn, re-invoking the driver. No gate, no expiry, survives
+      `--resume`; proven at fleet scale. Re-fire each wake.
+   2. **`CronCreate`** (if present): a `*/4 * * * *` re-prompt, but ±jitter, 7-day expiry, fresh
+      context each tick — prefer rung 1 for anything durable.
+   3. **`/loop`** (only when already inside one): the only place `ScheduleWakeup` is ungated —
+      outside it that tool hard-fails "dynamic runtime gate is off".
 
-## The loop (what you do)
+   `send_later` is one-shot, not a heartbeat. Each wake: poll `captain status --summary --json`
+   (group `counts` + NEEDS YOU rows, each with a `stateHash` fingerprint of gate + verdict +
+   run-state); a changed count or NEEDS YOU hash is a transition — act, then re-arm. Use plain
+   `--json` for every row's hash. ~200–260s lets gates accumulate and verdicts land between sweeps.
+   (A human can watch a terminal with `captain status --watch`.)
 
-**Poll by default.** Once a fleet is running, self-arm the wakeup and start polling without
-asking — never stop to ask the human whether to poll `captain status` or leave the plans for
-them to review in cmux directly. Polling _is_ the captain loop; batching gates into a single
-AskUserQuestion (below) is how the human stays in control, so there is nothing to opt into.
+## The loop
 
-Self-arm a wakeup (ScheduleWakeup / cron / `/loop`) → `captain status --summary --json` → diff
-each row's `stateHash` against the snapshot you hold in context → act only on **transitions**
-(a new gate, a verdict flipped) → escalate the changed rows (see NEEDS YOU below) or re-arm.
-Nothing polls in the foreground; the schedule is the heartbeat.
+**Poll by default** once a fleet is running — never ask the human whether to poll, never offer
+"ping me when you want an update". Batching gates into one AskUserQuestion keeps them in control.
 
-| You say                                      | Run                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "status" / "what's blocked" / "what's ready" | `captain status` (`--json` for parsing; `--repo`, `--needs`, `--ready` to narrow) — one view: NEEDS YOU / IN FLIGHT / READY, each gate carrying its inline resolve command and each PR its merge hint (plus merge-order overlap warnings)                                                                                                                                                                             |
-| "show me the plans"                          | for each plan gate, fan out a **read-only subagent** (Agent/Explore tool) that reads the plan and returns a structured decision card `{summary, scopeDrift, risk, recommendation}`; present the batch — never spend your own window on raw `--scrollback`. This is the captain-native **decision-ready** gate: don't bring a rough plan, prep it first so scope drift is spottable across the whole batch in one pass |
-| "approve all plans"                          | `captain approve all` (or comma-separated ticket names, or a repo label)                                                                                                                                                                                                                                                                                                                                              |
-| "send 404 back: don't touch auth"            | `captain reject tig-404 --note "…"` — replies to the plan gate _and_ types the feedback into the workspace                                                                                                                                                                                                                                                                                                            |
-| "what's verified"                            | `captain status` — READY rows carry `✓ verified` plus the verdict summary; spot-read `<worktree>/.captain/verdict.json`'s criteria array before merging                                                                                                                                                                                                                                                               |
-| "this one's gone quiet"                      | `cmux read-screen --workspace <id>` to see where it is, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge                                                                                                                                                                                                                                                                                    |
-| "distill the fleet's learnings"              | open `~/.claude/captain/memory/<repo>/learnings.md`; promote Inbox bullets that held up into `## Rules`, delete slop. `~/.claude/captain/log.jsonl` holds approve/reject notes — grep it for recurring failure causes worth a rule                                                                                                                                                                                    |
+| You say                                      | Run                                                                                                                                                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "status" / "what's blocked" / "what's ready" | `captain status` (`--json`, `--repo`, `--needs`, `--ready` to narrow) — NEEDS YOU / IN FLIGHT / READY, each gate with its resolve command, each PR its merge hint + overlap warnings         |
+| "show me the plans"                          | per plan gate, fan out a **read-only subagent** that reads the plan and returns `{summary, scopeDrift, risk, recommendation}`; present the batch — never spend your window on `--scrollback` |
+| "approve all plans"                          | `captain approve all` (or comma-separated names, or a repo label)                                                                                                                            |
+| "send 404 back: don't touch auth"            | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace                                                                                                  |
+| "what's verified"                            | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging                                                                                         |
+| "this one's gone quiet"                      | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge                                                                              |
+| "distill the learnings"                      | edit `~/.claude/captain/memory/<repo>/learnings.md` — promote held-up Inbox bullets to `## Rules`, cut slop; `~/.claude/captain/log.jsonl` has approve/reject notes                          |
 
-### Escalating NEEDS YOU
-
-The table verbs are how the decision is **executed**; the human-facing surfacing is the
-**AskUserQuestion** primitive, not prose the agent can't act on. When a wakeup turns up gated
-plans, batch them into **one** structured AskUserQuestion — one question per gate, each carrying
-its subagent decision card (`{summary, scopeDrift, risk, recommendation}` from "show me the
-plans") and options:
-
-- **approve** → `captain approve <ticket>` (or `captain approve all` for the batch)
-- **reject-with-note** → `captain reject <ticket> --note "…"` (the note is the human's text)
-- **read-more** → fan out a deeper read-only subagent on that one plan, then re-ask
-
-Off-script questions (NEEDS YOU rows that aren't plan gates) surface the same way — one
-AskUserQuestion carrying the verbatim question; the answer is typed back with
-`cmux send --workspace <id> "…\n"`. Batch a wakeup's escalations into a single ask; don't
-interrupt the human once per gate.
+**Escalating NEEDS YOU:** batch gated plans into **one** AskUserQuestion — one per gate with its
+decision card, options **approve** (`captain approve <ticket>`), **reject-with-note**
+(`captain reject <ticket> --note "…"`), **read-more** (deeper subagent, re-ask). Off-script
+questions surface the same way, answered verbatim with `cmux send --workspace <id> "…\n"`. One ask
+per wake, not per gate.
 
 ## Gotchas
 
-- **Wrong dir is the #1 silent failure.** Your session cwd is not the ticket's repo. `captain
-start` with no `.repoMap` and no `--repo-path` fans the worktree into your current directory —
-  a repo with none of the ticket's code, whose rubric the agent can then never pass. Route every
-  Linear ticket explicitly: read the ticket and decide its repo semantically from the prompt, then
-  pass `--repo-path` — never trust cwd, team, or project to pick the repo (a project's tickets span
-  repos). If a ticket lands wrong, see the re-route procedure in fleet memory (close the workspace
-  — never if it's a group anchor — `git worktree remove --force`, delete the branch, relaunch
-  with the correct `--repo-path`).
-- **Never approve a plan you haven't read.** The plan gate is the one place under-planning
-  hurts most. The read-only subagent reads it for you and returns a decision card; surface the
-  card, get the call, then approve — but never approve a gate with no card behind it.
-- **Never guess off-script questions.** NEEDS YOU rows are surfaced verbatim — answer in that
-  workspace with `cmux send --workspace <id> "…\n"`, or `reject` if it's a plan.
-- **Stops at PR-ready.** Merging and deploying stay with you (no auto-merge).
-- **Never trust a one-line verdict summary.** The verdict gates the _label_, not the merge — a
-  lazy agent can skip its verifier. Spot-read the verdict's per-criterion evidence before
-  merging; a suspiciously thin criteria array means the verifier run probably didn't happen.
-- **There is no daemon.** Nothing to start, restart, or stop; `status` can never be stale. The
-  agent driver's heartbeat is native scheduling (ScheduleWakeup / cron / `/loop`), re-derived
-  fresh each wakeup — never a long-running watcher process.
-- **Workspace ids, not names.** `cmux read-screen` / `cmux send` take the workspace UUID —
-  `captain status` prints the right command per row; copy it.
-- **Never close an apparent duplicate workspace.** A cmux sidebar group's anchor is a real
-  workspace whose cwd can be a fleet worktree; closing it dissolves the group and ungroups the
-  whole fleet. `status` collapses same-cwd rows to the agent's row (fix shipped 2026-06-11), so
-  seeing a duplicate means a stale binary — rebuild (`cd ~/Code/mblode/captain && npm run build`)
-  instead of closing anything. Identify anchors with `cmux rpc workspace.group.list '{}'`.
+- **Wrong dir is the #1 silent failure.** No `--repo-path` fans the worktree into your cwd — a repo
+  with none of the ticket's code, whose rubric never passes. Reroute: close the workspace (never a
+  group anchor), `git worktree remove --force`, delete the branch, relaunch.
+- **Never approve a plan with no decision card behind it** — the read-only subagent reads it first.
+- **Never guess off-script questions** — answer verbatim in the workspace, or `reject` if it's a
+  plan.
+- **Stops at PR-ready** — merging and deploying stay with you.
+- **Never trust a one-line verdict** — it gates the _label_, not the merge; spot-read the criteria
+  array (a thin one = the verifier was skipped).
+- **No daemon** — the heartbeat is step 4's self-re-invoking timer (rung 1 = backgrounded `sleep`);
+  a missing scheduling tool is never a reason to stop polling or hand the loop back to the human.
+- **`cmux send` can silently no-op** (text parked unsubmitted while `status` still reads "working")
+  — follow every send with `cmux send-key --workspace <id> enter` and re-read the screen.
+- **Verify run-state right after launch** — a launch race leaves a workspace at an empty shell
+  (`run=unknown`); relaunch from `/tmp/linear-worktree/<TICKET>/prompt.txt`, and run `captain start`
+  in the **foreground** (backgrounding has returned no workspace + a half-made worktree).
+- **Workspace ids, not names** — `status` prints the right `cmux` command per row; copy it.
+- **Never close an apparent duplicate workspace** — it's likely a group anchor (closing ungroups the
+  fleet); a real duplicate means a stale binary, so rebuild instead.
 
 ## Reference
 
-- CLI: run `captain --help`. Source: `~/Code/mblode/captain` (`src/captain/`). The pure
-  decision core is `src/captain/view.ts` (grouping) and `src/captain/verdict.ts` (verdict).
-- Low-level cmux CLI (read-screen, send, send-key, feed): the [`cmux`](../cmux/SKILL.md) skill.
+- CLI: `captain --help`. Source: `~/Code/mblode/captain/src/captain/` (pure core: `view.ts`
+  grouping, `verdict.ts`).
+- Low-level cmux verbs: the [`cmux`](../cmux/SKILL.md) skill.

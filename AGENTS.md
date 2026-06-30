@@ -84,6 +84,14 @@ legacy dir.)
 feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
 intent queue, no daemon to race.
 
+`status --watch [--interval <s>]` re-renders that same derivation on a timer for a human watching
+a terminal (Ctrl-C exits, default 5s). It is **not** a daemon: it persists nothing, every tick is
+an independent `statusOnce` (the `--json`/`--summary` machine paths short-circuit before the git
+merge-order cost), and it returns a `stop()` handle so the loop tears down deterministically. The
+agent _driver_ does **not** use `--watch` (a blocking foreground loop can't yield turns); its
+heartbeat is a backgrounded `sleep` whose exit re-invokes its turn — see the captain skill's
+heartbeat ladder.
+
 `gain` (alias `audit`) derives fleet telemetry the same stateless way: a gap-free decisions
 ledger from `log.jsonl` (`readLog`) + a live fleet snapshot + verdict tallies → `computeGain`
 (PURE), with an honesty footer (`--json` plain). `--git` opt-in approximates merged-PR counts via
@@ -149,7 +157,10 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
   listener — the exact watcher-daemon class deleted June 2026, where every live-session bug lived
   (daemon death, fleet-wipe on a flaky RPC, gate-flap, two-writer clobber). A **one-way**
   `notify`→external push is the only thesis-safe slice; two-way control stays a non-goal. The
-  reasoning is written up in `research/builderbot-audit.md`.
+  reasoning is written up in `research/builderbot-audit.md`. (`status --watch` is **not** a
+  violation: it is a foreground, stateless re-render loop the human starts and Ctrl-Cs — it holds
+  no state, listens to nothing, and coordinates no writers. The forbidden class is a _persistent
+  background listener_, not a polling loop.)
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
   free-form current-dir dispatch, an explicit `--repo-path`, and `--print` for each. Repo selection
   is `--repo-path` else cwd; spanning repos in one session is the driver's job (per-ticket

@@ -117,6 +117,14 @@ export interface StatusOptions {
   // compact view: group counts + the NEEDS YOU rows only — a near-zero-token
   // poll. Composes with --repo. Honoured by both --json and the TTY render.
   summary?: boolean;
+  // --watch: a stateless foreground live view that re-renders on a timer. NOT a
+  // daemon — it holds no state, every tick re-derives the fleet from scratch
+  // (same as re-running `status`), and Ctrl-C ends it. The agent driver does
+  // NOT use this; its heartbeat is a backgrounded sleep that re-invokes its turn
+  // (see the captain skill). This is purely the human's terminal view.
+  watch?: boolean;
+  // --watch poll interval in seconds (default 5). Ignored without --watch.
+  interval?: number;
 }
 
 // Group tallies over a row set — the compact summary's headline.
@@ -153,8 +161,9 @@ const changedFiles = (cwd: string, env: NodeJS.ProcessEnv): string[] => {
 
 // The one read surface: the fleet view derived live from cmux + the worktrees,
 // grouped with the few that need a decision on top — each carrying its inline
-// resolve command. --repo/--needs/--ready narrow the view.
-export const status = (
+// resolve command. --repo/--needs/--ready narrow the view. One independent,
+// stateless derivation per call.
+const statusOnce = (
   options: StatusOptions,
   out: NodeJS.WritableStream,
   port: CmuxPort = realCmux(process.env)
@@ -221,6 +230,53 @@ export const status = (
         )
       : {};
   out.write(renderStatus(rows, styleFor(out), { overlaps }));
+};
+
+// The status entry point. Without --watch it derives the view once and returns
+// (the machine/one-shot path every script and the agent driver use). With
+// --watch it re-renders on a timer for a human watching a terminal — a
+// stateless foreground loop, NOT a daemon: it persists nothing, every tick is
+// an independent `statusOnce`, and Ctrl-C (SIGINT) ends it. Returns a stop()
+// handle in watch mode so callers/tests can tear the loop down deterministically.
+export const status = (
+  options: StatusOptions,
+  out: NodeJS.WritableStream,
+  port: CmuxPort = realCmux(process.env)
+): (() => void) | undefined => {
+  if (!options.watch) {
+    statusOnce(options, out, port);
+    return undefined;
+  }
+  const seconds =
+    typeof options.interval === "number" &&
+    Number.isFinite(options.interval) &&
+    options.interval > 0
+      ? options.interval
+      : 5;
+  const isTty = (out as Partial<NodeJS.WriteStream>).isTTY === true;
+  const render = (): void => {
+    // Clear+home on a TTY so each tick repaints in place; on a pipe just append.
+    if (isTty) {
+      out.write("\u001B[2J\u001B[H");
+    }
+    out.write(
+      `${styleFor(out).dim(`captain status — watching every ${seconds}s · Ctrl-C to exit`)}\n`
+    );
+    statusOnce(options, out, port);
+  };
+  // Paint immediately, then again on each tick.
+  render();
+  const handle = setInterval(render, seconds * 1000);
+  const onSigint = (): void => {
+    clearInterval(handle);
+    out.write("\n");
+    process.exit(0);
+  };
+  process.on("SIGINT", onSigint);
+  return (): void => {
+    clearInterval(handle);
+    process.removeListener("SIGINT", onSigint);
+  };
 };
 
 // Rows currently parked at the plan gate — what approve/reject act on.

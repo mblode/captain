@@ -122,6 +122,15 @@ program
     "--summary",
     "compact: group counts + NEEDS YOU detail only (a cheap poll)"
   )
+  .option(
+    "--watch",
+    "live foreground view: re-render every --interval seconds (Ctrl-C to exit). Stateless — every tick re-derives the fleet fresh, no daemon"
+  )
+  .option(
+    "--interval <seconds>",
+    "--watch poll interval in seconds (default 5)",
+    "5"
+  )
   .action(
     (options: {
       json?: boolean;
@@ -129,8 +138,18 @@ program
       needs?: boolean;
       ready?: boolean;
       summary?: boolean;
+      watch?: boolean;
+      interval?: string;
     }) => {
-      status(options, process.stdout);
+      status(
+        {
+          ...options,
+          interval: options.interval
+            ? Number.parseFloat(options.interval)
+            : undefined,
+        },
+        process.stdout
+      );
     }
   );
 

@@ -494,6 +494,53 @@ describe("stateless approve/reject/status over the real surface", () => {
     });
   });
 
+  it("status without --watch derives once and returns no handle", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort([{ cwd, id: "ws-1", name: "tig-430", ref: "r" }], []);
+    const { out } = capture();
+    expect(status({ json: true }, out, port)).toBeUndefined();
+  });
+
+  it("status --watch paints immediately, re-renders each interval, stop() halts it", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    const renders = (): number => text().match(/watching every/gu)?.length ?? 0;
+    vi.useFakeTimers();
+    try {
+      const stop = status({ interval: 0.01, watch: true }, out, port);
+      // Paints once synchronously, before any timer fires.
+      expect(renders()).toBe(1);
+      // ~3 ticks at 10ms.
+      vi.advanceTimersByTime(35);
+      expect(renders()).toBeGreaterThanOrEqual(3);
+      const atStop = renders();
+      stop?.();
+      // After stop, the interval is cleared — no further renders accrue.
+      vi.advanceTimersByTime(100);
+      expect(renders()).toBe(atStop);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("status --watch falls back to a 5s interval for a non-positive value", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort([{ cwd, id: "ws-1", name: "tig-430", ref: "r" }], []);
+    const { out, text } = capture();
+    vi.useFakeTimers();
+    try {
+      const stop = status({ interval: 0, watch: true }, out, port);
+      expect(text()).toContain("watching every 5s");
+      stop?.();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // gain: stateless telemetry derived over the SAME real surface, with the
   // decision log pre-seeded under the CAPTAIN_HOME temp.
   interface GainJson {
