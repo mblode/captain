@@ -181,9 +181,12 @@ program
 program
   .command("reject")
   .description("send a plan back to planning with feedback")
-  .argument("<ref>", "the worktree's ticket name")
+  .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
   .requiredOption("--note <text>", "what to change")
-  .option("--json", "emit JSON: { rejected, note } or { unknown }")
+  .option(
+    "--json",
+    "emit JSON: { rejected, undelivered, note } or { ambiguous, unknown }"
+  )
   .action((ref: string, options: { note: string; json?: boolean }) => {
     reject(ref, options.note, process.stdout, undefined, {
       json: options.json,

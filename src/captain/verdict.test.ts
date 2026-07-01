@@ -51,6 +51,23 @@ describe("parseVerdict", () => {
     expect(
       parseVerdict(JSON.stringify({ ...verdict(), criteria: [{ name: 1 }] }))
     ).toBeNull();
+    // A criterion missing (or with a non-string) `evidence` is malformed → null.
+    expect(
+      parseVerdict(
+        JSON.stringify({
+          ...verdict(),
+          criteria: [{ name: "implements", pass: true }],
+        })
+      )
+    ).toBeNull();
+    expect(
+      parseVerdict(
+        JSON.stringify({
+          ...verdict(),
+          criteria: [{ evidence: 42, name: "implements", pass: true }],
+        })
+      )
+    ).toBeNull();
   });
 });
 

@@ -19,7 +19,8 @@ const isCriterion = (c: unknown): boolean =>
   typeof c === "object" &&
   c !== null &&
   typeof (c as { name?: unknown }).name === "string" &&
-  typeof (c as { pass?: unknown }).pass === "boolean";
+  typeof (c as { pass?: unknown }).pass === "boolean" &&
+  typeof (c as { evidence?: unknown }).evidence === "string";
 
 // Pure: validate the agent-written verdict file's shape. Anything malformed is
 // null — a garbage verdict must read as "no verdict yet", never as a pass.

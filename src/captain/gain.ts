@@ -7,6 +7,7 @@
 
 import type { LogRecord } from "./log";
 import type { Verdict } from "./verdict";
+import { groupCounts } from "./view";
 import type { FleetRow } from "./view";
 
 // What commands.ts hands computeGain. `now`/`since` are epoch SECONDS to match
@@ -198,9 +199,7 @@ export const computeGain = (input: GainInput): GainMetrics => {
     decisions: decisionsBlock,
     fleet: {
       byRepo,
-      inFlight: input.rows.filter((r) => r.group === "in-flight").length,
-      needsYou: input.rows.filter((r) => r.group === "needs-you").length,
-      ready: input.rows.filter((r) => r.group === "ready").length,
+      ...groupCounts(input.rows),
       total: input.rows.length,
     },
     ...(input.merged ? { merged: input.merged } : {}),

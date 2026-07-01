@@ -530,6 +530,41 @@ describe("runDispatch (non-Linear, current dir)", () => {
       runDispatch({ cwd: repo, env: safeEnv(), print: true, task: "   " })
     ).rejects.toThrow(/usage: captain start/u);
   });
+
+  it("excludes .captain via the common git dir when the repo is a linked worktree", async () => {
+    // A linked worktree's `.git` is a FILE, not a directory — writing the exclude
+    // under `<worktree>/.git/info` would ENOTDIR. The write must resolve the
+    // common git dir (the main checkout's .git) instead.
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const worktree = join(root, "src-linked");
+    runRequired(
+      "git",
+      ["-C", repo, "worktree", "add", "-b", "linked-wt", worktree],
+      { env: safeEnv() }
+    );
+
+    const output = captureWritable();
+    const status = await runDispatch({
+      cwd: worktree,
+      env: safeEnv(),
+      print: true,
+      repoOverride: worktree,
+      stdout: output.stream,
+      task: "tidy the readme",
+    });
+
+    expect(status).toBe(0);
+    // The rubric still lands in the worktree itself...
+    expect(
+      await readFile(join(worktree, ".captain", "rubric.md"), "utf-8")
+    ).toContain("# Definition of done");
+    // ...but the exclude write resolves the COMMON git dir (the main checkout's
+    // .git), never the worktree's `.git` FILE.
+    expect(
+      await readFile(join(repo, ".git", "info", "exclude"), "utf-8")
+    ).toContain(".captain/");
+  });
 });
 
 describe("runStart routing", () => {

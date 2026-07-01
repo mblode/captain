@@ -5,8 +5,9 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { repoLabel } from "../git";
 import { runRequired } from "../shell";
-import { realCmux, repoLabel } from "./control";
+import { realCmux } from "./control";
 
 describe("repoLabel", () => {
   let root: string;
@@ -86,5 +87,49 @@ describe("realCmux fails soft on garbage RPC output", () => {
 
   it("listWorkspaces returns [] instead of throwing", () => {
     expect(realCmux(env).listWorkspaces()).toEqual([]);
+  });
+});
+
+// A tag TSV row: cpu, mem, procs, "tag", ref, parent_ref, title.
+const row = (tag: string, title: string): string =>
+  `0\t0\t1\ttag\tworkspace:WS-1:tag:${tag}\tworkspace:1\t${title}`;
+
+// `cmux top` can print more than one tag row per workspace; only the agent's own
+// `claude_code` tag reflects its run state. That row must win regardless of the
+// order the rows arrive in — a stray second tag must never clobber it.
+describe("runStates: claude_code tag wins over other tag rows", () => {
+  let binDir: string;
+  const runStatesWith = (top: string): Record<string, string> => {
+    const env = {
+      ...process.env,
+      CMUX_TOP: top,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    };
+    return realCmux(env).runStates();
+  };
+
+  beforeAll(() => {
+    binDir = mkdtempSync(join(tmpdir(), "captain-top-bin-"));
+    const fake = join(binDir, "cmux");
+    // Echoes the CMUX_TOP env verbatim for `top`; exits 0 otherwise.
+    writeFileSync(
+      fake,
+      '#!/bin/sh\nif [ "$1" = "top" ]; then printf \'%s\' "$CMUX_TOP"; exit 0; fi\nexit 0\n'
+    );
+    chmodSync(fake, 0o755);
+  });
+
+  afterAll(async () => {
+    await rm(binDir, { force: true, recursive: true });
+  });
+
+  it("claude_code wins when it comes first", () => {
+    const top = `${row("claude_code", "Running")}\n${row("some_other", "idle")}`;
+    expect(runStatesWith(top)["ws-1"]).toBe("running");
+  });
+
+  it("claude_code wins when it comes last", () => {
+    const top = `${row("some_other", "idle")}\n${row("claude_code", "Running")}`;
+    expect(runStatesWith(top)["ws-1"]).toBe("running");
   });
 });

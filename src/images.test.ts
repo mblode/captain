@@ -8,6 +8,7 @@ import {
   downloadImage,
   extractImageUrls,
   shouldSendLinearAuth,
+  worktreeTmpDir,
 } from "./images";
 
 const cleanup: string[] = [];
@@ -74,5 +75,11 @@ describe("image handling", () => {
     );
 
     expect(seenHeaders).toEqual([{ Authorization: "lin_secret" }]);
+  });
+
+  it("roots the scratch dir at os.tmpdir(), not a hardcoded /tmp", () => {
+    expect(worktreeTmpDir("TST-1")).toBe(
+      join(tmpdir(), "linear-worktree", "TST-1")
+    );
   });
 });

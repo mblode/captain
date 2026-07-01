@@ -17,6 +17,7 @@ import { style } from "./format";
 
 const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   cmuxReachable: () => true,
+  configuredSkills: ["pr-reviewer", "pr-creator", "pr-babysitter"],
   env: { LINEAR_API_KEY: "k" },
   hasCommand: () => true,
   installBundle: () => true,
@@ -74,6 +75,23 @@ describe("buildChecks", () => {
     ).find((c) => c.label === "pipeline skills");
     expect(skills?.ok).toBe(false);
     expect(skills?.detail).toContain("pr-creator");
+  });
+
+  it("only probes the installable skills the configured pipeline runs", () => {
+    // A custom pipeline that runs only pr-reviewer isn't nagged about the other
+    // two — even though they're globally missing.
+    const skills = buildChecks(
+      deps({ configuredSkills: ["pr-reviewer"], skillInstalled: () => false })
+    ).find((c) => c.label === "pipeline skills");
+    expect(skills?.detail).toContain("pr-reviewer");
+    expect(skills?.detail).not.toContain("pr-creator");
+  });
+
+  it("omits the pipeline-skills check when the pipeline runs none", () => {
+    // /simplify ships with Claude Code, so a simplify-only pipeline has no
+    // installable skills to probe — the check is dropped, not shown as ok.
+    const checks = buildChecks(deps({ configuredSkills: ["simplify"] }));
+    expect(checks.map((c) => c.label)).not.toContain("pipeline skills");
   });
 });
 

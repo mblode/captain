@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { cmuxReachable } from "../cmux";
+import { loadSkills } from "../config";
 import { commandExists, run } from "../shell";
 import { msg, style, useColor } from "./format";
 import type { Style } from "./format";
@@ -23,6 +24,9 @@ export interface Check {
 // stays pure (and testable) — mirrors the surface.ts/CmuxPort seam.
 export interface DoctorDeps {
   cmuxReachable: () => boolean;
+  // The pipeline skills the configured brief actually runs (loadSkills), stripped
+  // of the leading `/`. Injected so buildChecks stays pure; realDeps resolves it.
+  configuredSkills: string[];
   env: NodeJS.ProcessEnv;
   hasCommand: (command: string) => boolean;
   // Installs a `skills add` bundle globally; returns whether it succeeded.
@@ -33,10 +37,11 @@ export interface DoctorDeps {
   skillInstalled: (skill: string) => boolean;
 }
 
-// The pipeline skills the agent brief invokes (src/prompt.ts) that ship from
-// mblode/agent-skills — without them the self-drive pipeline silently no-ops.
-// (/simplify ships with Claude Code itself, so it isn't listed here.)
-const PIPELINE_SKILLS = ["pr-reviewer", "pr-creator", "pr-babysitter"];
+// The skills `captain install` can fetch from mblode/agent-skills. The doctor
+// only nags about the ones the configured brief actually runs, so a custom
+// pipeline (CAPTAIN_SKILLS / config) isn't warned about skills it doesn't use.
+// (/simplify ships with Claude Code itself, so it's never in this set.)
+const INSTALLABLE_SKILLS = ["pr-reviewer", "pr-creator", "pr-babysitter"];
 
 const PIPELINE_BUNDLE = "mblode/agent-skills";
 const CAPTAIN_BUNDLE = "mblode/captain";
@@ -84,19 +89,27 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
     ok: hasKey,
   });
 
-  const missingPipeline = PIPELINE_SKILLS.filter(
-    (skill) => !deps.skillInstalled(skill)
+  // Only the installable skills the configured pipeline actually runs — a custom
+  // pipeline isn't nagged about skills it doesn't use, and one that runs none
+  // (e.g. /simplify only) skips the check entirely.
+  const pipelineSkills = INSTALLABLE_SKILLS.filter((skill) =>
+    deps.configuredSkills.includes(skill)
   );
-  checks.push({
-    detail: missingPipeline.length
-      ? `missing: ${missingPipeline.join(", ")}`
-      : "installed",
-    hint: `the brief runs ${PIPELINE_SKILLS.map((s) => `/${s}`).join(", ")} — ${addCmd(PIPELINE_BUNDLE)}`,
-    label: "pipeline skills",
-    level: "recommended",
-    ok: missingPipeline.length === 0,
-    skillBundle: PIPELINE_BUNDLE,
-  });
+  if (pipelineSkills.length > 0) {
+    const missingPipeline = pipelineSkills.filter(
+      (skill) => !deps.skillInstalled(skill)
+    );
+    checks.push({
+      detail: missingPipeline.length
+        ? `missing: ${missingPipeline.join(", ")}`
+        : "installed",
+      hint: `the brief runs ${pipelineSkills.map((s) => `/${s}`).join(", ")} — ${addCmd(PIPELINE_BUNDLE)}`,
+      label: "pipeline skills",
+      level: "recommended",
+      ok: missingPipeline.length === 0,
+      skillBundle: PIPELINE_BUNDLE,
+    });
+  }
 
   const captainOk = deps.skillInstalled("captain");
   checks.push({
@@ -133,6 +146,7 @@ const skillProbe = (env: NodeJS.ProcessEnv): ((skill: string) => boolean) => {
 
 export const realDeps = (env: NodeJS.ProcessEnv): DoctorDeps => ({
   cmuxReachable: () => cmuxReachable(env),
+  configuredSkills: loadSkills(env).map((s) => s.replace(/^\//u, "")),
   env,
   hasCommand: (command) => commandExists(command, env),
   installBundle: (bundle) =>

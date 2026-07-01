@@ -148,9 +148,6 @@ export const nextCommand = (row: FleetRow): string => {
   if (row.gate?.kind === "plan") {
     return `captain approve ${row.handle ?? row.ticket ?? row.name}`;
   }
-  if (row.group === "needs-you") {
-    return `cmux read-screen --workspace ${row.workspaceId}`;
-  }
   if (row.group === "ready") {
     return row.prUrl
       ? `gh pr merge ${row.prUrl} --squash`
@@ -237,6 +234,18 @@ export const withHandles = (rows: FleetRow[]): FleetRow[] => {
     return withHandle;
   });
 };
+
+// PURE: the per-group tally over a row set — the single definition the summary
+// headline, the status/summary renderers, and the gain fleet block all share
+// (the keys match status --summary's `counts`). A `total` is just rows.length,
+// left to whichever caller needs it.
+export const groupCounts = (
+  rows: FleetRow[]
+): { needsYou: number; inFlight: number; ready: number } => ({
+  inFlight: rows.filter((r) => r.group === "in-flight").length,
+  needsYou: rows.filter((r) => r.group === "needs-you").length,
+  ready: rows.filter((r) => r.group === "ready").length,
+});
 
 // PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO
 // (paths are repo-relative, so cross-repo "overlap" is meaningless). Two

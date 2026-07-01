@@ -1,13 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { repoLabel } from "../git";
 import {
   RUBRIC_RELPATH,
   rubricBody,
   rubricHash,
   VERDICT_RELPATH,
 } from "../rubric";
-import { repoLabel } from "./control";
 import type { CmuxPort } from "./control";
 import { parseVerdict } from "./verdict";
 import type { Verdict } from "./verdict";
