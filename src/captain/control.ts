@@ -1,25 +1,8 @@
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename } from "node:path";
 
 import { cmuxReachable } from "../cmux";
 import { CliError, EXIT } from "../errors";
 import { run, runRequired } from "../shell";
-
-// Short repo label for a worktree path: a linked worktree's --git-common-dir
-// resolves to the main checkout's .git, whose parent dir name is the repo
-// ("linkiq"). Fail-soft: any git failure (not a repo, fake test path) →
-// undefined, so the view never breaks on it.
-export const repoLabel = (
-  cwd: string,
-  env: NodeJS.ProcessEnv = process.env
-): string | undefined => {
-  const raw = run("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { env });
-  const common = raw.stdout.trim();
-  if (raw.status !== 0 || !common) {
-    return undefined;
-  }
-  const gitDir = isAbsolute(common) ? common : resolve(cwd, common);
-  return basename(dirname(gitDir)) || undefined;
-};
 
 // Thin wrappers over the cmux CLI for captain's "hands". Each reuses the
 // shared spawn helpers so behaviour matches the rest of the tool.
@@ -81,8 +64,9 @@ const TOP_STATES: Record<string, RunState> = {
   running: "running",
 };
 
-// A `cmux top` tag row's ref: workspace:<UUID>:tag:claude_code
-const TAG_REF = /^workspace:([^:]+):tag:/iu;
+// A `cmux top` tag row's ref: workspace:<UUID>:tag:claude_code — capture both
+// the workspace id and the tag NAME (a workspace can carry more than one tag row).
+const TAG_REF = /^workspace:([^:]+):tag:(.+)$/iu;
 
 // Parse cmux RPC stdout, falling back on garbage. The RPC is unreliable: a
 // status-0 response with malformed stdout must read as "no data this tick", not
@@ -194,9 +178,17 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     for (const line of raw.stdout.split("\n")) {
       const cols = line.split("\t");
       const ref = cols[3] === "tag" ? cols[4]?.match(TAG_REF) : null;
-      if (ref) {
-        states[ref[1].toLowerCase()] =
-          TOP_STATES[cols[6]?.trim().toLowerCase() ?? ""] ?? "unknown";
+      if (!ref) {
+        continue;
+      }
+      const id = ref[1].toLowerCase();
+      const state =
+        TOP_STATES[cols[6]?.trim().toLowerCase() ?? ""] ?? "unknown";
+      // The agent's own `claude_code` tag is authoritative — it always wins,
+      // regardless of row order. Any other tag row only fills a workspace we
+      // haven't seen yet, so a stray second tag can't clobber the agent's state.
+      if (ref[2].toLowerCase() === "claude_code" || !(id in states)) {
+        states[id] = state;
       }
     }
     return states;

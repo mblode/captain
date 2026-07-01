@@ -7,8 +7,8 @@ import { ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { loadDataScope, loadSkills } from "./config";
 import { CliError, EXIT } from "./errors";
-import { ensureWorktree, fetchOrigin } from "./git";
-import { downloadIssueImages } from "./images";
+import { ensureWorktree, fetchOrigin, gitCommonDir } from "./git";
+import { downloadIssueImages, worktreeTmpDir } from "./images";
 import { isIssueId, parseIssueInput, slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
 import { fetchLinearIssue } from "./linear";
@@ -30,23 +30,30 @@ interface PreparedIssue {
 // One launched target's machine-readable identity for `start --json`. Fields
 // absent on a given path are omitted (never undefined) so the value stays valid
 // JSON: dispatch has no branch, an inline fallback launch has no workspaceId.
+// `json` is set only on the single-target launch path (launchOrFallback) to gate
+// whether the `{ started: [...] }` line is emitted; it never reaches the payload
+// (compactEntry copies only the wire fields).
 interface StartedEntry {
   name: string;
   cwd: string;
   branch?: string;
   workspaceId?: string;
+  json?: boolean;
 }
 
+// Does a cmux workspace own this worktree cwd? The one match rule shared by
+// `start --json` id lookup and collapse detection: an exact cwd, or a workspace
+// whose cwd ends in the worktree's basename (it collapsed into an existing window).
+const ownsCwd = (workspaceCwd: string, path: string): boolean =>
+  workspaceCwd === path || workspaceCwd.endsWith(`/${basename(path)}`);
+
 // Resolve the cmux workspace id that owns a worktree cwd (best-effort), so
-// `start --json` can hand a driver the id to address later. Matches the same
-// way collapse detection does: exact cwd, or a workspace whose cwd ends in the
-// worktree's basename. Undefined when cmux can't be reached or nothing matches.
+// `start --json` can hand a driver the id to address later. Undefined when cmux
+// can't be reached or nothing matches.
 const workspaceIdForCwd = (
   cwd: string,
   workspaces: { id: string; cwd: string }[]
-): string | undefined =>
-  workspaces.find((w) => w.cwd === cwd || w.cwd.endsWith(`/${basename(cwd)}`))
-    ?.id;
+): string | undefined => workspaces.find((w) => ownsCwd(w.cwd, cwd))?.id;
 
 // Drop undefined-valued fields so the emitted JSON never carries `undefined`.
 const compactEntry = (entry: StartedEntry): StartedEntry => {
@@ -95,9 +102,7 @@ export const collapsedWorktreeNotes = (
     return [];
   }
   const owned = (path: string): boolean =>
-    workspaces.some(
-      (w) => w.cwd === path || w.cwd.endsWith(`/${basename(path)}`)
-    );
+    workspaces.some((w) => ownsCwd(w.cwd, path));
   return worktreePaths
     .filter((p) => !owned(p))
     .map(
@@ -120,7 +125,7 @@ const writePromptFile = async (
   displayId: string,
   prompt: string
 ): Promise<string> => {
-  const dir = join("/tmp", "linear-worktree", displayId);
+  const dir = worktreeTmpDir(displayId);
   await mkdir(dir, { recursive: true });
   const promptPath = join(dir, "prompt.txt");
   await writeFile(promptPath, prompt);
@@ -157,21 +162,13 @@ const launchViaCmux = async (
 // The single-target launch strategy, shared by single-issue fanout and dispatch:
 // cmux if reachable, else inline plan mode. (The multi-issue loop calls
 // launchViaCmux directly — a refused workspace there surfaces as a collapse note,
-// not a fallback.)
-// Identity for the single-target --json payload. workspaceId is resolved after
-// a successful cmux launch; on the inline-fallback path there is no workspace,
-// so it stays absent.
-interface StartedMeta {
-  name: string;
-  cwd: string;
-  branch?: string;
-  json: boolean;
-}
-
+// not a fallback.) `meta` carries the single-target --json identity: workspaceId
+// is resolved after a successful cmux launch (absent on the inline-fallback path),
+// and `meta.json` gates whether anything is emitted at all.
 const launchOrFallback = async (
   target: LaunchTarget,
   stdout: NodeJS.WritableStream,
-  meta?: StartedMeta
+  meta?: StartedEntry
 ): Promise<number> => {
   const { env, progress } = target;
   const emitStarted = (workspaceId?: string): void => {
@@ -228,10 +225,14 @@ const targetOf = (
 });
 
 // Keep `.captain/` (rubric + verdict) out of every worktree's diff. Linked
-// worktrees share the main checkout's `.git/info/exclude`, so one append covers
-// the whole fleet; nothing is ever committed.
-const excludeCaptainDir = async (repoRoot: string): Promise<void> => {
-  const excludePath = join(repoRoot, ".git", "info", "exclude");
+// worktrees share the main checkout's `.git/info/exclude` (a linked worktree's
+// own `.git` is a FILE, so we resolve the common git dir rather than assume a
+// `.git` directory), so one append covers the whole fleet; nothing is committed.
+const excludeCaptainDir = async (
+  repoRoot: string,
+  env: NodeJS.ProcessEnv
+): Promise<void> => {
+  const excludePath = join(gitCommonDir(repoRoot, env), "info", "exclude");
   const current = await readFile(excludePath, "utf-8").catch(() => "");
   if (current.split("\n").includes(".captain/")) {
     return;
@@ -259,7 +260,7 @@ const withLoopExtras = async (
   const { text } = renderRubric(issue, displayId, dataScope);
   await mkdir(join(worktreePath, ".captain"), { recursive: true });
   await writeFile(join(worktreePath, RUBRIC_RELPATH), text);
-  await excludeCaptainDir(repoRoot);
+  await excludeCaptainDir(repoRoot, env);
   const memoryPath = ensureMemoryFile(repoRoot, env);
   return (
     prompt +

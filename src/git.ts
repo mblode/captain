@@ -1,11 +1,45 @@
 import { existsSync } from "node:fs";
 import { mkdir, rmdir } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
 import { CliError } from "./errors";
 import { run, runRequired } from "./shell";
 import type { WorktreeResult } from "./types";
+
+// The absolute path to a repo's common git dir: `.git` for a normal checkout,
+// or the MAIN checkout's `.git` for a linked worktree (where the worktree's own
+// `.git` is a FILE, so appending `info/exclude` under it would ENOTDIR). Relative
+// `rev-parse` output is resolved against repoRoot; a git failure falls back to
+// `<repoRoot>/.git`.
+export const gitCommonDir = (
+  repoRoot: string,
+  env: NodeJS.ProcessEnv
+): string => {
+  const raw = run("git", ["-C", repoRoot, "rev-parse", "--git-common-dir"], {
+    env,
+  });
+  const commonDir =
+    raw.status === 0 ? raw.stdout.trim() : join(repoRoot, ".git");
+  return isAbsolute(commonDir) ? commonDir : join(repoRoot, commonDir);
+};
+
+// Short repo label for a worktree path: a linked worktree's --git-common-dir
+// resolves to the main checkout's .git, whose parent dir name is the repo
+// ("linkiq"). Fail-soft: any git failure (not a repo, fake test path) →
+// undefined, so the view never breaks on it.
+export const repoLabel = (
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined => {
+  const raw = run("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { env });
+  const common = raw.stdout.trim();
+  if (raw.status !== 0 || !common) {
+    return undefined;
+  }
+  const gitDir = isAbsolute(common) ? common : resolve(cwd, common);
+  return basename(dirname(gitDir)) || undefined;
+};
 
 interface EnsureWorktreeOptions {
   env: NodeJS.ProcessEnv;
@@ -239,21 +273,10 @@ export const ensureWorktree = async (
     fetchOrigin(options.repoRoot, options.env);
   }
 
-  const commonDirRaw = run(
-    "git",
-    ["-C", options.repoRoot, "rev-parse", "--git-common-dir"],
-    {
-      env: options.env,
-    }
+  const lockDir = join(
+    gitCommonDir(options.repoRoot, options.env),
+    ".linear-worktree.lock"
   );
-  const commonDir =
-    commonDirRaw.status === 0
-      ? commonDirRaw.stdout.trim()
-      : join(options.repoRoot, ".git");
-  const absoluteCommonDir = isAbsolute(commonDir)
-    ? commonDir
-    : join(options.repoRoot, commonDir);
-  const lockDir = join(absoluteCommonDir, ".linear-worktree.lock");
 
   await acquireLock(lockDir);
   try {

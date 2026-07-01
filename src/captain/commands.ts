@@ -13,10 +13,9 @@ import {
 import type { Style } from "./format";
 import { computeGain, parseSince } from "./gain";
 import { appendLog, now, readLog } from "./log";
-import { expectedRubricHash, fleetRows, readVerdict } from "./surface";
-import { verdictCounts } from "./verdict";
+import { fleetRows, readVerdict } from "./surface";
 import type { Verdict } from "./verdict";
-import { mergeOrderHints } from "./view";
+import { groupCounts, mergeOrderHints, ticketFrom } from "./view";
 import type { FleetRow } from "./view";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
@@ -84,11 +83,29 @@ export const resolveTargets = (
       push(exact);
       continue;
     }
-    // Otherwise a loose match (bare ticket or substring): unique → take it,
-    // colliding → refuse to guess and report the qualified names.
+    // A bare ticket ("tig-1") resolves by EXACT ticket, never a substring —
+    // otherwise `tig-1` would silently approve `tig-10` (and with both present,
+    // exact `tig-1` was wrongly refused as ambiguous). Unique → take it; the
+    // same ticket fanned into two repos → ambiguous, qualify with the repo.
+    if (ticketFrom(token) === token) {
+      const ticketHits = pool.filter((r) => r.ticket?.toLowerCase() === token);
+      if (ticketHits.length === 1) {
+        push(ticketHits[0]);
+      } else if (ticketHits.length > 1) {
+        ambiguous.push({
+          candidates: ticketHits.map((r) => r.name),
+          token: raw.trim(),
+        });
+      } else {
+        unknown.push(raw.trim());
+      }
+      continue;
+    }
+    // Otherwise a loose substring — a name fragment or a partial workspace id
+    // (not a ticket, so no `tig-1`/`tig-10` bleed): unique → take it, colliding
+    // → refuse to guess and report the qualified names.
     const loose = pool.filter(
       (r) =>
-        r.ticket?.toLowerCase() === token ||
         r.name.toLowerCase().includes(token) ||
         r.workspaceId.toLowerCase().includes(token)
     );
@@ -127,15 +144,6 @@ export interface StatusOptions {
   interval?: number;
 }
 
-// Group tallies over a row set — the compact summary's headline.
-const groupCounts = (
-  rows: FleetRow[]
-): { needsYou: number; inFlight: number; ready: number } => ({
-  inFlight: rows.filter((r) => r.group === "in-flight").length,
-  needsYou: rows.filter((r) => r.group === "needs-you").length,
-  ready: rows.filter((r) => r.group === "ready").length,
-});
-
 // Thin fs edge: the branch's changed files vs origin's default branch.
 // Fail-soft ([]): a missing origin/HEAD or a deleted worktree must never break
 // `status`.
@@ -159,6 +167,32 @@ const changedFiles = (cwd: string, env: NodeJS.ProcessEnv): string[] => {
   return diff.stdout.split("\n").filter(Boolean);
 };
 
+// Probe cmux BEFORE deriving anything: a dead daemon makes every list/feed call
+// fail soft to empty, which a driver would read as "all done". On an
+// unreachable daemon this writes a structured error with a dedicated exit code
+// and returns true so the caller bails, instead of rendering a phantom-empty
+// fleet. Shared by `status` and `gain`.
+const cmuxUnreachable = (
+  port: CmuxPort,
+  options: { json?: boolean },
+  out: NodeJS.WritableStream
+): boolean => {
+  if (port.reachable()) {
+    return false;
+  }
+  process.exitCode = EXIT.CMUX_UNREACHABLE;
+  const message =
+    "cmux is not reachable — is it running? run 'captain install'";
+  if (options.json) {
+    out.write(
+      `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
+    );
+  } else {
+    out.write(`${msg.err(styleFor(out), message)}\n`);
+  }
+  return true;
+};
+
 // The one read surface: the fleet view derived live from cmux + the worktrees,
 // grouped with the few that need a decision on top — each carrying its inline
 // resolve command. --repo/--needs/--ready narrow the view. One independent,
@@ -168,21 +202,7 @@ const statusOnce = (
   out: NodeJS.WritableStream,
   port: CmuxPort = realCmux(process.env)
 ): void => {
-  // Probe cmux BEFORE deriving rows: a dead daemon makes every list/feed call
-  // fail soft to empty, which a driver would read as "all done". Surface it as
-  // a structured error with a dedicated exit code instead of a phantom-empty
-  // fleet.
-  if (!port.reachable()) {
-    process.exitCode = EXIT.CMUX_UNREACHABLE;
-    const message =
-      "cmux is not reachable — is it running? run 'captain install'";
-    if (options.json) {
-      out.write(
-        `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
-      );
-      return;
-    }
-    out.write(`${msg.err(styleFor(out), message)}\n`);
+  if (cmuxUnreachable(port, options, out)) {
     return;
   }
   let rows = fleetRows(port);
@@ -355,51 +375,56 @@ export const reject = (
   options: { json?: boolean } = {}
 ): void => {
   const s = styleFor(out);
-  const { matched, ambiguous } = resolveTargets(planGated(port), ref);
-  const [row] = matched;
-  if (!row) {
-    // An ambiguous ref (a ticket shared across repos) gets the qualified names
-    // to retype — reject acts on exactly one worktree, so we never guess.
-    const [collision] = ambiguous;
-    if (collision) {
-      if (options.json) {
-        out.write(`${JSON.stringify({ ambiguous })}\n`);
-        return;
-      }
-      out.write(
-        `${msg.warn(s, `"${collision.token}" matches ${collision.candidates.length} worktrees — qualify it: ${collision.candidates.join(", ")}`)}\n`
-      );
-      return;
+  const { matched, ambiguous, unknown } = resolveTargets(planGated(port), ref);
+  // Reject every matched worktree (a repo label / comma list resolves to many),
+  // mirroring approve. Deliver the feedback FIRST (best-effort) per row: if we
+  // rejected first and the send then threw, the plan would be back in planning
+  // with the agent never told why. Sending first means a failed send still lets
+  // the rejection through — we flag the ones whose reason didn't land so the
+  // human can re-send them.
+  const rejected: string[] = [];
+  const undelivered: string[] = [];
+  for (const row of matched) {
+    let feedbackDelivered = true;
+    try {
+      port.send(row.workspaceId, `Plan rejected — revise it: ${note}`);
+    } catch {
+      feedbackDelivered = false;
     }
-    if (options.json) {
-      out.write(`${JSON.stringify({ unknown: [ref] })}\n`);
-      return;
+    port.replyExitPlan(row.gate?.id ?? "", false);
+    appendLog({ kind: "reject", name: row.name, note, ts: now() });
+    rejected.push(row.name);
+    if (!feedbackDelivered) {
+      undelivered.push(row.name);
     }
-    out.write(`${msg.warn(s, `no plan-ready worktree matches "${ref}"`)}\n`);
-    return;
   }
-  // Deliver the feedback FIRST (best-effort): if we rejected first and the send
-  // then threw, the plan would be back in planning with the agent never told
-  // why. Sending first means a failed send still lets the rejection through —
-  // we just flag that the reason didn't land so the human can re-send it.
-  let feedbackDelivered = true;
-  try {
-    port.send(row.workspaceId, `Plan rejected — revise it: ${note}`);
-  } catch {
-    feedbackDelivered = false;
-  }
-  port.replyExitPlan(row.gate?.id ?? "", false);
-  appendLog({ kind: "reject", name: row.name, note, ts: now() });
   if (options.json) {
     out.write(
-      `${JSON.stringify({ feedbackDelivered, note, rejected: row.name })}\n`
+      `${JSON.stringify({ ambiguous, note, rejected, undelivered, unknown })}\n`
     );
     return;
   }
-  out.write(`${s.yellow("↩")} ${s.bold(row.name)} back to planning: ${note}\n`);
-  if (!feedbackDelivered) {
+  // An ambiguous ref (a ticket shared across repos) gets the qualified names to
+  // retype; an unknown ref is reported too — every unresolved token, not just
+  // the first.
+  for (const a of ambiguous) {
     out.write(
-      `  ${msg.warn(s, `couldn't deliver the feedback to ${row.name} — re-send it manually`)}\n`
+      `  ${msg.warn(s, `"${a.token}" matches ${a.candidates.length} worktrees — qualify it: ${a.candidates.join(", ")}`)}\n`
+    );
+  }
+  for (const u of unknown) {
+    out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
+  }
+  if (rejected.length === 0) {
+    out.write(s.dim("nothing to reject.\n"));
+    return;
+  }
+  for (const name of rejected) {
+    out.write(`${s.yellow("↩")} ${s.bold(name)} back to planning: ${note}\n`);
+  }
+  for (const name of undelivered) {
+    out.write(
+      `  ${msg.warn(s, `couldn't deliver the feedback to ${name} — re-send it manually`)}\n`
     );
   }
   out.write(`${msg.hint(s, "next: captain status")}\n`);
@@ -413,17 +438,21 @@ export interface GainOptions {
   git?: boolean;
 }
 
-// Per-row valid verdicts (hash-checked against the rubric as it exists NOW, so
-// an edited rubric voids the verdict — same gate `status` applies). Most fleet
-// counts come straight off the rows; only criteria-level detail needs the raw
-// verdict re-read here.
+// Per-row valid verdicts for the criteria-level detail. `row.verdict` is only
+// set by rowOf when the on-disk verdict already passed the hash-check against
+// the rubric as it exists NOW, so the row itself is the validity gate — no need
+// to re-read the rubric and re-run verdictCounts here. We still read the raw
+// verdict for its criteria (the row carries only the pass/fail label).
 const validVerdicts = (
   rows: FleetRow[]
 ): { repo?: string; verdict: Verdict }[] => {
   const out: { repo?: string; verdict: Verdict }[] = [];
   for (const row of rows) {
+    if (!row.verdict) {
+      continue;
+    }
     const verdict = readVerdict(row.cwd);
-    if (verdict && verdictCounts(verdict, expectedRubricHash(row.cwd))) {
+    if (verdict) {
       out.push({ repo: row.repo, verdict });
     }
   }
@@ -477,17 +506,7 @@ export const gain = (
 ): void => {
   // Probe cmux first — same reason as `status`: a dead daemon fails every
   // list/feed call soft to empty, which would read as an honest "empty fleet".
-  if (!port.reachable()) {
-    process.exitCode = EXIT.CMUX_UNREACHABLE;
-    const message =
-      "cmux is not reachable — is it running? run 'captain install'";
-    if (options.json) {
-      out.write(
-        `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
-      );
-      return;
-    }
-    out.write(`${msg.err(styleFor(out), message)}\n`);
+  if (cmuxUnreachable(port, options, out)) {
     return;
   }
   const { env } = process;

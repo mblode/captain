@@ -63,7 +63,8 @@ export const ensureMemoryFile = (
 };
 
 // Pure: slice the excerpt out of the file content — all of `## Rules`, plus the
-// tail of `## Inbox` capped by entry count and bytes.
+// tail of `## Inbox` capped by entry count and character length (String.length
+// counts UTF-16 code units, not bytes).
 export const memoryExcerptOf = (content: string): string => {
   const inboxAt = content.indexOf(INBOX_HEADING);
   const rulesAt = content.indexOf(RULES_HEADING);

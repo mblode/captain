@@ -1,5 +1,5 @@
 import type { GainMetrics } from "./gain";
-import { nextCommand } from "./view";
+import { groupCounts, nextCommand } from "./view";
 import type { FleetRow, Group } from "./view";
 
 // ANSI styling that no-ops when output isn't a TTY or NO_COLOR is set, so piped
@@ -170,8 +170,7 @@ export const renderStatus = (
   const repoPad =
     repos.size > 1 ? Math.max(...[...repos].map((r) => r.length)) : 0;
   const width = Math.min(40, Math.max(...rows.map((r) => r.name.length), 8));
-  const needs = rows.filter((r) => r.group === "needs-you").length;
-  const ready = rows.filter((r) => r.group === "ready").length;
+  const { needsYou: needs, ready } = groupCounts(rows);
 
   const summary = [
     `${rows.length} worktrees`,
@@ -222,8 +221,7 @@ export const renderStatus = (
 // set so the counts stay honest; only needs-you rows are detailed.
 export const renderSummary = (rows: FleetRow[], s: Style): string => {
   const needs = rows.filter((r) => r.group === "needs-you");
-  const inFlight = rows.filter((r) => r.group === "in-flight").length;
-  const ready = rows.filter((r) => r.group === "ready").length;
+  const { inFlight, ready } = groupCounts(rows);
   const counts = [
     needs.length ? s.yellow(`${needs.length} need you`) : "",
     inFlight ? s.cyan(`${inFlight} in flight`) : "",

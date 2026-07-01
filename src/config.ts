@@ -29,6 +29,17 @@ const configPath = (env: NodeJS.ProcessEnv): string =>
     "config.json"
   );
 
+// Read and JSON-parse the config file, fail-safe to null on any error (missing
+// file, bad JSON) — the one filesystem edge both loaders share so their fallback
+// behaviour can never drift.
+const readConfig = (env: NodeJS.ProcessEnv): unknown => {
+  try {
+    return JSON.parse(readFileSync(configPath(env), "utf-8")) as unknown;
+  } catch {
+    return null;
+  }
+};
+
 // Trim, drop non-strings and empties — the one normalisation both the file's
 // `.skills` array and the CAPTAIN_SKILLS env list go through.
 const cleanList = (items: unknown[]): string[] =>
@@ -60,14 +71,7 @@ export const loadSkills = (env: NodeJS.ProcessEnv = process.env): string[] => {
     return fromEnv;
   }
 
-  try {
-    const parsed = JSON.parse(
-      readFileSync(configPath(env), "utf-8")
-    ) as unknown;
-    return parseSkills(parsed) ?? DEFAULT_SKILLS;
-  } catch {
-    return DEFAULT_SKILLS;
-  }
+  return parseSkills(readConfig(env)) ?? DEFAULT_SKILLS;
 };
 
 // Pure: pull a trimmed non-empty `.dataScope` string out of a parsed config
@@ -90,12 +94,5 @@ export const loadDataScope = (env: NodeJS.ProcessEnv = process.env): string => {
     return fromEnv;
   }
 
-  try {
-    const parsed = JSON.parse(
-      readFileSync(configPath(env), "utf-8")
-    ) as unknown;
-    return parseDataScope(parsed) ?? DEFAULT_DATA_SCOPE;
-  } catch {
-    return DEFAULT_DATA_SCOPE;
-  }
+  return parseDataScope(readConfig(env)) ?? DEFAULT_DATA_SCOPE;
 };

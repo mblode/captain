@@ -1,7 +1,14 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 type FetchLike = typeof fetch;
+
+// The shared scratch dir for a run's prompt file + downloaded screenshots, keyed
+// by display id. Rooted at the OS temp dir (honours TMPDIR) rather than a
+// hardcoded /tmp so it works wherever the platform puts temp files.
+export const worktreeTmpDir = (displayId: string): string =>
+  join(tmpdir(), "linear-worktree", displayId);
 
 export const extractImageUrls = (description: string): string[] => {
   const urls = new Set<string>();
@@ -114,7 +121,7 @@ export const downloadIssueImages = async (
     return [];
   }
 
-  const imageDir = join("/tmp", "linear-worktree", displayId);
+  const imageDir = worktreeTmpDir(displayId);
   await mkdir(imageDir, { recursive: true });
 
   const results = await Promise.all(

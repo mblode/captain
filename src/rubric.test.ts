@@ -57,6 +57,18 @@ describe("renderRubric", () => {
     );
   });
 
+  it("round-trips the hash when the description contains a ## Verdict line", () => {
+    // The description is embedded verbatim, so a `## Verdict` heading inside it
+    // must not truncate the hashed body (splitting on the last heading, not the
+    // first). Otherwise the worktree could never reach READY TO MERGE.
+    const withHeading: LinearIssue = {
+      ...issue,
+      description: "Intro\n\n## Verdict\n\nsome prose the ticket author wrote",
+    };
+    const { hash, text } = renderRubric(withHeading, "ENG-403");
+    expect(rubricHash(rubricBody(text))).toBe(hash);
+  });
+
   it("adds a data-scope criterion only when a guardrail is passed", () => {
     const without = renderRubric(issue, "ENG-403");
     const withScope = renderRubric(issue, "ENG-403", "no customer data");

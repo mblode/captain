@@ -19,10 +19,14 @@ export const rubricHash = (body: string): string =>
   createHash("sha256").update(body).digest("hex").slice(0, 16);
 
 // The hashable prefix of a full rubric text (everything above `## Verdict`).
-// Returns the whole text when the heading is missing (a hand-written rubric);
-// hashing is then over the full file, which is still a stable identity.
+// Splits on the LAST `## Verdict` (the real heading is always last — the fixed
+// tail contains no `\n## Verdict\n`): the embedded issue description is verbatim
+// and may itself contain a `## Verdict` line, and splitting on the first would
+// truncate the hashed prefix → a permanent hash mismatch. Returns the whole text
+// when the heading is missing (a hand-written rubric); hashing is then over the
+// full file, which is still a stable identity.
 export const rubricBody = (text: string): string => {
-  const i = text.indexOf(VERDICT_HEADING);
+  const i = text.lastIndexOf(VERDICT_HEADING);
   return i === -1 ? text : text.slice(0, i);
 };
 

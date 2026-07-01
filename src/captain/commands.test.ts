@@ -23,6 +23,7 @@ const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
   group: "needs-you",
   name: "frontyard-tig-430",
   run: "idle",
+  ticket: "tig-430",
   workspaceId: "ws-uuid-aaa",
   ...over,
 });
@@ -30,7 +31,11 @@ const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
 describe("resolveTargets", () => {
   const pool = [
     fleetRow(),
-    fleetRow({ name: "frontyard-tig-431", workspaceId: "ws-uuid-bbb" }),
+    fleetRow({
+      name: "frontyard-tig-431",
+      ticket: "tig-431",
+      workspaceId: "ws-uuid-bbb",
+    }),
   ];
 
   it('"all" returns the whole pool', () => {
@@ -65,6 +70,40 @@ describe("resolveTargets", () => {
   it("a repo label matches the whole repo's batch", () => {
     const tagged = pool.map((r) => ({ ...r, repo: "frontyard" }));
     expect(resolveTargets(tagged, "frontyard").matched).toHaveLength(2);
+  });
+
+  // A bare ticket resolves by EXACT ticket, never a substring — `tig-1` must
+  // not bleed into `tig-10`, in either direction.
+  it("an exact ticket never substring-matches a longer ticket (tig-1 ≠ tig-10)", () => {
+    const only10 = [
+      fleetRow({
+        name: "frontyard-tig-10",
+        ticket: "tig-10",
+        workspaceId: "ws-uuid-c10",
+      }),
+    ];
+    const { matched, unknown } = resolveTargets(only10, "tig-1");
+    expect(matched).toHaveLength(0);
+    expect(unknown).toEqual(["tig-1"]);
+  });
+
+  it("with both tig-1 and tig-10 present, tig-1 resolves to exactly tig-1", () => {
+    const both = [
+      fleetRow({
+        name: "frontyard-tig-1",
+        ticket: "tig-1",
+        workspaceId: "ws-uuid-c1",
+      }),
+      fleetRow({
+        name: "frontyard-tig-10",
+        ticket: "tig-10",
+        workspaceId: "ws-uuid-c10",
+      }),
+    ];
+    const { matched, ambiguous, unknown } = resolveTargets(both, "tig-1");
+    expect(matched.map((r) => r.name)).toEqual(["frontyard-tig-1"]);
+    expect(ambiguous).toEqual([]);
+    expect(unknown).toEqual([]);
   });
 
   // One ticket fanned into two repos — the cross-repo case captain must handle
@@ -278,6 +317,40 @@ describe("stateless approve/reject/status over the real surface", () => {
     ]);
   });
 
+  it("reject acts on EVERY matched worktree, not just the first", () => {
+    const a = worktree("tig-430");
+    const b = worktree("tig-431");
+    const port = fakePort(
+      [
+        { cwd: a, id: "ws-1", name: "tig-430", ref: "r" },
+        { cwd: b, id: "ws-2", name: "tig-431", ref: "r" },
+      ],
+      [
+        { cwd: a, id: "feed-1", kind: "exitPlan", status: "pending" },
+        { cwd: b, id: "feed-2", kind: "exitPlan", status: "pending" },
+      ]
+    );
+    const { out, text } = capture();
+    reject("all", "rethink it", out, port, { json: true });
+    // both plan gates replied false, both got the feedback typed in
+    expect(port.replies.map((r) => r.id).toSorted()).toEqual([
+      "feed-1",
+      "feed-2",
+    ]);
+    expect(port.sent.map((sent) => sent.workspaceId).toSorted()).toEqual([
+      "ws-1",
+      "ws-2",
+    ]);
+    const parsed = JSON.parse(text()) as { rejected: string[] };
+    expect(parsed.rejected.toSorted()).toEqual(["tig-430", "tig-431"]);
+    // both decisions land in the log, not just the first
+    const log = readFileSync(join(root, "home", "log.jsonl"), "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { kind: string });
+    expect(log.filter((entry) => entry.kind === "reject")).toHaveLength(2);
+  });
+
   it("status derives groups live: gate, verdict pass, and in flight", () => {
     const gated = worktree("tig-430");
     const ready = worktree("tig-431", { prUrl: "https://x/pr/1" });
@@ -416,13 +489,21 @@ describe("stateless approve/reject/status over the real surface", () => {
     const ok = capture();
     reject("tig-430", "split it", ok.out, port, { json: true });
     expect(JSON.parse(ok.text())).toEqual({
-      feedbackDelivered: true,
+      ambiguous: [],
       note: "split it",
-      rejected: "tig-430",
+      rejected: ["tig-430"],
+      undelivered: [],
+      unknown: [],
     });
     const miss = capture();
     reject("tig-999", "n/a", miss.out, port, { json: true });
-    expect(JSON.parse(miss.text())).toEqual({ unknown: ["tig-999"] });
+    expect(JSON.parse(miss.text())).toEqual({
+      ambiguous: [],
+      note: "n/a",
+      rejected: [],
+      undelivered: [],
+      unknown: ["tig-999"],
+    });
   });
 
   it("reject still replies false when the feedback send fails, flagging it", () => {
@@ -437,9 +518,11 @@ describe("stateless approve/reject/status over the real surface", () => {
     // The rejection still went through even though the feedback didn't land.
     expect(port.replies).toEqual([{ approve: false, id: "feed-1" }]);
     expect(JSON.parse(text())).toEqual({
-      feedbackDelivered: false,
+      ambiguous: [],
       note: "split it",
-      rejected: "tig-430",
+      rejected: ["tig-430"],
+      undelivered: ["tig-430"],
+      unknown: [],
     });
   });
 
