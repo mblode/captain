@@ -39,7 +39,7 @@ carries the whole pipeline (plan → implement → the configured skills → ver
 verdict); Captain keeps no state — status is derived live from cmux and the
 worktrees. You only make the gated decisions: approve plans, answer questions,
 merge. Configure the skills in ~/.config/captain/config.json (.skills) or with
-CAPTAIN_SKILLS=/simplify,/pr-creator.
+CAPTAIN_SKILLS=/tidy,/pr-creator.
 Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
   );
 

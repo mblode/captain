@@ -88,9 +88,9 @@ describe("buildChecks", () => {
   });
 
   it("omits the pipeline-skills check when the pipeline runs none", () => {
-    // /simplify ships with Claude Code, so a simplify-only pipeline has no
-    // installable skills to probe — the check is dropped, not shown as ok.
-    const checks = buildChecks(deps({ configuredSkills: ["simplify"] }));
+    // /tidy isn't fetched through the pipeline bundle, so a tidy-only pipeline
+    // has no installable skills to probe — the check is dropped, not shown as ok.
+    const checks = buildChecks(deps({ configuredSkills: ["tidy"] }));
     expect(checks.map((c) => c.label)).not.toContain("pipeline skills");
   });
 });

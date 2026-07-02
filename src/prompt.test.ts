@@ -59,12 +59,7 @@ describe("prompt extras", () => {
   it("renders the self-drive workflow with the full pipeline in order", () => {
     const out = renderPromptExtras({ workflow: true });
     expect(out).toContain("<workflow>");
-    const steps = [
-      "/simplify",
-      "/pr-reviewer",
-      "/pr-creator",
-      "/pr-babysitter",
-    ];
+    const steps = ["/tidy", "/pr-reviewer", "/pr-creator", "/pr-babysitter"];
     let last = -1;
     for (const step of steps) {
       const at = out.indexOf(step);
@@ -77,11 +72,11 @@ describe("prompt extras", () => {
 
   it("renders the configured skills in order between implement and finish", () => {
     const out = renderPromptExtras({
-      skills: ["/simplify", "/pr-creator"],
+      skills: ["/tidy", "/pr-creator"],
       workflow: true,
     });
     expect(out).toContain("2. Once the plan is approved, implement it.");
-    expect(out).toContain("3. Run /simplify.");
+    expect(out).toContain("3. Run /tidy.");
     expect(out).toContain("4. Run /pr-creator.");
     expect(out).toContain(
       "5. Finish with the finishing protocol below (verifier + verdict)."

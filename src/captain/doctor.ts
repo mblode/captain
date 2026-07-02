@@ -40,7 +40,7 @@ export interface DoctorDeps {
 // The skills `captain install` can fetch from mblode/agent-skills. The doctor
 // only nags about the ones the configured brief actually runs, so a custom
 // pipeline (CAPTAIN_SKILLS / config) isn't warned about skills it doesn't use.
-// (/simplify ships with Claude Code itself, so it's never in this set.)
+// (/tidy runs first but isn't fetched through this bundle, so it's not here.)
 const INSTALLABLE_SKILLS = ["pr-reviewer", "pr-creator", "pr-babysitter"];
 
 const PIPELINE_BUNDLE = "mblode/agent-skills";
@@ -91,7 +91,7 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
 
   // Only the installable skills the configured pipeline actually runs — a custom
   // pipeline isn't nagged about skills it doesn't use, and one that runs none
-  // (e.g. /simplify only) skips the check entirely.
+  // (e.g. /tidy only) skips the check entirely.
   const pipelineSkills = INSTALLABLE_SKILLS.filter((skill) =>
     deps.configuredSkills.includes(skill)
   );

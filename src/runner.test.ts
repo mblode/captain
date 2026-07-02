@@ -501,7 +501,7 @@ describe("runDispatch (non-Linear, current dir)", () => {
 
     const status = await runDispatch({
       cwd: repo,
-      env: { ...safeEnv(), CAPTAIN_SKILLS: "/simplify,/pr-creator" },
+      env: { ...safeEnv(), CAPTAIN_SKILLS: "/tidy,/pr-creator" },
       print: true,
       stdout: output.stream,
       task: "tidy the README",
@@ -516,7 +516,7 @@ describe("runDispatch (non-Linear, current dir)", () => {
     ).toContain(".captain/");
     // The brief carries the task text, the configured skills, and the loops.
     expect(output.value()).toContain("Task:\n\ntidy the README");
-    expect(output.value()).toContain("Run /simplify.");
+    expect(output.value()).toContain("Run /tidy.");
     expect(output.value()).toContain("Run /pr-creator.");
     expect(output.value()).toContain("<finishing-protocol>");
     expect(output.value()).toContain("<fleet-memory>");

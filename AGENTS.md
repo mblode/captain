@@ -53,7 +53,7 @@ same brief: the `<workflow>` pipeline (plan → implement → the configured ski
 finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
 `loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
 config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
-`.skills` > the default `/simplify` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`); plan,
+`.skills` > the default `/tidy` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`); plan,
 implement, and the verdict finish stay fixed because `status` derives from them. The agent
 self-drives; nothing external types commands into it.
 

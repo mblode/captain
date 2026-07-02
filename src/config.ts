@@ -6,7 +6,7 @@ import { join } from "node:path";
 // and the *verifier/verdict finish*. Configurable so a setup can run its own
 // review/ship skills; this is the fallback when no config is present.
 export const DEFAULT_SKILLS = [
-  "/simplify",
+  "/tidy",
   "/pr-reviewer",
   "/pr-creator",
   "/pr-babysitter",

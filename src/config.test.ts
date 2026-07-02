@@ -49,9 +49,9 @@ describe("loadSkills precedence", () => {
   });
 
   it("reads the config file when no env override is set", () => {
-    const path = writeConfig('{"skills":["/simplify","/pr-creator"]}');
+    const path = writeConfig('{"skills":["/tidy","/pr-creator"]}');
     expect(loadSkills({ CAPTAIN_CONFIG: path })).toEqual([
-      "/simplify",
+      "/tidy",
       "/pr-creator",
     ]);
   });

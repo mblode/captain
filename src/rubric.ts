@@ -46,7 +46,7 @@ const criteriaFor = (
     }
   }
   criteria.push(
-    "Tests cover the changed behaviour, and the repo's test command passes.",
+    "The repo's test command passes. Add tests only where the change genuinely warrants coverage — do not add tests for trivial copy/label/config changes.",
     "The repo's typecheck and lint commands pass.",
     `A PR is open with "${displayId}" in the title and a description that matches the diff.`
   );
