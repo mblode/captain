@@ -1,6 +1,6 @@
 ---
 name: captain
-description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. `captain start` gives each agent a brief carrying the whole pipeline (plan → implement → /simplify → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict) and the agent drives it itself; `captain status` derives NEEDS YOU / IN FLIGHT / READY live from cmux signals and verdict files — no daemon, no state. Use when asked to "conduct my fleet", "fan out these tickets", "what's blocked across my agents", "approve all the plans", "show me the plans", "what's ready to merge", or "start the captain".
+description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. `captain start` gives each agent a brief carrying the whole pipeline (plan → implement → /tidy → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict) and the agent drives it itself; `captain status` derives NEEDS YOU / IN FLIGHT / READY live from cmux signals and verdict files — no daemon, no state. Use when asked to "conduct my fleet", "fan out these tickets", "what's blocked across my agents", "approve all the plans", "show me the plans", "what's ready to merge", or "start the captain".
 ---
 
 # Captain
@@ -8,7 +8,7 @@ description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and
 **IS:** conducting a fleet via the `captain` CLI — fan out Linear tickets, poll `captain status`,
 batch plan approvals and off-script questions into human decisions, nudge stalled agents, distill
 fleet memory. **IS NOT:** typing low-level cmux verbs by hand (use [`cmux`](../cmux/SKILL.md)) or
-running any pipeline step yourself — the agent self-drives plan → implement → `/simplify` →
+running any pipeline step yourself — the agent self-drives plan → implement → `/tidy` →
 `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verdict. The driver is a long-lived Claude Code
 session, not a human at a keyboard; Captain keeps **no state** (`status` derives live from cmux +
 each worktree's `.captain/`).
@@ -31,7 +31,8 @@ each worktree's `.captain/`).
 ## Setup
 
 1. **Prereqs:** `captain install` adds the pipeline skills (`/pr-reviewer`, `/pr-creator`,
-   `/pr-babysitter` from `mblode/agent-skills`; `/simplify` ships with Claude Code) and checks node,
+   `/pr-babysitter` from `mblode/agent-skills`; `/tidy` lives there too but isn't fetched by
+   `captain install`) and checks node,
    git, claude, cmux, `LINEAR_API_KEY`. If the CLI is missing: `npm i -g cmux-captain`, or
    `npm run build && npm link` from a checkout.
 2. **Route each ticket semantically.** Your cwd is almost never the ticket's repo, and **nothing
