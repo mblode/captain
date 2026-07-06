@@ -108,6 +108,12 @@ per wake, not per gate.
 - **Workspace ids, not names** — `status` prints the right `cmux` command per row; copy it.
 - **Never close an apparent duplicate workspace** — it's likely a group anchor (closing ungroups the
   fleet); a real duplicate means a stale binary, so rebuild instead.
+- **Fleet-scale test runs can exhaust the machine.** N agents each spawning an uncapped jest/vitest
+  worker pool (default = cores − 1, ts-jest workers grow to 2–3.6GB each) has pushed memory past
+  100GB on a 48GB machine and triggered kernel jetsam kills of the whole fleet (Jul 6 incident:
+  three concurrent `yarn test` runs ≈ 40 workers). Briefs now tell agents to bound workers; if a
+  repo's suite is uncapped, prefer capping it in the repo's jest config (`maxWorkers`,
+  `workerIdleMemoryLimit`).
 
 ## Reference
 
