@@ -18,6 +18,19 @@ export const DEFAULT_SKILLS = [
 export const DEFAULT_DATA_SCOPE =
   "Operate on source code, configuration, tests, and documentation in this repository only. Do not access, read, log, exfiltrate, or commit customer data, production secrets, credentials, payment information, or PII. If a task appears to require any of these, stop and surface the blocker via AskUserQuestion instead of proceeding.";
 
+// Env injected into every fleet agent's claude process — and therefore every
+// Bash tool it runs. Defaults cap what test runners respect via env (vitest's
+// thread/fork pools): N agents each spawning an uncapped worker pool has
+// exhausted a 48GB machine and gotten the whole fleet jetsam-killed. Jest
+// ignores env for worker count, so the brief + a repo-level maxWorkers cap
+// cover it (see uncappedJestNote). Extend or override via config `.agentEnv`
+// (a string map — e.g. {"NODE_OPTIONS": "--max-old-space-size=3072"}); set a
+// key to "" to drop a default.
+export const DEFAULT_AGENT_ENV: Record<string, string> = {
+  VITEST_MAX_FORKS: "2",
+  VITEST_MAX_THREADS: "2",
+};
+
 // The model + effort every fleet agent launches on (claude `--model`/`--effort`).
 // Pinned so an agent never inherits the driver's ambient model/effort (a driver on
 // a cheap/fast model would silently spawn the whole fleet on it). `default` resolves
@@ -115,6 +128,40 @@ export const parseDataScope = (raw: unknown): string | null =>
 // degrades to the default — never throws. The guardrail is on by default.
 export const loadDataScope = (env: NodeJS.ProcessEnv = process.env): string =>
   loadStringSetting(env, "CAPTAIN_DATA_SCOPE", "dataScope", DEFAULT_DATA_SCOPE);
+
+// A key must be a valid shell/env identifier — these land verbatim in the
+// workspace launch command, so anything else is dropped rather than quoted.
+const isEnvKey = (key: string): boolean =>
+  /^[A-Za-z_][A-Za-z0-9_]*$/u.test(key);
+
+// Pure: pull a string→string map out of a parsed config's `.agentEnv`, else
+// null (so callers fall back). Non-string values and invalid keys are dropped.
+export const parseAgentEnv = (raw: unknown): Record<string, string> | null => {
+  const agentEnv = (raw as { agentEnv?: unknown } | null)?.agentEnv;
+  if (typeof agentEnv !== "object" || agentEnv === null) {
+    return null;
+  }
+  const entries = Object.entries(agentEnv).filter(
+    (pair): pair is [string, string] =>
+      isEnvKey(pair[0]) && typeof pair[1] === "string"
+  );
+  return Object.fromEntries(entries);
+};
+
+// Resolve the agent env, fail-safe: defaults merged with the config file's
+// `.agentEnv` (config wins per key; an empty value drops the key entirely).
+// Any read/parse error degrades to the defaults — never throws.
+export const loadAgentEnv = (
+  env: NodeJS.ProcessEnv = process.env
+): Record<string, string> => {
+  const merged = {
+    ...DEFAULT_AGENT_ENV,
+    ...parseAgentEnv(readConfig(env)),
+  };
+  return Object.fromEntries(
+    Object.entries(merged).filter(([, value]) => value !== "")
+  );
+};
 
 // Resolve the fleet model, fail-safe: env override (CAPTAIN_MODEL, trimmed) >
 // config file `.model` > DEFAULT_MODEL. Passed to claude as `--model`.

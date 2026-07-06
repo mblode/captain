@@ -111,9 +111,12 @@ per wake, not per gate.
 - **Fleet-scale test runs can exhaust the machine.** N agents each spawning an uncapped jest/vitest
   worker pool (default = cores − 1, ts-jest workers grow to 2–3.6GB each) has pushed memory past
   100GB on a 48GB machine and triggered kernel jetsam kills of the whole fleet (Jul 6 incident:
-  three concurrent `yarn test` runs ≈ 40 workers). Briefs now tell agents to bound workers; if a
-  repo's suite is uncapped, prefer capping it in the repo's jest config (`maxWorkers`,
-  `workerIdleMemoryLimit`).
+  three concurrent `yarn test` runs ≈ 40 workers). Three layers of defence: every agent launches
+  with `VITEST_MAX_THREADS/FORKS=2` in its env (extend via config `.agentEnv`, e.g.
+  `{"NODE_OPTIONS": "--max-old-space-size=3072"}`), briefs tell agents to pass `--maxWorkers=2`,
+  and fan-out prints a note when the target repo's jest config has no `maxWorkers` cap — jest
+  ignores env, so an uncapped repo config is the remaining hole: cap it in the repo
+  (`maxWorkers` + `workerIdleMemoryLimit`).
 
 ## Reference
 

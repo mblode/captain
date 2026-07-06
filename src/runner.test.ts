@@ -19,6 +19,7 @@ import {
   runDispatch,
   runLinearWorktree,
   runStart,
+  uncappedJestNote,
 } from "./runner";
 import { runRequired } from "./shell";
 
@@ -627,5 +628,40 @@ describe("collapsedWorktreeNotes", () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain("chat-tig-488");
     expect(notes[0]).toContain("captain fanout TIG-488");
+  });
+});
+
+describe("uncappedJestNote", () => {
+  const makeCheckout = async (): Promise<string> => {
+    const dir = await mkdtemp(join(tmpdir(), "lw-test-jest-"));
+    cleanup.push(dir);
+    return dir;
+  };
+
+  it("stays silent when the checkout has no jest config", async () => {
+    expect(uncappedJestNote(await makeCheckout())).toBeNull();
+  });
+
+  it("warns when a root jest config sets no maxWorkers", async () => {
+    const dir = await makeCheckout();
+    await writeFile(join(dir, "jest.config.js"), "module.exports = {}");
+    expect(uncappedJestNote(dir)).toContain("jest.config.js");
+    expect(uncappedJestNote(dir)).toContain("maxWorkers");
+  });
+
+  it("finds an uncapped config one level down in src/", async () => {
+    const dir = await makeCheckout();
+    await mkdir(join(dir, "src"));
+    await writeFile(join(dir, "src", "jest.config.js"), "module.exports = {}");
+    expect(uncappedJestNote(dir)).toContain("src/jest.config.js");
+  });
+
+  it("stays silent when the config caps maxWorkers", async () => {
+    const dir = await makeCheckout();
+    await writeFile(
+      join(dir, "jest.config.js"),
+      "module.exports = { maxWorkers: '25%' }"
+    );
+    expect(uncappedJestNote(dir)).toBeNull();
   });
 });

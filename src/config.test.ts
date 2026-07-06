@@ -5,14 +5,17 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_AGENT_ENV,
   DEFAULT_DATA_SCOPE,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_SKILLS,
+  loadAgentEnv,
   loadDataScope,
   loadEffort,
   loadModel,
   loadSkills,
+  parseAgentEnv,
   parseDataScope,
   parseSkills,
 } from "./config";
@@ -170,5 +173,56 @@ describe("loadEffort precedence", () => {
     expect(loadEffort({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
       DEFAULT_EFFORT
     );
+  });
+});
+
+describe("parseAgentEnv", () => {
+  it("returns a string map, dropping non-string values and invalid keys", () => {
+    expect(
+      parseAgentEnv({
+        agentEnv: {
+          "BAD-KEY": "x",
+          COUNT: 3,
+          NODE_OPTIONS: "--max-old-space-size=3072",
+        },
+      })
+    ).toEqual({ NODE_OPTIONS: "--max-old-space-size=3072" });
+  });
+
+  it("returns null for a missing or non-object agentEnv", () => {
+    expect(parseAgentEnv({})).toBeNull();
+    expect(parseAgentEnv({ agentEnv: "NODE_OPTIONS=x" })).toBeNull();
+    expect(parseAgentEnv(null)).toBeNull();
+  });
+});
+
+describe("loadAgentEnv", () => {
+  it("returns the vitest caps by default", () => {
+    expect(loadAgentEnv({ CAPTAIN_CONFIG: "/no/such/config.json" })).toEqual(
+      DEFAULT_AGENT_ENV
+    );
+  });
+
+  it("merges config entries over the defaults", () => {
+    const path = writeConfig(
+      '{"agentEnv":{"VITEST_MAX_THREADS":"4","NODE_OPTIONS":"--max-old-space-size=3072"}}'
+    );
+    expect(loadAgentEnv({ CAPTAIN_CONFIG: path })).toEqual({
+      NODE_OPTIONS: "--max-old-space-size=3072",
+      VITEST_MAX_FORKS: "2",
+      VITEST_MAX_THREADS: "4",
+    });
+  });
+
+  it("drops a default when the config sets it to an empty string", () => {
+    const path = writeConfig('{"agentEnv":{"VITEST_MAX_FORKS":""}}');
+    expect(loadAgentEnv({ CAPTAIN_CONFIG: path })).toEqual({
+      VITEST_MAX_THREADS: "2",
+    });
+  });
+
+  it("degrades to the defaults on unparseable config", () => {
+    const path = writeConfig("not json");
+    expect(loadAgentEnv({ CAPTAIN_CONFIG: path })).toEqual(DEFAULT_AGENT_ENV);
   });
 });

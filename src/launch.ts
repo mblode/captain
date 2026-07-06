@@ -1,4 +1,4 @@
-import { loadEffort, loadModel } from "./config";
+import { loadAgentEnv, loadEffort, loadModel } from "./config";
 import { CliError } from "./errors";
 import { commandExists, run } from "./shell";
 
@@ -42,7 +42,9 @@ export const launchPlanMode = (
       prompt,
     ],
     {
-      env,
+      // Same resource caps as the cmux launch path (see claudeCommand) — the
+      // inline fallback must not be the one door the fleet env misses.
+      env: { ...env, ...loadAgentEnv(env) },
       stdio: "inherit",
     }
   );

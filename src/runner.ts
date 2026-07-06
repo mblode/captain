@@ -111,6 +111,41 @@ export const collapsedWorktreeNotes = (
     );
 };
 
+// jest sizes its default worker pool from the machine (cores - 1) and reads
+// caps only from its own config/CLI — nothing captain injects into the agent
+// env can bound it (unlike vitest, see DEFAULT_AGENT_ENV). So warn at launch
+// when the target checkout's jest config is uncapped: N fleet agents each
+// spawning a full pool of multi-GB ts-jest workers is exactly what exhausted
+// a 48GB machine on 2026-07-06. Config files only (a package.json `jest` block
+// is rare enough to skip); missing/unreadable files fail safe to no note.
+const JEST_CONFIG_DIRS = [".", "src"];
+const JEST_CONFIG_NAMES = [
+  "jest.config.js",
+  "jest.config.cjs",
+  "jest.config.mjs",
+  "jest.config.ts",
+  "jest.config.json",
+];
+
+export const uncappedJestNote = (checkoutPath: string): string | null => {
+  for (const dir of JEST_CONFIG_DIRS) {
+    for (const name of JEST_CONFIG_NAMES) {
+      const rel = dir === "." ? name : join(dir, name);
+      let text: string;
+      try {
+        text = readFileSync(join(checkoutPath, rel), "utf-8");
+      } catch {
+        continue;
+      }
+      if (text.includes("maxWorkers")) {
+        return null;
+      }
+      return `note: ${rel} has no maxWorkers cap — concurrent fleet test runs can exhaust memory. Cap it in the repo (maxWorkers + workerIdleMemoryLimit); the brief tells agents to pass --maxWorkers=2 meanwhile`;
+    }
+  }
+  return null;
+};
+
 const readStdinTokens = (): string[] => {
   if (process.stdin.isTTY) {
     return [];
@@ -401,6 +436,11 @@ const dispatch = async ({
     stdout.write(
       `spawned ${tokens.length} workspaces — each agent drives its own pipeline to PR-ready\n`
     );
+    // All tokens in one invocation share a repo, so one worktree speaks for all.
+    const jestNote = worktreePaths[0] && uncappedJestNote(worktreePaths[0]);
+    if (jestNote) {
+      stdout.write(`  ${jestNote}\n`);
+    }
     for (const note of collapsedWorktreeNotes(worktreePaths, workspaces)) {
       stdout.write(`  ${note}\n`);
     }
@@ -435,6 +475,11 @@ const dispatch = async ({
     return 0;
   }
 
+  const singleJestNote =
+    !options.json && uncappedJestNote(prepared.worktree.worktreePath);
+  if (singleJestNote) {
+    stdout.write(`  ${singleJestNote}\n`);
+  }
   return launchOrFallback(targetOf(prepared, progress, env), stdout, {
     branch: prepared.worktree.branch,
     cwd: prepared.worktree.worktreePath,
@@ -537,6 +582,10 @@ export const runDispatch = async (
       return 0;
     }
 
+    const dispatchJestNote = !options.json && uncappedJestNote(repo.repoRoot);
+    if (dispatchJestNote) {
+      stdout.write(`  ${dispatchJestNote}\n`);
+    }
     return launchOrFallback(
       {
         cwd: repo.repoRoot,
