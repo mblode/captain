@@ -44,7 +44,9 @@ each worktree's `.captain/`).
    (one worktree + workspace + self-driving agent each). A non-Linear arg starts a free-form task in
    the current checkout. `--base <ref>` stacks on a prerequisite branch; `--print` previews. Confirm
    each `started[].cwd` (`--json`) before approving any plan — a worktree in the wrong repo can never
-   pass its rubric.
+   pass its rubric. Each agent launches on a **pinned model + effort** (default `default` / `high`,
+   where `default` = the machine's configured default model), so it never inherits your driver's
+   tier — override per fleet with `CAPTAIN_MODEL` / `CAPTAIN_EFFORT` (or config `.model` / `.effort`).
 4. **Arm the heartbeat** — the driver re-invokes itself on a timer (no daemon, no foreground pane;
    each wake re-derives status fresh). Take the first available rung; never skip a missing rung to
    "ask the human to ping me":
@@ -99,8 +101,10 @@ per wake, not per gate.
 - **`cmux send` can silently no-op** (text parked unsubmitted while `status` still reads "working")
   — follow every send with `cmux send-key --workspace <id> enter` and re-read the screen.
 - **Verify run-state right after launch** — a launch race leaves a workspace at an empty shell
-  (`run=unknown`); relaunch from `/tmp/linear-worktree/<TICKET>/prompt.txt`, and run `captain start`
-  in the **foreground** (backgrounding has returned no workspace + a half-made worktree).
+  (`run=unknown`); relaunch from `/tmp/linear-worktree/<TICKET>/prompt.txt` (match captain's pinned
+  tier: `claude --model default --effort high --permission-mode plan --allow-dangerously-skip-permissions
+"$(cat …/prompt.txt)"`), and run `captain start` in the **foreground** (backgrounding has returned
+  no workspace + a half-made worktree).
 - **Workspace ids, not names** — `status` prints the right `cmux` command per row; copy it.
 - **Never close an apparent duplicate workspace** — it's likely a group anchor (closing ungroups the
   fleet); a real duplicate means a stale binary, so rebuild instead.

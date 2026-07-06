@@ -57,6 +57,15 @@ config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/capta
 implement, and the verdict finish stay fixed because `status` derives from them. The agent
 self-drives; nothing external types commands into it.
 
+Every launch pins the agent's **model + effort** so it never inherits the driver's ambient tier
+(a driver on a cheap/fast model would otherwise fan the whole fleet onto it). Both launch paths —
+`claudeCommand` (`cmux.ts`, the fan-out `--command`) and `launchPlanMode` (`launch.ts`, the inline
+fallback) — pass `--model`/`--effort` from `loadModel`/`loadEffort` (`config.ts`: `CAPTAIN_MODEL`/
+`CAPTAIN_EFFORT` env > config `.model`/`.effort` > `DEFAULT_MODEL` `default` / `DEFAULT_EFFORT`
+`high`, fail-safe like the rest). `default` resolves to the machine's configured default model.
+`cmux.ts` shell-quotes the model because a full id can carry glob metacharacters (the `[1m]` in
+`claude-opus-4-8[1m]`); the inline path passes it as a discrete argv element, so no quoting.
+
 For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot) — one such
 dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.md`/`verdict.json`.
 The rubric degrades gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed
@@ -171,7 +180,9 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
 `LINEAR_API_KEY` (issue fetch + screenshots) · `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
 skills, overrides the config file) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
-`CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
+`CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default
+`high`) · `CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
-`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string).
+`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string),
+`.model` (string), `.effort` (string).

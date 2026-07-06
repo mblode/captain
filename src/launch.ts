@@ -1,3 +1,4 @@
+import { loadEffort, loadModel } from "./config";
 import { CliError } from "./errors";
 import { commandExists, run } from "./shell";
 
@@ -31,6 +32,10 @@ export const launchPlanMode = (
   const result = run(
     "claude",
     [
+      "--model",
+      loadModel(env),
+      "--effort",
+      loadEffort(env),
       "--permission-mode",
       "plan",
       "--allow-dangerously-skip-permissions",

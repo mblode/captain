@@ -6,8 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DEFAULT_DATA_SCOPE,
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
   DEFAULT_SKILLS,
   loadDataScope,
+  loadEffort,
+  loadModel,
   loadSkills,
   parseDataScope,
   parseSkills,
@@ -120,5 +124,51 @@ describe("loadDataScope precedence", () => {
     expect(
       loadDataScope({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })
     ).toBe(DEFAULT_DATA_SCOPE);
+  });
+});
+
+describe("loadModel precedence", () => {
+  it("prefers CAPTAIN_MODEL over the config file", () => {
+    const path = writeConfig('{"model":"sonnet"}');
+    expect(loadModel({ CAPTAIN_CONFIG: path, CAPTAIN_MODEL: "  opus  " })).toBe(
+      "opus"
+    );
+  });
+
+  it("reads the config file when no env override is set", () => {
+    const path = writeConfig('{"model":"claude-opus-4-8[1m]"}');
+    expect(loadModel({ CAPTAIN_CONFIG: path })).toBe("claude-opus-4-8[1m]");
+  });
+
+  it("falls back to the default on an empty or missing model", () => {
+    expect(loadModel({ CAPTAIN_CONFIG: writeConfig('{"model":"  "}') })).toBe(
+      DEFAULT_MODEL
+    );
+    expect(loadModel({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
+      DEFAULT_MODEL
+    );
+  });
+});
+
+describe("loadEffort precedence", () => {
+  it("prefers CAPTAIN_EFFORT over the config file", () => {
+    const path = writeConfig('{"effort":"medium"}');
+    expect(
+      loadEffort({ CAPTAIN_CONFIG: path, CAPTAIN_EFFORT: "  xhigh  " })
+    ).toBe("xhigh");
+  });
+
+  it("reads the config file when no env override is set", () => {
+    const path = writeConfig('{"effort":"max"}');
+    expect(loadEffort({ CAPTAIN_CONFIG: path })).toBe("max");
+  });
+
+  it("falls back to the default on an empty or missing effort", () => {
+    expect(loadEffort({ CAPTAIN_CONFIG: writeConfig('{"effort":""}') })).toBe(
+      DEFAULT_EFFORT
+    );
+    expect(loadEffort({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
+      DEFAULT_EFFORT
+    );
   });
 });

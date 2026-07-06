@@ -18,6 +18,15 @@ export const DEFAULT_SKILLS = [
 export const DEFAULT_DATA_SCOPE =
   "Operate on source code, configuration, tests, and documentation in this repository only. Do not access, read, log, exfiltrate, or commit customer data, production secrets, credentials, payment information, or PII. If a task appears to require any of these, stop and surface the blocker via AskUserQuestion instead of proceeding.";
 
+// The model + effort every fleet agent launches on (claude `--model`/`--effort`).
+// Pinned so an agent never inherits the driver's ambient model/effort (a driver on
+// a cheap/fast model would silently spawn the whole fleet on it). `default` resolves
+// to the machine's configured default model; `high` is the standard fleet effort.
+// Override per setup via config (`.model`/`.effort`) or env (`CAPTAIN_MODEL`/
+// `CAPTAIN_EFFORT`).
+export const DEFAULT_MODEL = "default";
+export const DEFAULT_EFFORT = "high";
+
 // Where the global config file lives: an explicit CAPTAIN_CONFIG wins, else the
 // XDG config dir ($XDG_CONFIG_HOME or ~/.config) under captain/. Deliberately
 // NOT under ~/.claude.
@@ -74,25 +83,45 @@ export const loadSkills = (env: NodeJS.ProcessEnv = process.env): string[] => {
   return parseSkills(readConfig(env)) ?? DEFAULT_SKILLS;
 };
 
-// Pure: pull a trimmed non-empty `.dataScope` string out of a parsed config
-// value, else null (so callers fall back to the default).
-export const parseDataScope = (raw: unknown): string | null => {
-  const scope = (raw as { dataScope?: unknown } | null)?.dataScope;
-  if (typeof scope !== "string") {
+// Pure: pull a trimmed non-empty string field out of a parsed config value, else
+// null (so callers fall back to a default). Shared by every single-string setting
+// (dataScope, model, effort) so their normalisation can never drift.
+const parseStringField = (raw: unknown, field: string): string | null => {
+  const value = (raw as Record<string, unknown> | null)?.[field];
+  if (typeof value !== "string") {
     return null;
   }
-  const trimmed = scope.trim();
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 };
+
+// Resolve a single string setting, fail-safe: env override (trimmed) > config file
+// field > fallback. Any read/parse error degrades to the fallback — never throws.
+const loadStringSetting = (
+  env: NodeJS.ProcessEnv,
+  envKey: string,
+  field: string,
+  fallback: string
+): string =>
+  env[envKey]?.trim() || (parseStringField(readConfig(env), field) ?? fallback);
+
+// Pure: pull a trimmed non-empty `.dataScope` string out of a parsed config
+// value, else null (so callers fall back to the default).
+export const parseDataScope = (raw: unknown): string | null =>
+  parseStringField(raw, "dataScope");
 
 // Resolve the data-scope guardrail, fail-safe: env override (CAPTAIN_DATA_SCOPE,
 // trimmed) > config file `.dataScope` > DEFAULT_DATA_SCOPE. Any read/parse error
 // degrades to the default — never throws. The guardrail is on by default.
-export const loadDataScope = (env: NodeJS.ProcessEnv = process.env): string => {
-  const fromEnv = env.CAPTAIN_DATA_SCOPE?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+export const loadDataScope = (env: NodeJS.ProcessEnv = process.env): string =>
+  loadStringSetting(env, "CAPTAIN_DATA_SCOPE", "dataScope", DEFAULT_DATA_SCOPE);
 
-  return parseDataScope(readConfig(env)) ?? DEFAULT_DATA_SCOPE;
-};
+// Resolve the fleet model, fail-safe: env override (CAPTAIN_MODEL, trimmed) >
+// config file `.model` > DEFAULT_MODEL. Passed to claude as `--model`.
+export const loadModel = (env: NodeJS.ProcessEnv = process.env): string =>
+  loadStringSetting(env, "CAPTAIN_MODEL", "model", DEFAULT_MODEL);
+
+// Resolve the fleet effort, fail-safe: env override (CAPTAIN_EFFORT, trimmed) >
+// config file `.effort` > DEFAULT_EFFORT. Passed to claude as `--effort`.
+export const loadEffort = (env: NodeJS.ProcessEnv = process.env): string =>
+  loadStringSetting(env, "CAPTAIN_EFFORT", "effort", DEFAULT_EFFORT);

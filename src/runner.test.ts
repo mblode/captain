@@ -264,7 +264,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     expect(cmuxLog).toContain("new-workspace --name tst-2");
     expect(cmuxLog).toContain("--focus false");
     expect(cmuxLog).toContain(
-      "claude --permission-mode plan --allow-dangerously-skip-permissions"
+      "claude --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions"
     );
     expect(output.value()).toContain("spawned 2 workspaces");
     // No watcher to arm — the agents self-drive; status is the read surface.
@@ -311,7 +311,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     expect(cmuxLog).toContain("new-workspace --name tst-789");
     expect(cmuxLog).toContain("--focus true");
     expect(cmuxLog).toContain(
-      "claude --permission-mode plan --allow-dangerously-skip-permissions"
+      "claude --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions"
     );
 
     const worktree = join(root, "src-tst-789");
@@ -351,7 +351,7 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
     const launchLog = await readFile(log, "utf-8");
     expect(launchLog).toContain(worktree);
     expect(launchLog).toContain(
-      "--permission-mode plan --allow-dangerously-skip-permissions"
+      "--model default --effort high --permission-mode plan --allow-dangerously-skip-permissions"
     );
   });
 
@@ -382,7 +382,7 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
     const launchLog = await readFile(log, "utf-8");
     expect(launchLog).toContain(worktree);
     expect(launchLog).toContain(
-      "--permission-mode plan --allow-dangerously-skip-permissions prompt body"
+      "--model default --effort high --permission-mode plan --allow-dangerously-skip-permissions prompt body"
     );
   });
 });

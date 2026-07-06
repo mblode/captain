@@ -1,3 +1,4 @@
+import { loadEffort, loadModel } from "./config";
 import { isIssueId } from "./issue";
 import { commandExists, run, runRequired, shellQuote } from "./shell";
 
@@ -15,8 +16,16 @@ export const isFanOutInput = (tokens: string[], print: boolean): boolean =>
 export const cmuxReachable = (env: NodeJS.ProcessEnv): boolean =>
   commandExists("cmux", env) && run("cmux", ["ping"], { env }).status === 0;
 
-export const claudeCommand = (promptPath: string): string =>
-  `claude --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
+// The shell command cmux runs in the new workspace. Model/effort are pinned (see
+// config.ts) so the agent never inherits the driver's ambient tier; both are
+// shell-quoted because a full model id can carry glob metacharacters (e.g. the
+// `[1m]` in `claude-opus-4-8[1m]`) that an unquoted arg would try to expand.
+export const claudeCommand = (
+  promptPath: string,
+  model: string,
+  effort: string
+): string =>
+  `claude --model ${shellQuote(model)} --effort ${shellQuote(effort)} --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
 
 export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
   runRequired(
@@ -28,7 +37,11 @@ export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
       "--cwd",
       options.worktreePath,
       "--command",
-      claudeCommand(options.promptPath),
+      claudeCommand(
+        options.promptPath,
+        loadModel(options.env),
+        loadEffort(options.env)
+      ),
       "--focus",
       options.focus ? "true" : "false",
     ],
