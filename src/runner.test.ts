@@ -323,6 +323,43 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     ).toBe("tst-789");
   });
 
+  it("launches codex (best-effort, no plan mode) when --agent codex is set", async () => {
+    const { repo, root } = await createGitRepo("src");
+    const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+    cleanup.push(root, binDir);
+    const log = join(root, "cmux.log");
+
+    await writeExecutable(
+      join(binDir, "cmux"),
+      `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+printf '%s\\n' "$*" >> "$CMUX_LOG"
+`
+    );
+    // codex must be on PATH for the launch probe to pass.
+    await writeExecutable(join(binDir, "codex"), "#!/bin/sh\nexit 0\n");
+
+    const status = await runStart({
+      agent: "codex",
+      cwd: repo,
+      env: {
+        ...safeEnv(),
+        CMUX_LOG: log,
+        PATH: `${binDir}:${safeEnv().PATH}`,
+      },
+      tokens: ["TST-654"],
+    });
+
+    expect(status).toBe(0);
+    const cmuxLog = await readFile(log, "utf-8");
+    expect(cmuxLog).toContain("new-workspace --name tst-654");
+    expect(cmuxLog).toContain(
+      "codex -c model_reasoning_effort='high' --dangerously-bypass-approvals-and-sandbox"
+    );
+    // best-effort: no claude plan-mode flags leak into a codex launch.
+    expect(cmuxLog).not.toContain("--permission-mode plan");
+  });
+
   it("falls back to inline launch when cmux is not available", async () => {
     const { repo, root } = await createGitRepo("src");
     const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));

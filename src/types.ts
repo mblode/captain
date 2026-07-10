@@ -61,6 +61,8 @@ export interface CliOptions {
   json?: boolean;
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
+  // which coding agent to launch: claude (default) or codex; overrides config
+  agent?: string;
   tokens: string[];
 }
 
@@ -79,4 +81,6 @@ export interface DispatchOptions {
   task: string;
   // workspace label (slugified); defaults to a slug of the task
   name?: string;
+  // which coding agent to launch: claude (default) or codex; overrides config
+  agent?: string;
 }

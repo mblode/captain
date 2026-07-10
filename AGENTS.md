@@ -25,8 +25,9 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: install | start | status | approve | reject
-  runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief
+  cli.ts            # Commander entry: install | start | status | approve | reject; bare-token routing via withImplicitStart
+  route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-Linear word = likely typo, untouched)
+  runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
   cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
   config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE)
   prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <data-scope> guardrail + <finishing-protocol> + <fleet-memory>
@@ -48,7 +49,15 @@ src/
 
 **Start** (`captain start`, `runStart`): routes on its first token — a Linear issue id/URL →
 `runLinearWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
-free-form task in the **current checkout**, no Linear, no worktree). Either way the agent gets the
+free-form task in the **current checkout**, no Linear, no worktree). The `start` subcommand is
+implicit: a bare first argument that isn't a known subcommand or a flag is treated as `start`
+(`withImplicitStart` in `route.ts` splices `start` into argv before commander parses it; the
+known-commands set is derived from the commander registry so it can't drift), so `captain tig-123`
+and `captain "tidy the readme"` work like `captain start …` — this is the `linear-worktree`
+invocation, subsumed. One guard: a **single** bare word that isn't a Linear id/URL and has no
+spaces (`captain statsu`) is left alone so commander errors — it's far more likely a typo'd
+subcommand than a one-word task, and splicing would launch an agent and clobber the checkout's
+`.captain/` rubric (voiding an in-flight dispatch's verdict hash). Either way the agent gets the
 same brief: the `<workflow>` pipeline (plan → implement → the configured skills → verifier
 finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
 `loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
@@ -65,6 +74,23 @@ fallback) — pass `--model`/`--effort` from `loadModel`/`loadEffort` (`config.t
 `high`, fail-safe like the rest). `default` resolves to the machine's configured default model.
 `cmux.ts` shell-quotes the model because a full id can carry glob metacharacters (the `[1m]` in
 `claude-opus-4-8[1m]`); the inline path passes it as a discrete argv element, so no quoting.
+
+The launched **agent** is selectable: `--agent <claude|codex>` (flag) > `CAPTAIN_AGENT` env /
+`.agent` config > `DEFAULT_AGENT` `claude` (`loadAgent`/`resolveAgent`, fail-safe — any unknown
+value degrades to `claude`). `claude` (the default) is the only agent wired into the plan-gate
+flow: it launches in plan mode (`--permission-mode plan`) and its `ExitPlanMode` feed item is what
+`approve`/`reject` gate on. `codex` is **best-effort**: it has no plan mode, so it launches with
+full autonomy (`--dangerously-bypass-approvals-and-sandbox`, the analog of claude's skip-perms) and
+drives straight from the brief — no plan gate, no `approve` step. The brief's plan step is
+agent-aware (`renderPromptExtras` takes `agent`): claude is told to present the plan for approval;
+codex is told to plan then proceed, because telling it to wait for an approval that can never
+arrive would stall every codex run at step 1. The command builders branch by
+agent (`agentCommand` → `claudeCommand`/`codexCommand` in `cmux.ts`; `launchPlanMode` in
+`launch.ts`), and the launch-time binary probe checks the selected agent's binary. Codex maps
+effort to `-c model_reasoning_effort=<effort>` and omits `-m` on the `default` model sentinel (that
+sentinel is claude-only). `status` still tracks a codex workspace as IN FLIGHT — `runStates`
+(`control.ts`) fills any workspace's state from its `cmux top` tag row, so a non-`claude_code` tag
+still registers; only the plan-gate label is claude-specific.
 
 For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot) — one such
 dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.md`/`verdict.json`.
@@ -171,9 +197,13 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
   no state, listens to nothing, and coordinates no writers. The forbidden class is a _persistent
   background listener_, not a polling loop.)
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
-  free-form current-dir dispatch, an explicit `--repo-path`, and `--print` for each. Repo selection
+  free-form current-dir dispatch, an explicit `--repo-path`, the bare-token form (`captain tig-123`
+  == `captain start tig-123`, via `withImplicitStart`), and `--print` for each. Repo selection
   is `--repo-path` else cwd; spanning repos in one session is the driver's job (per-ticket
   `--repo-path`), not config.
+- **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
+  gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
+  wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
 
 ## Env knobs
 
@@ -181,8 +211,9 @@ human-driven via the captain skill; approve/reject notes land in `~/.claude/capt
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
 skills, overrides the config file) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
 `CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default
-`high`) · `CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
+`high`) · `CAPTAIN_AGENT` (which agent to launch, `claude` | `codex`, default `claude`) ·
+`CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
 `~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string),
-`.model` (string), `.effort` (string).
+`.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`).

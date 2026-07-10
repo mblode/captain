@@ -40,6 +40,13 @@ export const DEFAULT_AGENT_ENV: Record<string, string> = {
 export const DEFAULT_MODEL = "default";
 export const DEFAULT_EFFORT = "high";
 
+// The coding agent every fleet launch runs. `claude` (Claude Code) is the
+// default and the only one wired into the plan-gate/approve flow; `codex` is a
+// best-effort alternative (no plan mode, so no approve step — the agent drives
+// straight from the brief). Override via config (`.agent`) or env
+// (`CAPTAIN_AGENT`), or per-invocation with `start --agent <name>`.
+export const DEFAULT_AGENT = "claude";
+
 // Where the global config file lives: an explicit CAPTAIN_CONFIG wins, else the
 // XDG config dir ($XDG_CONFIG_HOME or ~/.config) under captain/. Deliberately
 // NOT under ~/.claude.
@@ -172,3 +179,17 @@ export const loadModel = (env: NodeJS.ProcessEnv = process.env): string =>
 // config file `.effort` > DEFAULT_EFFORT. Passed to claude as `--effort`.
 export const loadEffort = (env: NodeJS.ProcessEnv = process.env): string =>
   loadStringSetting(env, "CAPTAIN_EFFORT", "effort", DEFAULT_EFFORT);
+
+// Collapse any user-supplied agent name (flag, env, or config) to a launchable
+// one: anything but `codex` degrades to the default `claude`, so a typo never
+// silently launches an unknown binary. The ONE place the rule lives — the
+// config loader below and the runner's --agent flag path both call it.
+export const normalizeAgent = (value: string): string =>
+  value.trim().toLowerCase() === "codex" ? "codex" : DEFAULT_AGENT;
+
+// Resolve the fleet agent, fail-safe: env override (CAPTAIN_AGENT) > config file
+// `.agent` > DEFAULT_AGENT, normalised via normalizeAgent.
+export const loadAgent = (env: NodeJS.ProcessEnv = process.env): string =>
+  normalizeAgent(
+    loadStringSetting(env, "CAPTAIN_AGENT", "agent", DEFAULT_AGENT)
+  );

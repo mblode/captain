@@ -17,6 +17,15 @@ npm install -g cmux-captain && captain install
 
 `captain install` adds the skills the fleet needs and checks your setup. You need Node 22+ and `git`, `claude`, and [`cmux`](https://cmux.com/) on your PATH. Set `LINEAR_API_KEY` to pull ticket details into each brief.
 
+You can also start a single ticket straight from the terminal — a worktree, a cmux workspace, and an agent in plan mode with the ticket pulled in:
+
+```bash
+captain TIG-123               # bare ticket == captain start TIG-123
+captain TIG-123 --agent codex # optional: launch codex instead of Claude Code (best-effort, no plan gate)
+```
+
+Pick the agent per run with `--agent <claude|codex>`, or set a default with `CAPTAIN_AGENT` / the `.agent` config key.
+
 ## How it works
 
 Each agent gets a brief covering the whole job: plan, implement, review, open a PR. You control three gates: approving each plan, answering questions, and the merge.

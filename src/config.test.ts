@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_AGENT,
   DEFAULT_AGENT_ENV,
   DEFAULT_DATA_SCOPE,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_SKILLS,
+  loadAgent,
   loadAgentEnv,
   loadDataScope,
   loadEffort,
@@ -172,6 +174,31 @@ describe("loadEffort precedence", () => {
     );
     expect(loadEffort({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
       DEFAULT_EFFORT
+    );
+  });
+});
+
+describe("loadAgent precedence", () => {
+  it("prefers CAPTAIN_AGENT over the config file", () => {
+    const path = writeConfig('{"agent":"claude"}');
+    expect(
+      loadAgent({ CAPTAIN_AGENT: "  CODEX  ", CAPTAIN_CONFIG: path })
+    ).toBe("codex");
+  });
+
+  it("reads the config file when no env override is set", () => {
+    const path = writeConfig('{"agent":"codex"}');
+    expect(loadAgent({ CAPTAIN_CONFIG: path })).toBe("codex");
+  });
+
+  it("degrades an unknown/typo agent to claude", () => {
+    const path = writeConfig('{"agent":"cursor"}');
+    expect(loadAgent({ CAPTAIN_CONFIG: path })).toBe(DEFAULT_AGENT);
+  });
+
+  it("falls back to the default when the file is missing", () => {
+    expect(loadAgent({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
+      DEFAULT_AGENT
     );
   });
 });

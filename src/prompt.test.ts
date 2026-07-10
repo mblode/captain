@@ -86,6 +86,27 @@ describe("prompt extras", () => {
     expect(out).not.toContain("/pr-babysitter");
   });
 
+  // Codex has no plan mode or plan-approval gate — a brief telling it to wait
+  // for approval would stall the run at step 1 forever.
+  it("swaps the plan-gate steps for codex (no approval wait)", () => {
+    const out = renderPromptExtras({ agent: "codex", workflow: true });
+    expect(out).not.toContain("you are launched in plan mode");
+    expect(out).not.toContain("Once the plan is approved");
+    expect(out).toContain("no plan-approval gate");
+    // the rest of the pipeline is unchanged
+    expect(out).toContain("3. Run /tidy.");
+  });
+
+  it("keeps the plan-gate steps for claude (and by default)", () => {
+    for (const agent of ["claude", undefined]) {
+      const out = renderPromptExtras({ agent, workflow: true });
+      expect(out).toContain(
+        "1. Plan first (you are launched in plan mode) and present the plan for approval."
+      );
+      expect(out).toContain("2. Once the plan is approved, implement it.");
+    }
+  });
+
   it("renders the finishing protocol around the rubric path", () => {
     const out = renderPromptExtras({ rubricPath: ".captain/rubric.md" });
     expect(out).toContain("<finishing-protocol>");

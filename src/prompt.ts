@@ -75,6 +75,10 @@ export interface PromptExtras {
   memoryPath?: string;
   // the data-scope guardrail (empty/undefined → section omitted)
   dataScope?: string;
+  // which agent the brief launches on. claude (default) is gated: it starts in
+  // plan mode and waits for plan approval. codex has no plan mode/gate, so its
+  // plan step must NOT tell it to wait for an approval that can never arrive.
+  agent?: string;
 }
 
 // The sections appended after the issue context: the self-drive workflow (the
@@ -94,15 +98,25 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     // Fixed scaffold: plan + implement are steps 1-2, the configured skills run
     // next (one numbered step each), then the verifier/verdict finish. Captain's
     // status derives from the plan gate and verdict, so only the middle steps
-    // are data-driven.
+    // are data-driven. The plan step's wording is agent-aware: telling codex to
+    // wait for a plan approval would stall it forever (no gate exists).
     const skillSteps = skills.map((skill, i) => `${i + 3}. Run ${skill}.`);
+    const planSteps =
+      extras.agent === "codex"
+        ? [
+            "1. Plan first: write out a short plan of your approach before touching code.",
+            "2. Implement the plan. (This session has no plan-approval gate — do not stop to wait for one.)",
+          ]
+        : [
+            "1. Plan first (you are launched in plan mode) and present the plan for approval.",
+            "2. Once the plan is approved, implement it.",
+          ];
     out += "\n<workflow>\n";
     out += [
       "You own this ticket end to end. Drive the whole pipeline yourself, in order,",
       "without waiting to be told to continue:",
       "",
-      "1. Plan first (you are launched in plan mode) and present the plan for approval.",
-      "2. Once the plan is approved, implement it.",
+      ...planSteps,
       ...skillSteps,
       `${skills.length + 3}. Finish with the finishing protocol below (verifier + verdict).`,
       "",

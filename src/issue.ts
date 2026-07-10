@@ -6,6 +6,12 @@ export const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");
 
 export const isIssueId = (value: string): boolean => issueIdRegex.test(value);
 
+// A start token is Linear work if it's a bare issue id (TIG-430) or a Linear
+// URL; anything else is a free-form task. Shared by runStart's routing and the
+// CLI's bare-invocation guard (route.ts).
+export const isLinearToken = (token: string): boolean =>
+  isIssueId(token) || /^https?:\/\/linear\.app\//iu.test(token);
+
 export const slugify = (value: string): string => {
   let slug = value.toLowerCase().replaceAll(/['`]/gu, "");
   slug = slug

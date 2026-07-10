@@ -5,11 +5,11 @@ import { basename, dirname, join } from "node:path";
 import { realCmux } from "./captain/control";
 import { ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
-import { loadDataScope, loadSkills } from "./config";
+import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
 import { ensureWorktree, fetchOrigin, gitCommonDir } from "./git";
 import { downloadIssueImages, worktreeTmpDir } from "./images";
-import { isIssueId, parseIssueInput, slugify } from "./issue";
+import { isLinearToken, parseIssueInput, slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
 import { fetchLinearIssue } from "./linear";
 import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
@@ -77,6 +77,9 @@ interface PrepareContext {
   skills: string[];
   // the data-scope guardrail injected into the brief + rubric, loaded once per run
   dataScope: string;
+  // the resolved coding agent (claude | codex), resolved once per run — the
+  // brief's plan-step wording and the launch command both depend on it
+  agent: string;
 }
 
 interface DispatchArgs {
@@ -177,7 +180,17 @@ interface LaunchTarget {
   prompt: string;
   env: NodeJS.ProcessEnv;
   progress: Progress;
+  // the resolved coding agent (claude | codex)
+  agent: string;
 }
+
+// Resolve the agent for a run, flag-over-config: an explicit `--agent` value
+// wins, else the config/env default. Both funnel through normalizeAgent
+// (config.ts), so an unknown name always degrades to claude.
+const resolveAgent = (
+  flag: string | undefined,
+  env: NodeJS.ProcessEnv
+): string => (flag === undefined ? loadAgent(env) : normalizeAgent(flag));
 
 const launchViaCmux = async (
   target: LaunchTarget,
@@ -186,6 +199,7 @@ const launchViaCmux = async (
   target.progress.step(`opening cmux workspace ${target.label}`);
   const promptPath = await writePromptFile(target.displayId, target.prompt);
   openIssueWorkspace({
+    agent: target.agent,
     branch: target.label,
     env: target.env,
     focus,
@@ -223,7 +237,7 @@ const launchOrFallback = async (
       })}\n`
     );
   };
-  if (cmuxReachable(env) && commandExists("claude", env)) {
+  if (cmuxReachable(env) && commandExists(target.agent, env)) {
     try {
       await launchViaCmux(target, true);
       progress.done(`opened cmux workspace ${target.label}`);
@@ -240,7 +254,7 @@ const launchOrFallback = async (
     }
   }
   progress.done();
-  const status = launchPlanMode(target.cwd, target.prompt, env);
+  const status = launchPlanMode(target.cwd, target.prompt, env, target.agent);
   // Inline launch: no cmux workspace to address, so workspaceId is omitted.
   emitStarted();
   return status;
@@ -249,8 +263,10 @@ const launchOrFallback = async (
 const targetOf = (
   prepared: PreparedIssue,
   progress: Progress,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  agent: string
 ): LaunchTarget => ({
+  agent,
   cwd: prepared.worktree.worktreePath,
   displayId: prepared.displayId,
   env,
@@ -290,7 +306,8 @@ const withLoopExtras = async (
   displayId: string,
   env: NodeJS.ProcessEnv,
   skills: string[],
-  dataScope: string
+  dataScope: string,
+  agent: string
 ): Promise<string> => {
   const { text } = renderRubric(issue, displayId, dataScope);
   await mkdir(join(worktreePath, ".captain"), { recursive: true });
@@ -300,6 +317,7 @@ const withLoopExtras = async (
   return (
     prompt +
     renderPromptExtras({
+      agent,
       dataScope,
       memory: readMemoryExcerpt(repoRoot, env),
       memoryPath,
@@ -366,7 +384,8 @@ const prepareIssue = async (
     parsedIssue.displayId,
     env,
     context.skills,
-    context.dataScope
+    context.dataScope,
+    context.agent
   );
 
   return { displayId: parsedIssue.displayId, prompt, worktree };
@@ -380,6 +399,7 @@ const dispatch = async ({
   stdout,
   tokens,
 }: DispatchArgs): Promise<number> => {
+  const { agent } = context;
   if (isFanOutInput(tokens, Boolean(options.print))) {
     if (!cmuxReachable(env)) {
       throw new CliError(
@@ -388,9 +408,9 @@ const dispatch = async ({
         "CMUX_UNREACHABLE"
       );
     }
-    if (!commandExists("claude", env)) {
+    if (!commandExists(agent, env)) {
       throw new CliError(
-        "claude is not on PATH — install it, then `captain install`",
+        `${agent} is not on PATH — install it, then \`captain install\``,
         EXIT.USAGE,
         "MISSING_DEPENDENCY"
       );
@@ -410,7 +430,7 @@ const dispatch = async ({
         progress: scoped,
       });
       worktreePaths.push(prepared.worktree.worktreePath);
-      await launchViaCmux(targetOf(prepared, scoped, env), false);
+      await launchViaCmux(targetOf(prepared, scoped, env, agent), false);
       launched.push({
         branch: prepared.worktree.branch,
         cwd: prepared.worktree.worktreePath,
@@ -480,7 +500,7 @@ const dispatch = async ({
   if (singleJestNote) {
     stdout.write(`  ${singleJestNote}\n`);
   }
-  return launchOrFallback(targetOf(prepared, progress, env), stdout, {
+  return launchOrFallback(targetOf(prepared, progress, env, agent), stdout, {
     branch: prepared.worktree.branch,
     cwd: prepared.worktree.worktreePath,
     json: Boolean(options.json),
@@ -506,6 +526,7 @@ export const runLinearWorktree = async (
 
   const progress = createProgress(options.stderr ?? process.stderr);
   const context: PrepareContext = {
+    agent: resolveAgent(options.agent, env),
     base: options.base,
     cwd,
     dataScope: loadDataScope(env),
@@ -544,6 +565,7 @@ export const runDispatch = async (
   }
 
   const progress = createProgress(options.stderr ?? process.stderr);
+  const agent = resolveAgent(options.agent, env);
   try {
     progress.step("resolving repo");
     const repo = resolveRepo({ cwd, env, repoOverride: options.repoOverride });
@@ -566,7 +588,8 @@ export const runDispatch = async (
       name,
       env,
       loadSkills(env),
-      loadDataScope(env)
+      loadDataScope(env),
+      agent
     );
 
     if (options.print) {
@@ -588,6 +611,7 @@ export const runDispatch = async (
     }
     return launchOrFallback(
       {
+        agent,
         cwd: repo.repoRoot,
         displayId: name,
         env,
@@ -605,12 +629,6 @@ export const runDispatch = async (
   }
 };
 
-// A start token is Linear work if it's a bare issue id (TIG-430) or a Linear
-// URL; anything else is a free-form task. The whole list shares the first
-// token's verdict — you don't mix tickets and prose in one invocation.
-const isLinearToken = (token: string): boolean =>
-  isIssueId(token) || /^https?:\/\/linear\.app\//iu.test(token);
-
 // The single entry point behind `captain start`: route to the Linear worktree
 // fan-out or the free-form current-dir dispatch by inspecting the first token.
 // Empty tokens fall through to runLinearWorktree, which reads stdin then errors.
@@ -620,6 +638,7 @@ export const runStart = (
   const [first] = options.tokens;
   if (first && !isLinearToken(first)) {
     return runDispatch({
+      agent: options.agent,
       cwd: options.cwd,
       env: options.env,
       json: options.json,

@@ -1,6 +1,6 @@
 ---
 name: captain
-description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. `captain start` gives each agent a brief carrying the whole pipeline (plan → implement → /tidy → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict) and the agent drives it itself; `captain status` derives NEEDS YOU / IN FLIGHT / READY live from cmux signals and verdict files — no daemon, no state. Use when asked to "conduct my fleet", "fan out these tickets", "what's blocked across my agents", "approve all the plans", "show me the plans", "what's ready to merge", or "start the captain".
+description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. `captain start` — or bare `captain TIG-430`, start is implicit — gives each agent a brief carrying the whole pipeline (plan → implement → /tidy → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict) and the agent drives it itself; `--agent codex` launches codex agents instead (best-effort, no plan gate). `captain status` derives NEEDS YOU / IN FLIGHT / READY live from cmux signals and verdict files — no daemon, no state. Use when asked to "conduct my fleet", "fan out these tickets", "start this ticket", "run these on codex", "what's blocked across my agents", "approve all the plans", "show me the plans", "what's ready to merge", or "start the captain".
 ---
 
 # Captain
@@ -21,7 +21,9 @@ each worktree's `.captain/`).
   `.captain/` dir; busy/idle = `cmux top` run-state tags; gates = the newest _unresolved_ feed item
   per cwd; done = a hash-checked `.captain/verdict.json`. Re-run any time — nothing desyncs.
 - **Human gates**: plan approval (mandatory — implementation never starts un-approved),
-  questions/blocked agents, and the merge. Everything else flows on its own.
+  questions/blocked agents, and the merge. Everything else flows on its own. (Claude agents only:
+  a codex agent has no plan mode, so its fleet has **no plan gate** — `approve`/`reject` have
+  nothing to reply to; its brief tells it to plan then proceed.)
 - **Verdict gate**: fan-out writes the definition of done to `.captain/rubric.md`; the agent's
   fresh-context verifier writes `.captain/verdict.json` citing the rubric's hash. A valid pass shows
   READY with the `✓ verified` label; a fail → NEEDS YOU and its summary; no verdict → in flight.
@@ -41,12 +43,17 @@ each worktree's `.captain/`).
    paths/symbols it names, its linked PRs — to decide which repo the work touches (grep candidates
    when thin), then pass `--repo-path <repo>`.
 3. **Fan out:** group tickets by repo, run one `captain start <ids…> --repo-path <repo>` per repo
-   (one worktree + workspace + self-driving agent each). A non-Linear arg starts a free-form task in
-   the current checkout. `--base <ref>` stacks on a prerequisite branch; `--print` previews. Confirm
-   each `started[].cwd` (`--json`) before approving any plan — a worktree in the wrong repo can never
-   pass its rubric. Each agent launches on a **pinned model + effort** (default `default` / `high`,
-   where `default` = the machine's configured default model), so it never inherits your driver's
-   tier — override per fleet with `CAPTAIN_MODEL` / `CAPTAIN_EFFORT` (or config `.model` / `.effort`).
+   (one worktree + workspace + self-driving agent each; `start` is implicit — bare `captain TIG-430`
+   works, though a single non-Linear word is treated as a typo'd subcommand and errors). A non-Linear
+   arg starts a free-form task in the current checkout. `--base <ref>` stacks on a prerequisite
+   branch; `--print` previews. Confirm each `started[].cwd` (`--json`) before approving any plan — a
+   worktree in the wrong repo can never pass its rubric. Each agent launches on a **pinned model +
+   effort** (default `default` / `high`, where `default` = the machine's configured default model),
+   so it never inherits your driver's tier — override per fleet with `CAPTAIN_MODEL` /
+   `CAPTAIN_EFFORT` (or config `.model` / `.effort`). The agent binary is claude unless you pass
+   `--agent codex` (or set `CAPTAIN_AGENT` / config `.agent`) — codex is **best-effort**: full
+   autonomy, an adapted brief (plan then proceed), no plan gate, and no busy/idle run-state in
+   `status` (codex emits no `cmux top` tag, so its rows read `—`).
 4. **Arm the heartbeat** — the driver re-invokes itself on a timer (no daemon, no foreground pane;
    each wake re-derives status fresh). Take the first available rung; never skip a missing rung to
    "ask the human to ping me":
@@ -104,7 +111,9 @@ per wake, not per gate.
   (`run=unknown`); relaunch from `/tmp/linear-worktree/<TICKET>/prompt.txt` (match captain's pinned
   tier: `claude --model default --effort high --permission-mode plan --allow-dangerously-skip-permissions
 "$(cat …/prompt.txt)"`), and run `captain start` in the **foreground** (backgrounding has returned
-  no workspace + a half-made worktree).
+  no workspace + a half-made worktree). **Codex workspaces are the exception**: they emit no
+  run-state tag, so `run=unknown`/`—` is their normal — read the screen before concluding a race,
+  never blind-relaunch a codex row.
 - **Workspace ids, not names** — `status` prints the right `cmux` command per row; copy it.
 - **Never close an apparent duplicate workspace** — it's likely a group anchor (closing ungroups the
   fleet); a real duplicate means a stale binary, so rebuild instead.

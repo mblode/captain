@@ -8,6 +8,7 @@ import { approve, gain, reject, status } from "./captain/commands";
 import { install } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
 import { CliError } from "./errors";
+import { withImplicitStart } from "./route";
 import { runStart } from "./runner";
 
 const packageJson = JSON.parse(
@@ -25,21 +26,24 @@ program
     `
 Workflow:
   $ captain install                      install the /captain + pipeline skills, then check setup
-  $ captain start TIG-430 TIG-431        Linear issues → worktrees + agents, self-driving
-  $ captain start "tidy the README"      a free-form task in the current dir (no Linear)
+  $ captain TIG-430 TIG-431              Linear issues → worktrees + agents (bare = start)
+  $ captain start TIG-430 TIG-431        the same, explicit
+  $ captain "tidy the README"            a free-form task in the current dir (no Linear)
+  $ captain TIG-430 --agent codex        launch codex instead of Claude Code (best-effort)
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
   $ captain status --summary             compact: counts + only what needs you
   $ captain status --repo linkiq         one repo's worktrees only
   $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
   $ captain reject tig-430 --note "…"    send a plan back with feedback
 
-start routes on its first argument: a Linear issue id/URL fans out worktrees;
+A bare first argument (a Linear issue id/URL, or a free-form task) is treated as
+"captain start …"; start then routes on it: a Linear id/URL fans out worktrees,
 anything else is a free-form task run in the current checkout. Each agent's brief
 carries the whole pipeline (plan → implement → the configured skills → verifier
 verdict); Captain keeps no state — status is derived live from cmux and the
 worktrees. You only make the gated decisions: approve plans, answer questions,
 merge. Configure the skills in ~/.config/captain/config.json (.skills) or with
-CAPTAIN_SKILLS=/tidy,/pr-creator.
+CAPTAIN_SKILLS=/tidy,/pr-creator; pick the agent with --agent / CAPTAIN_AGENT.
 Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
   );
 
@@ -73,6 +77,10 @@ program
     "--base <ref>",
     "Linear only: branch new worktrees off this ref instead of origin's default"
   )
+  .option(
+    "--agent <name>",
+    "which agent to launch: claude (default) or codex (best-effort: no plan gate)"
+  )
   .action(
     async (
       input: string[],
@@ -83,9 +91,11 @@ program
         repo?: string;
         name?: string;
         base?: string;
+        agent?: string;
       }
     ) => {
       process.exitCode = await runStart({
+        agent: options.agent,
         base: options.base,
         json: Boolean(options.json),
         name: options.name,
@@ -199,9 +209,18 @@ program
 // argv since the parsed options aren't in scope here.
 const wantsJson = (): boolean => process.argv.includes("--json");
 
+// Every registered subcommand name + alias (plus commander's implicit `help`),
+// read from the registry itself so the implicit-start splice can never swallow
+// a subcommand added later.
+const knownCommands = (): ReadonlySet<string> =>
+  new Set([
+    "help",
+    ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
+  ]);
+
 const main = async (): Promise<void> => {
   try {
-    await program.parseAsync();
+    await program.parseAsync(withImplicitStart(process.argv, knownCommands()));
   } catch (error) {
     const json = wantsJson();
     const s = style(useColor(process.stderr));
