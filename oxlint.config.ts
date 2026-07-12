@@ -42,4 +42,17 @@ export default defineConfig({
       rules: { "no-restricted-imports": PURE_DOMAIN_BAN },
     },
   ],
+  // Mechanical/stylistic rules newly enforced by the ultracite 7.9 ruleset that
+  // this codebase deliberately does otherwise — relaxed rather than churned:
+  // named node: imports, sequential awaits (git/fs ordering is intentional),
+  // method-signature ports, unnamed capture groups, coercion style, and a
+  // false-positive no-unreachable-loop on git.ts's retry loop.
+  rules: {
+    "eslint/no-await-in-loop": "off",
+    "eslint/no-unreachable-loop": "off",
+    "eslint/prefer-named-capture-group": "off",
+    "typescript/method-signature-style": "off",
+    "unicorn/import-style": "off",
+    "unicorn/prefer-number-coercion": "off",
+  },
 });

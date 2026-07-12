@@ -287,8 +287,9 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
   }
 
   // Fleet: a live snapshot.
-  lines.push("", s.dim("FLEET (live snapshot)"));
   lines.push(
+    "",
+    s.dim("FLEET (live snapshot)"),
     `  ${m.fleet.total} worktrees ${s.dim("·")} ${s.yellow(`${m.fleet.needsYou} need you`)} ${s.dim("·")} ${s.cyan(`${m.fleet.inFlight} in flight`)} ${s.dim("·")} ${s.green(`${m.fleet.ready} ready`)}`
   );
   for (const r of m.fleet.byRepo) {
@@ -296,8 +297,9 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
   }
 
   // Verdicts: a live read, not a ledger.
-  lines.push("", s.dim("VERDICTS (live read)"));
   lines.push(
+    "",
+    s.dim("VERDICTS (live read)"),
     `  ${s.green(`${m.verdicts.pass} pass`)} ${s.dim("·")} ${s.red(`${m.verdicts.fail} fail`)}`
   );
   for (const c of m.verdicts.failingCriteria) {
