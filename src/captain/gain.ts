@@ -15,10 +15,12 @@ import type { FleetRow } from "./view";
 // the window cut-off is testable; `now` is injected so cadence/age are
 // deterministic.
 export interface GainInput {
-  decisions: LogRecord[];
+  // the full ledger — decisions AND launch records; computeGain partitions
+  log: LogRecord[];
   rows: FleetRow[];
-  // raw valid verdicts (hash-checked by the caller) for criteria-level detail
-  verdicts: { repo?: string; verdict: Verdict }[];
+  // raw valid verdicts (hash-checked by the caller) for criteria-level detail;
+  // `name` is the row identity, used to join launch→verdict latency
+  verdicts: { repo?: string; name?: string; verdict: Verdict }[];
   // opt-in `--git` approximation; omitted entirely when not requested
   merged?: { repo: string; count: number }[];
   now: number;
@@ -31,6 +33,14 @@ export interface GainInput {
 export interface CadenceDay {
   day: string;
   count: number;
+}
+
+// Latency-to-detection samples: how long a launch travelled before a human
+// decision / a verifier verdict caught it. Median + max + sample count only.
+export interface LatencyStats {
+  count: number;
+  medianSec: number;
+  maxSec: number;
 }
 
 export interface GainMetrics {
@@ -61,6 +71,8 @@ export interface GainMetrics {
     openPrs: string[];
   };
   merged?: { repo: string; count: number }[];
+  // launch→detection latency; omitted entirely when no sample joins
+  latency?: { toDecision?: LatencyStats; toVerdict?: LatencyStats };
   // ALWAYS present — the honesty contract. These caveats name exactly what each
   // metric is and is not, so a reader (human or skill) never over-reads a live
   // snapshot as a trend.
@@ -109,6 +121,8 @@ const caveatsFor = (input: GainInput): string[] => {
     "fleet composition is a LIVE SNAPSHOT of cmux right now, not a trend over time",
     "verdict pass/fail is a live read of each worktree's verdict.json — overwritten per worktree, so it is not a historical ledger",
     "operation-level throughput (e.g. 'ops/day') is NOT recorded by design — captain keeps no event stream",
+    "latency joins launch→decision/verdict records by name — decisions predating launch logging (or a cleared ledger) carry no sample",
+    "launch→verdict latency is a live read of current verdict files, not a ledger",
   ];
   if (input.merged) {
     lines.push(
@@ -120,12 +134,48 @@ const caveatsFor = (input: GainInput): string[] => {
   return lines;
 };
 
+// PURE: median/max over elapsed-seconds samples; undefined when empty so the
+// caller can omit the whole stats block.
+const latencyStats = (samples: number[]): LatencyStats | undefined => {
+  if (samples.length === 0) {
+    return undefined;
+  }
+  const sorted = samples.toSorted((a, b) => a - b);
+  return {
+    count: sorted.length,
+    maxSec: sorted.at(-1) ?? 0,
+    medianSec: sorted[Math.floor((sorted.length - 1) / 2)],
+  };
+};
+
+// The most recent launch of `name` at or before `ts` — the join rule for every
+// latency sample. No prior launch (pre-feature history, name mismatch, cleared
+// ledger) → undefined, and the event simply carries no sample.
+const launchBefore = (
+  launches: LogRecord[],
+  name: string,
+  ts: number
+): number | undefined => {
+  let best: number | undefined;
+  for (const l of launches) {
+    if (l.name === name && l.ts <= ts && (best === undefined || l.ts > best)) {
+      best = l.ts;
+    }
+  }
+  return best;
+};
+
 // PURE: derive every metric. No I/O, no clock read (now is injected) — given
 // the same input it returns the same output, so the unit tests need no mocking.
 export const computeGain = (input: GainInput): GainMetrics => {
   const inWindow = (ts: number): boolean =>
     input.since === undefined || ts >= input.since;
-  const decisions = input.decisions.filter((d) => inWindow(d.ts));
+  // Launches are searched over the FULL log (a launch just before the window
+  // must still pair its in-window decision); decisions respect the window.
+  const launches = input.log.filter((r) => r.kind === "launch");
+  const decisions = input.log.filter(
+    (r) => r.kind !== "launch" && inWindow(r.ts)
+  );
 
   const approvals = decisions.filter((d) => d.kind === "approve").length;
   const rejections = decisions.filter((d) => d.kind === "reject").length;
@@ -183,6 +233,34 @@ export const computeGain = (input: GainInput): GainMetrics => {
     .map((v) => v.verdict.prUrl)
     .filter((url): url is string => typeof url === "string" && url.length > 0);
 
+  // Latency to detection: how far did a launch travel before a human decision
+  // (gap-free, from the ledger) / a verifier verdict (live snapshot) caught it?
+  const toDecision = latencyStats(
+    decisions.flatMap((d) => {
+      const launched = launchBefore(launches, d.name, d.ts);
+      return launched === undefined ? [] : [d.ts - launched];
+    })
+  );
+  const toVerdict = latencyStats(
+    input.verdicts.flatMap((v) => {
+      // verdict.ts is agent-written and defaults to 0 when missing — untrusted,
+      // so a zero/absent ts contributes no sample. The window applies to the
+      // detection event (the verdict), symmetric with toDecision.
+      if (!v.name || v.verdict.ts <= 0 || !inWindow(v.verdict.ts)) {
+        return [];
+      }
+      const launched = launchBefore(launches, v.name, v.verdict.ts);
+      return launched === undefined ? [] : [v.verdict.ts - launched];
+    })
+  );
+  const latency =
+    toDecision || toVerdict
+      ? {
+          ...(toDecision ? { toDecision } : {}),
+          ...(toVerdict ? { toVerdict } : {}),
+        }
+      : undefined;
+
   const decisionsBlock: GainMetrics["decisions"] = {
     approvalRate,
     approvals,
@@ -202,6 +280,7 @@ export const computeGain = (input: GainInput): GainMetrics => {
       ...groupCounts(input.rows),
       total: input.rows.length,
     },
+    ...(latency ? { latency } : {}),
     ...(input.merged ? { merged: input.merged } : {}),
     verdicts: { fail, failingCriteria, openPrs, pass },
   };

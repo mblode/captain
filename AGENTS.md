@@ -39,10 +39,10 @@ src/
     surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
     commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
-    gain.ts         # 100% PURE: computeGain (decisions ledger + live fleet snapshot + verdict tallies → metrics); the gain command's fs/cmux edge lives in commands.ts
+    gain.ts         # 100% PURE: computeGain (decisions + launch ledger + live fleet snapshot + verdict tallies → metrics incl. launch→detection latency); the gain command's fs/cmux edge lives in commands.ts
     doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
     format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
-    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject); readLog feeds gain
+    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/launch); readLog feeds gain
 ```
 
 ## How it works
@@ -127,11 +127,13 @@ agent _driver_ does **not** use `--watch` (a blocking foreground loop can't yiel
 heartbeat is a backgrounded `sleep` whose exit re-invokes its turn — see the captain skill's
 heartbeat ladder.
 
-`gain` (alias `audit`) derives fleet telemetry the same stateless way: a gap-free decisions
-ledger from `log.jsonl` (`readLog`) + a live fleet snapshot + verdict tallies → `computeGain`
-(PURE), with an honesty footer (`--json` plain). `--git` opt-in approximates merged-PR counts via
-`gh`, fail-soft. No counters, no event stream — operation-level throughput is not recorded, by
-design.
+`gain` (alias `audit`) derives fleet telemetry the same stateless way: the gap-free `log.jsonl`
+ledger (`readLog` — approve/reject decisions plus per-launch records appended by `start`) + a
+live fleet snapshot + verdict tallies → `computeGain` (PURE), with an honesty footer (`--json`
+plain). Launch records join decisions/verdicts by the qualified `${repo}-${ticket}` name to give
+**latency to detection** (launch→decision from the ledger, launch→verdict from the live verdict
+files); `--print` never logs a launch. `--git` opt-in approximates merged-PR counts via `gh`,
+fail-soft. No counters, no event stream — operation-level throughput is not recorded, by design.
 
 ## The verdict gate & fleet memory (the agent-side loops)
 
@@ -144,8 +146,10 @@ summary. The verdict must cite the sha256 of the rubric body _as it exists now_
 (`rubricBody`/`rubricHash`), so editing the criteria after the fact voids it. **Memory loop**:
 `memory.ts` keeps `~/.claude/captain/memory/<repo>/learnings.md` (shared by all worktrees of a
 repo, survives worktree removal); fan-out injects `## Rules` + the tail-capped `## Inbox` via
-`<fleet-memory>`, and agents append only _verified_ learnings at end of run. Curation is
-human-driven via the captain skill; approve/reject notes land in `~/.claude/captain/log.jsonl`.
+`<fleet-memory>`, and agents append only _verified_ learnings at end of run — including, when a
+verifier run failed before eventually passing, the root cause of that failure as a preventive
+rule (the eventual pass is its verification). Curation is human-driven via the captain skill;
+approve/reject notes land in `~/.claude/captain/log.jsonl`.
 
 ## Gotchas
 

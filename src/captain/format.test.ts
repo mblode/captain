@@ -182,6 +182,22 @@ describe("renderGain", () => {
     expect(out.indexOf("VERDICTS")).toBeLessThan(out.indexOf("notes:"));
   });
 
+  it("renders the LATENCY section only when latency samples exist", () => {
+    expect(renderGain(metrics(), plain)).not.toContain("LATENCY");
+    const out = renderGain(
+      metrics({
+        latency: {
+          toDecision: { count: 7, maxSec: 7500, medianSec: 720 },
+          toVerdict: { count: 3, maxSec: 10_920, medianSec: 2460 },
+        },
+      }),
+      plain
+    );
+    expect(out).toContain("LATENCY (launch → detection)");
+    expect(out).toContain("launch→decision: median 12m · max 2h5m (n=7)");
+    expect(out).toContain("launch→verdict: median 41m · max 3h2m (n=3)");
+  });
+
   it("omits the MERGED section unless --git supplied merged counts", () => {
     expect(renderGain(metrics(), plain)).not.toContain("MERGED");
     expect(

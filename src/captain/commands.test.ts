@@ -649,6 +649,10 @@ describe("stateless approve/reject/status over the real surface", () => {
       openPrs: string[];
     };
     merged?: { repo: string; count: number }[];
+    latency?: {
+      toDecision?: { count: number; medianSec: number; maxSec: number };
+      toVerdict?: { count: number; medianSec: number; maxSec: number };
+    };
     caveats: string[];
   }
 
@@ -671,6 +675,7 @@ describe("stateless approve/reject/status over the real surface", () => {
 
   it("gain --json matches live fleet counts, openPrs, and the seeded decisions", () => {
     const { port } = fleetOfThree();
+    appendLog({ kind: "launch", name: "tig-431", ts: 500 });
     appendLog({ kind: "approve", name: "tig-431", ts: 1000 });
     appendLog({ kind: "approve", name: "tig-431", ts: 2000 });
     appendLog({ kind: "reject", name: "tig-430", note: "split it", ts: 3000 });
@@ -678,6 +683,13 @@ describe("stateless approve/reject/status over the real surface", () => {
     gain({ json: true }, out, port);
     const m = JSON.parse(text()) as GainJson;
     expect(m.fleet).toMatchObject({ needsYou: 1, ready: 1, total: 3 });
+    // launch→decision latency joins the ledgered launch by name; the launch
+    // record itself never counts as a decision.
+    expect(m.latency?.toDecision).toEqual({
+      count: 2,
+      maxSec: 1500,
+      medianSec: 500,
+    });
     expect(m.verdicts.pass).toBe(1);
     expect(m.verdicts.openPrs).toEqual(["https://x/pr/1"]);
     expect(m.decisions).toMatchObject({ approvals: 2, rejections: 1 });

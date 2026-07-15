@@ -125,6 +125,8 @@ describe("prompt extras", () => {
     expect(out).toContain("run yarn install first");
     expect(out).toContain("/mem/repo/learnings.md");
     expect(out).toContain("VERIFIED this run");
+    // failure analysis: a verifier failure's root cause must be distilled
+    expect(out).toContain("root cause of that failure");
     expect(out).not.toContain("<finishing-protocol>");
   });
 

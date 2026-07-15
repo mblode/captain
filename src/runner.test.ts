@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { readLog } from "./captain/log";
 import { launchPlanMode } from "./launch";
 import { memoryPath } from "./memory";
 import {
@@ -27,15 +28,19 @@ const cleanup: string[] = [];
 
 // Fleet-memory writes land here instead of the real ~/.claude/captain/memory.
 const memoryDir = join(tmpdir(), `lw-test-memory-${process.pid}`);
+// Ledger appends (launch records) land here instead of the real
+// ~/.claude/captain/log.jsonl.
+const homeDir = join(tmpdir(), `lw-test-home-${process.pid}`);
 
 afterEach(async () => {
-  cleanup.push(memoryDir);
+  cleanup.push(memoryDir, homeDir);
   for (const path of cleanup.splice(0)) {
     await rm(path, { force: true, recursive: true });
   }
 });
 
 const safeEnv = (): NodeJS.ProcessEnv => ({
+  CAPTAIN_HOME: homeDir,
   CAPTAIN_MEMORY_DIR: memoryDir,
   HOME: process.env.HOME,
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -124,6 +129,8 @@ describe("runner integration", () => {
     // but never copied to the real clipboard (which would say `copied:`).
     expect(output.value()).toContain("run:");
     expect(output.value()).not.toContain("copied:");
+    // --print never launches, so nothing is ledgered.
+    expect(readLog(safeEnv())).toEqual([]);
   });
 
   it("writes the rubric, wires memory, and injects both loop sections", async () => {
@@ -280,6 +287,88 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
         env: safeEnv(),
       })
     ).toBe("tst-1");
+
+    // Each launch is ledgered under the repo-qualified identity approve/reject
+    // will log later, so gain can join launch→decision latency by name.
+    const launches = readLog(safeEnv()).filter((r) => r.kind === "launch");
+    expect(launches.map((r) => r.name)).toEqual([
+      "src repo-tst-1",
+      "src repo-tst-2",
+    ]);
+  });
+
+  it("ledgers the launch under cmux's actual workspace name when it differs", async () => {
+    // A no-ticket dispatch identity falls back to the workspace name, so a
+    // cmux dedupe/rename would break the launch→decision join unless the
+    // launch record uses the name cmux actually assigned.
+    const { repo, root } = await createGitRepo("src");
+    const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+    cleanup.push(root, binDir);
+
+    await writeExecutable(
+      join(binDir, "cmux"),
+      `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+if [ "$1" = "rpc" ] && [ "$2" = "workspace.list" ]; then
+  printf '{"workspaces":[{"id":"WS-1","ref":"r","description":"tidy-the-readme-copy","current_directory":"%s"}]}' "$REPO"
+  exit 0
+fi
+exit 0
+`
+    );
+    await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+
+    const output = captureWritable();
+    await runStart({
+      cwd: repo,
+      env: {
+        ...safeEnv(),
+        PATH: `${binDir}:${safeEnv().PATH}`,
+        REPO: repo,
+      },
+      stdout: output.stream,
+      tokens: ["tidy", "the", "readme"],
+    });
+
+    const launches = readLog(safeEnv()).filter((r) => r.kind === "launch");
+    expect(launches.map((r) => r.name)).toEqual(["tidy-the-readme-copy"]);
+  });
+
+  it("still launches when the ledger is unwritable (launch logging is fail-soft)", async () => {
+    const { repo, root } = await createGitRepo("src");
+    const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+    cleanup.push(root, binDir);
+    const log = join(root, "cmux.log");
+
+    await writeExecutable(
+      join(binDir, "cmux"),
+      `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+printf '%s\\n' "$*" >> "$CMUX_LOG"
+`
+    );
+    await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+
+    // CAPTAIN_HOME pointing at a regular FILE makes appendLog's mkdir throw.
+    const brokenHome = join(root, "not-a-dir");
+    await writeFile(brokenHome, "");
+
+    const status = await runLinearWorktree({
+      cwd: repo,
+      env: {
+        ...safeEnv(),
+        CAPTAIN_HOME: brokenHome,
+        CMUX_LOG: log,
+        PATH: `${binDir}:${safeEnv().PATH}`,
+      },
+      tokens: ["TST-999"],
+    });
+
+    expect(status).toBe(0);
+    // The launch itself still went through cmux — only the sample was lost.
+    expect(await readFile(log, "utf-8")).toContain(
+      "new-workspace --name tst-999"
+    );
   });
 
   it("opens a single focused cmux workspace rooted at the worktree", async () => {
@@ -391,6 +480,9 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
     expect(launchLog).toContain(
       "--model default --effort high --permission-mode plan --allow-dangerously-skip-permissions"
     );
+    // The inline-fallback path ledgers the launch too.
+    const launches = readLog(safeEnv()).filter((r) => r.kind === "launch");
+    expect(launches.map((r) => r.name)).toEqual(["src-tst-321"]);
   });
 
   it("launches claude from the worktree with skip permissions", async () => {

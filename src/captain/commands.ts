@@ -445,15 +445,15 @@ export interface GainOptions {
 // verdict for its criteria (the row carries only the pass/fail label).
 const validVerdicts = (
   rows: FleetRow[]
-): { repo?: string; verdict: Verdict }[] => {
-  const out: { repo?: string; verdict: Verdict }[] = [];
+): { repo?: string; name?: string; verdict: Verdict }[] => {
+  const out: { repo?: string; name?: string; verdict: Verdict }[] = [];
   for (const row of rows) {
     if (!row.verdict) {
       continue;
     }
     const verdict = readVerdict(row.cwd);
     if (verdict) {
-      out.push({ repo: row.repo, verdict });
+      out.push({ name: row.name, repo: row.repo, verdict });
     }
   }
   return out;
@@ -513,7 +513,7 @@ export const gain = (
   const rows = fleetRows(port);
   const at = now();
   const metrics = computeGain({
-    decisions: readLog(env),
+    log: readLog(env),
     merged: options.git ? mergedCounts(rows, env) : undefined,
     now: at,
     rows,

@@ -3,14 +3,14 @@ import { join } from "node:path";
 
 import { captainHome } from "../home";
 
-// The thin audit trail: one JSON line per human decision or notification,
+// The thin audit trail: one JSON line per human decision or launch,
 // appended to ~/.claude/captain/log.jsonl. Append-only from any process (a
 // truncated tail line is just a bad last line; there is no reader to corrupt),
 // greppable by hand — captain keeps no other history.
 
 export interface LogRecord {
   ts: number;
-  kind: "approve" | "reject";
+  kind: "approve" | "reject" | "launch";
   name: string;
   note?: string;
 }
@@ -36,11 +36,13 @@ const isLogRecord = (raw: unknown): raw is LogRecord =>
   raw !== null &&
   typeof (raw as { ts?: unknown }).ts === "number" &&
   ((raw as { kind?: unknown }).kind === "approve" ||
-    (raw as { kind?: unknown }).kind === "reject") &&
+    (raw as { kind?: unknown }).kind === "reject" ||
+    (raw as { kind?: unknown }).kind === "launch") &&
   typeof (raw as { name?: unknown }).name === "string";
 
 // Read the full audit trail. This is captain's ONE gap-free history: every
-// approve/reject was appended here, so decision metrics are a true ledger (the
+// approve/reject — and every launch, the other half of gain's launch→decision
+// latency join — was appended here, so ledger metrics are true history (the
 // fleet/verdict signals, by contrast, are a live snapshot — see gain.ts).
 export const readLog = (env: NodeJS.ProcessEnv = process.env): LogRecord[] => {
   let text: string;

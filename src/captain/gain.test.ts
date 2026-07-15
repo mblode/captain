@@ -40,7 +40,7 @@ const verdict = (over: Partial<Verdict> = {}): Verdict => ({
 });
 
 const input = (over: Partial<GainInput> = {}): GainInput => ({
-  decisions: [],
+  log: [],
   now: NOW,
   rows: [],
   verdicts: [],
@@ -51,7 +51,7 @@ describe("computeGain — decisions", () => {
   it("tallies approvals, rejections, and approval rate", () => {
     const m = computeGain(
       input({
-        decisions: [
+        log: [
           decision({ kind: "approve" }),
           decision({ kind: "approve" }),
           decision({ kind: "approve" }),
@@ -78,7 +78,7 @@ describe("computeGain — decisions", () => {
         decision({ kind: "reject", note: `note ${i}`, ts: NOW - i * 60 })
       );
     }
-    const m = computeGain(input({ decisions }));
+    const m = computeGain(input({ log: decisions }));
     expect(m.decisions.recentRejectReasons).toHaveLength(5);
     // newest (ts = NOW, i=0) first
     expect(m.decisions.recentRejectReasons[0].note).toBe("note 0");
@@ -87,7 +87,7 @@ describe("computeGain — decisions", () => {
 
   it("a reject with no note surfaces an empty note string, not undefined", () => {
     const m = computeGain(
-      input({ decisions: [decision({ kind: "reject", note: undefined })] })
+      input({ log: [decision({ kind: "reject", note: undefined })] })
     );
     expect(m.decisions.recentRejectReasons[0].note).toBe("");
   });
@@ -95,7 +95,7 @@ describe("computeGain — decisions", () => {
   it("buckets cadence by UTC day, sorted ascending", () => {
     const m = computeGain(
       input({
-        decisions: [
+        log: [
           decision({
             ts: Math.floor(Date.parse("2026-06-17T01:00:00Z") / 1000),
           }),
@@ -117,7 +117,7 @@ describe("computeGain — decisions", () => {
   it("since filters decision-based metrics and records the window", () => {
     const m = computeGain(
       input({
-        decisions: [
+        log: [
           // 10 days old: outside the 7-day window
           decision({ kind: "approve", ts: NOW - 10 * DAY }),
           // 1 day old and right now: inside the window
@@ -245,11 +245,135 @@ describe("computeGain — merged + caveats", () => {
 
   it("is deterministic given the same input (injected now)", () => {
     const fixture = input({
-      decisions: [decision(), decision({ kind: "reject" })],
+      log: [decision(), decision({ kind: "reject" })],
       rows: [row({ group: "ready", repo: "x" })],
       verdicts: [{ verdict: verdict() }],
     });
     expect(computeGain(fixture)).toEqual(computeGain(fixture));
+  });
+});
+
+describe("computeGain — latency to detection", () => {
+  const launch = (over: Partial<LogRecord> = {}): LogRecord => ({
+    kind: "launch",
+    name: "frontyard-tig-1",
+    ts: NOW - 3600,
+    ...over,
+  });
+
+  it("joins each decision to the most recent prior same-name launch", () => {
+    const m = computeGain(
+      input({
+        log: [
+          // relaunched: the decision must measure from the SECOND launch
+          launch({ ts: NOW - 7200 }),
+          launch({ ts: NOW - 600 }),
+          decision({ ts: NOW }),
+        ],
+      })
+    );
+    expect(m.latency?.toDecision).toEqual({
+      count: 1,
+      maxSec: 600,
+      medianSec: 600,
+    });
+  });
+
+  it("a decision with no prior launch (or a mismatched name) carries no sample", () => {
+    const m = computeGain(
+      input({
+        log: [
+          launch({ name: "other-tig-9" }),
+          // launch AFTER the decision never pairs
+          launch({ ts: NOW + 60 }),
+          decision({ ts: NOW }),
+        ],
+      })
+    );
+    expect(m.latency).toBeUndefined();
+  });
+
+  it("launch records never inflate decision tallies or cadence", () => {
+    const m = computeGain(
+      input({ log: [launch(), launch(), decision({ kind: "approve" })] })
+    );
+    expect(m.decisions.approvals).toBe(1);
+    expect(m.decisions.rejections).toBe(0);
+    expect(m.decisions.cadence).toEqual([{ count: 1, day: "2026-06-19" }]);
+  });
+
+  it("a pre-window launch still pairs an in-window decision", () => {
+    const m = computeGain(
+      input({
+        log: [launch({ ts: NOW - 10 * DAY }), decision({ ts: NOW })],
+        since: NOW - 7 * DAY,
+      })
+    );
+    expect(m.latency?.toDecision?.count).toBe(1);
+    expect(m.latency?.toDecision?.maxSec).toBe(10 * DAY);
+  });
+
+  it("derives launch→verdict from named verdict entries, skipping untrusted ts", () => {
+    const m = computeGain(
+      input({
+        log: [launch({ ts: NOW - 900 })],
+        verdicts: [
+          { name: "frontyard-tig-1", verdict: verdict({ ts: NOW }) },
+          // parseVerdict defaults a missing ts to 0 — never a sample
+          { name: "frontyard-tig-1", verdict: verdict({ ts: 0 }) },
+          // unnamed entries can't join
+          { verdict: verdict({ ts: NOW }) },
+        ],
+      })
+    );
+    expect(m.latency?.toVerdict).toEqual({
+      count: 1,
+      maxSec: 900,
+      medianSec: 900,
+    });
+    expect(m.latency?.toDecision).toBeUndefined();
+  });
+
+  it("since windows verdict samples symmetrically with decisions", () => {
+    const m = computeGain(
+      input({
+        log: [launch({ ts: NOW - 10 * DAY - 900 })],
+        since: NOW - 7 * DAY,
+        verdicts: [
+          {
+            name: "frontyard-tig-1",
+            verdict: verdict({ ts: NOW - 10 * DAY }),
+          },
+        ],
+      })
+    );
+    expect(m.latency).toBeUndefined();
+  });
+
+  it("median is the middle sample, max the largest", () => {
+    const m = computeGain(
+      input({
+        log: [
+          launch({ name: "a-1", ts: NOW - 100 }),
+          launch({ name: "b-2", ts: NOW - 300 }),
+          launch({ name: "c-3", ts: NOW - 900 }),
+          decision({ name: "a-1", ts: NOW }),
+          decision({ name: "b-2", ts: NOW }),
+          decision({ name: "c-3", ts: NOW }),
+        ],
+      })
+    );
+    expect(m.latency?.toDecision).toEqual({
+      count: 3,
+      maxSec: 900,
+      medianSec: 300,
+    });
+  });
+
+  it("names the latency join rules in the caveats", () => {
+    const { caveats } = computeGain(input());
+    expect(caveats.some((c) => c.includes("launch→decision"))).toBe(true);
+    expect(caveats.some((c) => c.includes("launch→verdict"))).toBe(true);
   });
 });
 

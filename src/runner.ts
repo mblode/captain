@@ -3,11 +3,12 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { realCmux } from "./captain/control";
-import { ticketFrom } from "./captain/view";
+import { appendLog, now } from "./captain/log";
+import { identityOf, ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
-import { ensureWorktree, fetchOrigin, gitCommonDir } from "./git";
+import { ensureWorktree, fetchOrigin, gitCommonDir, repoLabel } from "./git";
 import { downloadIssueImages, worktreeTmpDir } from "./images";
 import { isLinearToken, parseIssueInput, slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
@@ -192,6 +193,45 @@ const resolveAgent = (
   env: NodeJS.ProcessEnv
 ): string => (flag === undefined ? loadAgent(env) : normalizeAgent(flag));
 
+// Ledger the launch under the same identity approve/reject will log later
+// (identityOf over cwd + label + repo → `${repo}-${ticket}` when both derive),
+// so `captain gain` can join launch→decision/verdict by name for its
+// latency-to-detection metric. Appended only after a launch actually happened,
+// and fail-soft like every other peripheral signal: an unwritable ledger must
+// never abort a launch (or masquerade as a cmux refusal to the caller's catch).
+const logLaunch = (
+  cwd: string,
+  label: string,
+  env: NodeJS.ProcessEnv
+): void => {
+  try {
+    appendLog(
+      {
+        kind: "launch",
+        name: identityOf(cwd, label, repoLabel(cwd, env)).name,
+        ts: now(),
+      },
+      env
+    );
+  } catch {
+    // best-effort side-channel — the launch already happened; gain just
+    // loses this latency sample
+  }
+};
+
+// The decision-side identity falls back to the cmux workspace's OWN name
+// (surface.ts feeds identityOf `w.name`), which can differ from the label we
+// asked for when cmux dedupes/renames it. Resolve the real name so the launch
+// record's join key matches; fail-soft to the label (empty list, dead RPC).
+const launchedWorkspaceName = (
+  cwd: string,
+  label: string,
+  env: NodeJS.ProcessEnv
+): string =>
+  realCmux(env)
+    .listWorkspaces()
+    .find((w) => ownsCwd(w.cwd, cwd))?.name ?? label;
+
 const launchViaCmux = async (
   target: LaunchTarget,
   focus: boolean
@@ -206,6 +246,11 @@ const launchViaCmux = async (
     promptPath,
     worktreePath: target.cwd,
   });
+  logLaunch(
+    target.cwd,
+    launchedWorkspaceName(target.cwd, target.label, target.env),
+    target.env
+  );
 };
 
 // The single-target launch strategy, shared by single-issue fanout and dispatch:
@@ -254,6 +299,8 @@ const launchOrFallback = async (
     }
   }
   progress.done();
+  // Inline launch blocks for the whole interactive session — ledger it first.
+  logLaunch(target.cwd, target.label, env);
   const status = launchPlanMode(target.cwd, target.prompt, env, target.agent);
   // Inline launch: no cmux workspace to address, so workspaceId is omitted.
   emitStarted();

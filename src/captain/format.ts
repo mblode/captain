@@ -1,4 +1,4 @@
-import type { GainMetrics } from "./gain";
+import type { GainMetrics, LatencyStats } from "./gain";
 import { groupCounts, nextCommand } from "./view";
 import type { FleetRow, Group } from "./view";
 
@@ -310,6 +310,20 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
     for (const url of m.verdicts.openPrs) {
       lines.push(`  ${s.dim(url)}`);
     }
+  }
+
+  // Latency to detection: how far a launch travels before it's caught.
+  if (m.latency) {
+    lines.push("", s.dim("LATENCY (launch → detection)"));
+    const stat = (label: string, t?: LatencyStats): void => {
+      if (t) {
+        lines.push(
+          `  ${label}: median ${fmtDuration(t.medianSec)} ${s.dim("·")} max ${fmtDuration(t.maxSec)} ${s.dim(`(n=${t.count})`)}`
+        );
+      }
+    };
+    stat("launch→decision", m.latency.toDecision);
+    stat("launch→verdict", m.latency.toVerdict);
   }
 
   // Merged: the opt-in --git approximation.

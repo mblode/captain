@@ -164,8 +164,10 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       `At the end of your run, append 1-3 distilled learnings to ${extras.memoryPath} ` +
       'under its "## Inbox" heading, each as `- [<TICKET> <YYYY-MM-DD>] <general rule>`, ' +
       "using a single `cat >> … <<'EOF'` command. Only write general rules you actually " +
-      "VERIFIED this run (something you confirmed, not something you guessed); skip the " +
-      "section entirely if nothing qualifies.\n";
+      "VERIFIED this run (something you confirmed, not something you guessed). If your " +
+      "verifier failed any run before eventually passing, one of your learnings MUST be " +
+      "the root cause of that failure, stated as a general preventive rule — the eventual " +
+      "pass is its verification. Skip the section entirely if nothing qualifies.\n";
     out += "</fleet-memory>\n";
   }
 
