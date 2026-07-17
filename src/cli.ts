@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { Command, Option } from "commander";
 
@@ -11,8 +10,25 @@ import { CliError } from "./errors";
 import { withImplicitStart } from "./route";
 import { runStart } from "./runner";
 
+// The bin runs under whatever node is first in PATH, and fnm repo pins are
+// often 18 — which lacks ES2023's toSorted. Patch it rather than ban it: the
+// codebase targets node >=24 and lints toward toSorted (unicorn/no-array-sort).
+// Safe below the imports: nothing calls toSorted at module-eval time.
+/* eslint-disable no-extend-native, unicorn/consistent-function-scoping, unicorn/no-array-sort -- toSorted polyfill for node <20 */
+if (typeof Array.prototype.toSorted !== "function") {
+  Array.prototype.toSorted = function toSorted<T>(
+    this: T[],
+    compare?: (a: T, b: T) => number
+  ): T[] {
+    return [...this].sort(compare);
+  };
+}
+/* eslint-enable no-extend-native, unicorn/consistent-function-scoping, unicorn/no-array-sort */
+
+// new URL over import.meta.dirname: the latter is undefined before node 20.11,
+// and this binary regularly runs under whatever node is first in PATH.
 const packageJson = JSON.parse(
-  readFileSync(join(import.meta.dirname, "..", "package.json"), "utf-8")
+  readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 ) as { version: string };
 
 const program = new Command();
