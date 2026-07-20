@@ -1,13 +1,13 @@
 ---
 name: captain
-description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. `captain start` — or bare `captain TIG-430`, start is implicit — gives each agent a brief carrying the whole pipeline (plan → implement → /tidy → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict) and the agent drives it itself; `--agent codex` launches codex agents instead (best-effort, no plan gate). `captain status` derives NEEDS YOU / IN FLIGHT / READY live from cmux signals and verdict files — no daemon, no state. Use when asked to "conduct my fleet", "fan out these tickets", "start this ticket", "run these on codex", "what's blocked across my agents", "approve all the plans", "show me the plans", "what's ready to merge", or "start the captain".
+description: Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. `captain start` — or bare `captain TIG-430`, start is implicit — gives each agent a brief carrying the whole pipeline (plan → implement → /tidy → /pr-reviewer → /pr-creator → /pr-babysitter → verifier verdict) and the agent drives it itself; `--agent codex` launches codex agents instead (best-effort, no plan gate). `captain status` derives NEEDS YOU / IN FLIGHT / READY live from cmux signals and verdict files — no daemon, no state. Use when asked to "conduct my fleet", "fan out these tickets", "start this ticket", "run these on codex", "what's blocked across my agents", "approve all the plans", "show me the plans", "what's ready to merge", or "start the captain". "run the dev loop" and "drain the queue" arm `/captain loop`, an explicitly armed mode that fills free agent slots from the TIG `agent-ready` queue.
 ---
 
 # Captain
 
-**IS:** conducting a fleet via the `captain` CLI — fan out Linear tickets, poll `captain status`,
-batch plan approvals and off-script questions into human decisions, nudge stalled agents, distill
-fleet memory. **IS NOT:** typing low-level cmux verbs by hand (use [`cmux`](../cmux/SKILL.md)) or
+**IS:** conducting a fleet via the `captain` CLI — fan out Linear tickets, run the explicitly
+armed auto-pickup loop, poll `captain status`, batch plan approvals and off-script questions into
+human decisions, nudge stalled agents, distill fleet memory. **IS NOT:** typing low-level cmux verbs by hand (use [`cmux`](../cmux/SKILL.md)) or
 running any pipeline step yourself — the agent self-drives plan → implement → `/tidy` →
 `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verdict. The driver is a long-lived Claude Code
 session, not a human at a keyboard; Captain keeps **no state** (`status` derives live from cmux +
@@ -71,6 +71,62 @@ each worktree's `.captain/`).
    `--json` for every row's hash. ~200–260s lets gates accumulate and verdicts land between sweeps.
    (A human can watch a terminal with `captain status --watch`.)
 
+## Auto-pickup loop
+
+**Off by default; arm it explicitly.** Only `/captain loop`, "run the dev loop", or "drain the queue"
+turns this on — `/captain loop` caps at **3** active-agent slots, `/captain loop <N>` (or the
+natural-language equivalent) sets any positive integer for this session. A plain `captain status` or
+`captain TIG-xxx` session never reads the queue and never auto-picks. Armed state is session-local
+and holds until the user says stop or the session ends; **stop disarms immediately** — an
+already-backgrounded heartbeat that wakes after a stop reads no queue, dispatches nothing, and never
+re-arms.
+
+- **Heartbeat: session-preserving rungs only.** Setup's backgrounded-sleep rung (or `ScheduleWakeup`,
+  and only when already inside `/loop`). **Never** the `CronCreate` rung — fresh context each tick
+  can't carry the explicit arm or per-ticket suppression. No session-preserving rung available → stop
+  auto-pickup, surface the error once, leave the fleet untouched.
+- **Gates before pickup, every wake.** Derive the fleet with `captain status --json` (full, not
+  `--summary` — summary lacks the rows dedupe needs), work the NEEDS YOU batch, _then_ consider
+  pickup. A structured status error (`{"error":{"type":"CMUX_UNREACHABLE"}}`) or non-zero exit **fails
+  closed** — dispatch nothing, surface once, re-arm.
+- **Capacity.** `active` = NEEDS YOU + IN FLIGHT rows (READY rows have finished, so they free a slot
+  but still count for dedupe); `available = max(0, cap − active)`. Zero available → skip the Linear
+  read entirely, re-arm.
+- **Read-only queue read.** `linear__list_issues` (linear-server MCP): team TIG, label `agent-ready`,
+  state type unstarted, `orderBy` createdAt, paginated to exhaustion. Sort locally by priority value
+  1 (Urgent) → 2 → 3 → 4, then 0/unset last; tiebreak createdAt ascending, then identifier ascending.
+  Consider at most the first `available` that pass eligibility. **The driver writes no Linear.**
+- **Eligibility — every check before starting anything.** Per candidate: (a) lowercase the
+  identifier, skip if any status row's `ticket` matches (NEEDS YOU, IN FLIGHT, _or_ READY); (b) read
+  the full description — require `<!-- tiger-agent:contract -->` plus exactly one `**Repo & area:**`
+  field carrying exactly one `blstrco/<repo>` token (missing, duplicate, or multi-repo is ambiguous,
+  never guessed); (c) require `**Blast radius:** low` exactly (trimmed, case-normalized) — `elevated`
+  (money/tax/PII/auth/permissions) is never auto-started, missing/unknown is invalid, **not** low;
+  (d) resolve `blstrco/<repo>` to `/Users/mblode/Code/linktree/<repo>` and confirm it's a git checkout
+  whose `origin` names that exact GitHub repo — a missing checkout or origin mismatch is a routing
+  failure, never a fallback to cwd.
+- **Dispatch to capacity.** Group selected ids by verified checkout; one **foreground**
+  `captain start <ids…> --repo-path <checkout> --json` per repo — never backgrounded. Validate every
+  returned `started[].cwd` against the expected checkout. After each repo batch, re-run
+  `captain status --json`, recompute `available`, and truncate the next batch so a partial launch or
+  external change can't overfill.
+- **Fail closed, recover partials.** No guessed routes, no blind retries. On a launch error re-derive
+  status: rows that now exist launched (deduped); report only identifiers with no row, leave them for
+  the next heartbeat.
+- **Suppress repeat noise (session memory).** Key failures by `<ticket>:<reason>`. A low-blast ticket
+  failing the _same_ check on two consecutive wakes: mention once in the next gate batch, then
+  suppress while the reason holds; reset when the ticket disappears, becomes eligible, or fails
+  differently. Elevated tickets aren't malformed — they're human decisions: offer each once per
+  unchanged Contract per session as an explicit `dispatch?` in the gate batch (approval runs the
+  normal `captain start`; decline/defer suppresses until the Contract changes or a new loop session
+  begins).
+- **Re-arm after every wake** — empty, full, partial, or failed-closed — unless the user stopped or
+  no session-preserving rung exists.
+
+**Invariants (unchanged):** plan approval stays mandatory for Claude agents; codex stays best-effort
+with no plan gate; merge stays human-only; `captain status --json` stays the fleet source of truth;
+the driver never writes Linear; test-worker caps are untouched.
+
 ## The loop
 
 **Poll by default** once a fleet is running — never ask the human whether to poll, never offer
@@ -105,6 +161,12 @@ per wake, not per gate.
   array (a thin one = the verifier was skipped).
 - **No daemon** — the heartbeat is step 4's self-re-invoking timer (rung 1 = backgrounded `sleep`);
   a missing scheduling tool is never a reason to stop polling or hand the loop back to the human.
+- **Auto-pickup forbids the `CronCreate` rung** — its fresh context each tick drops the explicit arm
+  and the per-ticket suppression set, so a loop on cron would silently re-read the queue with no
+  memory. Use the backgrounded-sleep rung (or `ScheduleWakeup` inside `/loop`), or don't loop.
+- **No lock guards the loop** — arming is session-local, so two armed drivers race the same
+  `agent-ready` queue and can double-dispatch a ticket. One armed loop per fleet; stop one the moment
+  you spot a second (don't trust worktree reuse to catch it).
 - **`cmux send` can silently no-op** (text parked unsubmitted while `status` still reads "working")
   — follow every send with `cmux send-key --workspace <id> enter` and re-read the screen.
 - **Verify run-state right after launch** — a launch race leaves a workspace at an empty shell
