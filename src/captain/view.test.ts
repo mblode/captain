@@ -49,6 +49,15 @@ describe("ticketFrom / identityOf", () => {
     expect(ticketFrom("chat")).toBeUndefined();
   });
 
+  it("extracts a donebear id despite the repo-name prefix", () => {
+    // The repo is literally "donebear", so a naive Linear match would greedily
+    // grab "donebear-35"; the db- anchor must win and return the full id.
+    expect(ticketFrom("donebear-db-35a2097c")).toBe("db-35a2097c");
+    expect(ticketFrom("db-35a2097c-ios-bugs")).toBe("db-35a2097c");
+    // A Linear worktree still resolves normally.
+    expect(ticketFrom("frontyard-tig-430")).toBe("tig-430");
+  });
+
   it("builds repo-ticket names, falling back to the workspace name", () => {
     expect(identityOf("/wt/tig-494", "tig-494", "linkiq")).toEqual({
       name: "linkiq-tig-494",

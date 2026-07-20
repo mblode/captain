@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { LinearIssue } from "./types";
+import type { Issue } from "./types";
 
 // The verdict file the finishing protocol tells the agent to write, relative to
 // the worktree root. The watcher polls this exact path (see captain/verdict.ts).
@@ -31,18 +31,23 @@ export const rubricBody = (text: string): string => {
 };
 
 const criteriaFor = (
-  issue: LinearIssue | undefined,
+  issue: Issue | undefined,
   displayId: string,
-  dataScope?: string
+  dataScope?: string,
+  source = "Linear"
 ): string[] => {
   const criteria: string[] = [
     issue?.title
       ? `The diff implements: **${issue.title}** (the issue description below is the contract).`
-      : `The diff implements Linear issue ${displayId}.`,
+      : `The diff implements ${source} issue ${displayId}.`,
   ];
-  for (const child of issue?.children?.nodes ?? []) {
-    if (child.title) {
-      criteria.push(`Sub-issue ${child.identifier}: ${child.title}.`);
+  for (const criterion of issue?.criteria ?? []) {
+    if (criterion.title) {
+      criteria.push(
+        criterion.ref
+          ? `${criterion.title} (${criterion.ref}).`
+          : `${criterion.title}.`
+      );
     }
   }
   criteria.push(
@@ -64,9 +69,10 @@ const criteriaFor = (
 // grading procedure (a fresh-context verifier sub-agent), so the verification
 // standard is set by captain once, not improvised per agent.
 export const renderRubric = (
-  issue: LinearIssue | undefined,
+  issue: Issue | undefined,
   displayId: string,
-  dataScope?: string
+  dataScope?: string,
+  source = "Linear"
 ): { text: string; hash: string } => {
   let body = `# Definition of done — ${displayId}\n\n`;
   body +=
@@ -76,7 +82,8 @@ export const renderRubric = (
   for (const [i, criterion] of criteriaFor(
     issue,
     displayId,
-    dataScope
+    dataScope,
+    source
   ).entries()) {
     body += `${i + 1}. ${criterion}\n`;
   }

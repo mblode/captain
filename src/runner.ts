@@ -10,9 +10,8 @@ import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
 import { ensureWorktree, fetchOrigin, gitCommonDir, repoLabel } from "./git";
 import { downloadIssueImages, worktreeTmpDir } from "./images";
-import { isLinearToken, parseIssueInput, slugify } from "./issue";
+import { slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
-import { fetchLinearIssue } from "./linear";
 import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
 import { createProgress, withPrefix } from "./progress";
 import type { Progress } from "./progress";
@@ -20,6 +19,7 @@ import { renderPrompt, renderPromptExtras } from "./prompt";
 import { resolveRepo } from "./repo";
 import { renderRubric, RUBRIC_RELPATH } from "./rubric";
 import { commandExists } from "./shell";
+import { isIssueToken, sourceFor } from "./source";
 import type { CliOptions, DispatchOptions, WorktreeResult } from "./types";
 
 interface PreparedIssue {
@@ -354,9 +354,10 @@ const withLoopExtras = async (
   env: NodeJS.ProcessEnv,
   skills: string[],
   dataScope: string,
-  agent: string
+  agent: string,
+  source = "Linear"
 ): Promise<string> => {
-  const { text } = renderRubric(issue, displayId, dataScope);
+  const { text } = renderRubric(issue, displayId, dataScope, source);
   await mkdir(join(worktreePath, ".captain"), { recursive: true });
   await writeFile(join(worktreePath, RUBRIC_RELPATH), text);
   await excludeCaptainDir(repoRoot, env);
@@ -381,7 +382,20 @@ const prepareIssue = async (
 ): Promise<PreparedIssue> => {
   const { env, progress } = context;
 
-  const parsedIssue = parseIssueInput(token);
+  // Resolve the token's source (Linear or donebear) once via the registry; the
+  // routing above only reaches here for issue tokens, so sourceFor is defined.
+  // Match on the first word so a `TST-1 some slug words` single-issue token
+  // still resolves (its trailing slug is parsed by the source, not matched).
+  const firstWord = token.trim().split(/\s+/u)[0] ?? token;
+  const source = sourceFor(firstWord);
+  if (!source) {
+    throw new CliError(
+      `not a recognized issue token: ${firstWord}`,
+      EXIT.USAGE,
+      "USAGE"
+    );
+  }
+  const { parsed: parsedIssue, fetch: fetchIssue } = source.prepare(token);
 
   progress.step("resolving repo");
   const repo = resolveRepo({
@@ -390,17 +404,18 @@ const prepareIssue = async (
     repoOverride: context.repoOverride,
   });
 
-  // Dispatch the Linear request first (async, non-blocking) so it travels the
+  // Dispatch the issue request first (async, non-blocking) so it travels the
   // network while the synchronous `git fetch origin` blocks the main thread.
-  progress.step(`fetching ${parsedIssue.displayId} from Linear`);
-  const issuePromise = fetchLinearIssue(parsedIssue.displayId, env);
+  // Both sources converge on the neutral Issue — everything below is agnostic.
+  progress.step(`fetching ${parsedIssue.displayId} from ${source.name}`);
+  const issuePromise = fetchIssue(env);
   progress.step("git fetch origin");
   fetchOrigin(repo.repoRoot, env);
   const issue = await issuePromise;
 
   const slug = parsedIssue.slug || (issue?.title ? slugify(issue.title) : "");
 
-  let prompt = renderPrompt(issue, parsedIssue.displayId);
+  let prompt = renderPrompt(issue, parsedIssue.displayId, source.name);
   if (issue?.description && env.LINEAR_API_KEY) {
     progress.step("downloading screenshots");
     const screenshots = await downloadIssueImages(
@@ -432,7 +447,8 @@ const prepareIssue = async (
     env,
     context.skills,
     context.dataScope,
-    context.agent
+    context.agent,
+    source.name
   );
 
   return { displayId: parsedIssue.displayId, prompt, worktree };
@@ -555,6 +571,9 @@ const dispatch = async ({
   });
 };
 
+// The worktree fan-out path: one worktree + cmux workspace per issue token. Each
+// token routes to its own source in prepareIssue (Linear id/URL or donebear task
+// URL/UUID), so a single invocation can mix both.
 export const runLinearWorktree = async (
   options: CliOptions
 ): Promise<number> => {
@@ -676,14 +695,15 @@ export const runDispatch = async (
   }
 };
 
-// The single entry point behind `captain start`: route to the Linear worktree
-// fan-out or the free-form current-dir dispatch by inspecting the first token.
-// Empty tokens fall through to runLinearWorktree, which reads stdin then errors.
+// The single entry point behind `captain start`: route to the issue worktree
+// fan-out (Linear or donebear) or the free-form current-dir dispatch by
+// inspecting the first token. Empty tokens fall through to runLinearWorktree,
+// which reads stdin then errors.
 export const runStart = (
   options: CliOptions & { name?: string }
 ): Promise<number> => {
   const [first] = options.tokens;
-  if (first && !isLinearToken(first)) {
+  if (first && !isIssueToken(first)) {
     return runDispatch({
       agent: options.agent,
       cwd: options.cwd,

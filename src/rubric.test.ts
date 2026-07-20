@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { renderRubric, rubricBody, rubricHash } from "./rubric";
-import type { LinearIssue } from "./types";
+import type { Issue } from "./types";
 
-const issue: LinearIssue = {
-  children: {
-    nodes: [{ identifier: "ENG-404", title: "Child task" }],
-  },
+const issue: Issue = {
+  criteria: [{ ref: "ENG-404", title: "Child task" }],
   description: "The contract body",
   identifier: "ENG-403",
   title: "Fix launch flow",
@@ -17,7 +15,7 @@ describe("renderRubric", () => {
     const { text } = renderRubric(issue, "ENG-403");
     expect(text).toContain("# Definition of done — ENG-403");
     expect(text).toContain("**Fix launch flow**");
-    expect(text).toContain("Sub-issue ENG-404: Child task.");
+    expect(text).toContain("Child task (ENG-404).");
     expect(text).toContain("The contract body");
     expect(text).toContain("test command passes");
     expect(text).toContain("typecheck and lint commands pass");
@@ -61,7 +59,7 @@ describe("renderRubric", () => {
     // The description is embedded verbatim, so a `## Verdict` heading inside it
     // must not truncate the hashed body (splitting on the last heading, not the
     // first). Otherwise the worktree could never reach READY TO MERGE.
-    const withHeading: LinearIssue = {
+    const withHeading: Issue = {
       ...issue,
       description: "Intro\n\n## Verdict\n\nsome prose the ticket author wrote",
     };

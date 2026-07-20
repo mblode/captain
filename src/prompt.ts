@@ -1,29 +1,34 @@
 import { DEFAULT_SKILLS } from "./config";
-import type { LinearIssue, LinearRelatedIssue } from "./types";
+import type { Issue, IssueCriterion } from "./types";
 
-const renderRelatedIssue = (
-  tag: "parent-issue" | "sub-issue",
-  issue: LinearRelatedIssue
+const renderCriterion = (
+  tag: "parent-issue" | "criterion",
+  criterion: IssueCriterion
 ): string => {
-  let output = `<${tag} identifier="${issue.identifier}">\n`;
-  output += `<id>${issue.id ?? ""}</id>\n`;
-  output += `<title>${issue.title ?? ""}</title>\n`;
-  if (issue.description) {
-    output += `<description>\n${issue.description}\n</description>\n`;
+  let output = criterion.ref
+    ? `<${tag} ref="${criterion.ref}">\n`
+    : `<${tag}>\n`;
+  output += `<title>${criterion.title}</title>\n`;
+  if (criterion.description) {
+    output += `<description>\n${criterion.description}\n</description>\n`;
   }
   output += `</${tag}>\n`;
   return output;
 };
 
 export const renderPrompt = (
-  issue: LinearIssue | undefined,
-  displayId: string
+  issue: Issue | undefined,
+  displayId: string,
+  // the issue source, for the brief's opening line (Linear or donebear). The
+  // rest of the context is source-agnostic — every source maps into the neutral
+  // Issue shape upstream (linear.ts / donebear.ts).
+  source = "Linear"
 ): string => {
   if (!issue) {
-    return `Work on Linear issue ${displayId}.`;
+    return `Work on ${source} issue ${displayId}.`;
   }
 
-  let prompt = `Work on Linear issue ${issue.identifier}:\n\n`;
+  let prompt = `Work on ${source} issue ${issue.identifier}:\n\n`;
   prompt += `<issue identifier="${issue.identifier}">\n`;
   prompt += `<title>${issue.title ?? ""}</title>\n`;
 
@@ -44,16 +49,16 @@ export const renderPrompt = (
   }
 
   if (issue.parent) {
-    prompt += renderRelatedIssue("parent-issue", issue.parent);
+    prompt += renderCriterion("parent-issue", issue.parent);
   }
 
-  const children = issue.children?.nodes ?? [];
-  if (children.length > 0) {
-    prompt += "<sub-issues>\n";
-    for (const child of children) {
-      prompt += renderRelatedIssue("sub-issue", child);
+  const criteria = issue.criteria ?? [];
+  if (criteria.length > 0) {
+    prompt += "<criteria>\n";
+    for (const criterion of criteria) {
+      prompt += renderCriterion("criterion", criterion);
     }
-    prompt += "</sub-issues>\n";
+    prompt += "</criteria>\n";
   }
 
   prompt += "</issue>\n";

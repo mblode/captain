@@ -26,9 +26,13 @@ npm link                    # install `captain` globally from this checkout
 ```text
 src/
   cli.ts            # Commander entry: install | start | status | approve | reject; bare-token routing via withImplicitStart
-  route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-Linear word = likely typo, untouched)
-  runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
-  cmux.ts git.ts linear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
+  route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-issue word = likely typo, untouched); routes via source.ts isIssueToken
+  runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
+  source.ts         # THE ISSUE-SOURCE SEAM: IssueSource registry (name/claims/prepare) — the one owner of "which source claims this token + how to parse/fetch it". sourceFor + isIssueToken. Adding a source touches only this file.
+  cmux.ts git.ts linear.ts donebear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
+  # types.ts    : Issue (the source-neutral contract: identifier/title/description/criteria + optional Linear context) — every source maps INTO it, nothing downstream knows the source
+  # linear.ts   : fetchLinearIssue (id/URL → GraphQL) + mapLinearIssue (raw API → Issue; sub-issues → criteria)
+  # donebear.ts : isDonebearToken/parseDonebearInput (task URL or bare UUID → db-<8hex> id) + fetchDonebearTask + mapTaskToIssue (task+checklist → Issue; unchecked checklist items → criteria)
   config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE)
   prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <data-scope> guardrail + <finishing-protocol> + <fleet-memory>
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
@@ -47,17 +51,28 @@ src/
 
 ## How it works
 
-**Start** (`captain start`, `runStart`): routes on its first token — a Linear issue id/URL →
+**Start** (`captain start`, `runStart`): routes on its first token — an **issue token** (any source
+in the `source.ts` registry claims it: a Linear id/URL or a donebear task URL/UUID) →
 `runLinearWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
-free-form task in the **current checkout**, no Linear, no worktree). The `start` subcommand is
-implicit: a bare first argument that isn't a known subcommand or a flag is treated as `start`
-(`withImplicitStart` in `route.ts` splices `start` into argv before commander parses it; the
-known-commands set is derived from the commander registry so it can't drift), so `captain tig-123`
-and `captain "tidy the readme"` work like `captain start …` — this is the `linear-worktree`
-invocation, subsumed. One guard: a **single** bare word that isn't a Linear id/URL and has no
-spaces (`captain statsu`) is left alone so commander errors — it's far more likely a typo'd
-subcommand than a one-word task, and splicing would launch an agent and clobber the checkout's
-`.captain/` rubric (voiding an in-flight dispatch's verdict hash). Either way the agent gets the
+free-form task in the **current checkout**, no issue, no worktree). The routing sites all ask one
+predicate — `isIssueToken` (`source.ts`) — instead of enumerating sources, so a new source is one
+registry entry, not edits across `runStart`/`withImplicitStart`/`isFanOutInput`/`prepareIssue`.
+`prepareIssue` calls `sourceFor(token)` and drives the source's `prepare` (parse + a bound fetch);
+each source maps its native payload **into** the source-neutral `Issue` (`types.ts`:
+identifier/title/description/`criteria` + optional Linear context), so everything downstream
+(worktree, rubric, prompt, verdict) is source-agnostic — only the brief's source label differs. For
+donebear, captain's short id is `db-<first-8-hex-of-uuid>` (e.g. `db-35a2097c`), derived from the
+token without a fetch so worktree naming never waits on the network; each unchecked checklist item
+becomes one acceptance criterion (Linear sub-issues map to the same `criteria` field). The `start`
+subcommand is implicit: a bare first argument that isn't a known subcommand or a flag is treated as
+`start` (`withImplicitStart` in `route.ts` splices `start` into argv before commander parses it; the
+known-commands set is derived from the commander registry so it can't drift), so `captain tig-123`,
+`captain 35a2097c-…` (a bare task UUID) and `captain "tidy the readme"` work like `captain start …`
+— this is the `linear-worktree` invocation, subsumed. One guard: a **single** bare word that no
+source claims and has no spaces (`captain statsu`) is left alone so commander errors — it's far more
+likely a typo'd subcommand than a one-word task, and splicing would launch an agent and clobber the
+checkout's `.captain/` rubric (voiding an in-flight dispatch's verdict hash). Either way the agent
+gets the
 same brief: the `<workflow>` pipeline (plan → implement → the configured skills → verifier
 finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
 `loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
@@ -201,17 +216,19 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   no state, listens to nothing, and coordinates no writers. The forbidden class is a _persistent
   background listener_, not a polling loop.)
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
-  free-form current-dir dispatch, an explicit `--repo-path`, the bare-token form (`captain tig-123`
-  == `captain start tig-123`, via `withImplicitStart`), and `--print` for each. Repo selection
-  is `--repo-path` else cwd; spanning repos in one session is the driver's job (per-ticket
-  `--repo-path`), not config.
+  donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch,
+  an explicit `--repo-path`, the bare-token form (`captain tig-123` == `captain start tig-123`, via
+  `withImplicitStart`), and `--print` for each. Repo selection is `--repo-path` else cwd; spanning
+  repos in one session is the driver's job (per-ticket `--repo-path`), not config.
 - **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
   gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
   wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
 
 ## Env knobs
 
-`LINEAR_API_KEY` (issue fetch + screenshots) · `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
+`LINEAR_API_KEY` (Linear issue fetch + screenshots) · `DONEBEAR_TOKEN` (donebear task fetch — a
+`db_` API key from `donebear api-key create`; read scope is enough, captain never writes back) ·
+`CAPTAIN_MEMORY_DIR` (fleet memory override) ·
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
 skills, overrides the config file) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
 `CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default

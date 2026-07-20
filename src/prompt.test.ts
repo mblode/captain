@@ -1,28 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import { renderPrompt, renderPromptExtras } from "./prompt";
-import type { LinearIssue } from "./types";
+import type { Issue } from "./types";
 
 describe("prompt rendering", () => {
-  it("renders Linear copy-as-prompt shape without url", () => {
-    const issue: LinearIssue = {
-      children: {
-        nodes: [
-          {
-            description: "Child body",
-            id: "child-uuid",
-            identifier: "ENG-404",
-            title: "Child task",
-          },
-        ],
-      },
+  it("renders the neutral issue-as-prompt shape without url", () => {
+    const issue: Issue = {
+      criteria: [
+        {
+          description: "Child body",
+          ref: "ENG-404",
+          title: "Child task",
+        },
+      ],
       description:
         "Raw markdown with ![shot](https://uploads.linear.app/file.png)",
       identifier: "ENG-403",
       labels: { nodes: [{ name: "Frontend" }, { name: "Bug" }] },
       parent: {
-        id: "parent-uuid",
-        identifier: "ENG-400",
+        ref: "ENG-400",
         title: "Parent task",
       },
       project: { name: "Activation" },
@@ -37,14 +33,27 @@ describe("prompt rendering", () => {
     expect(prompt).toContain('<team name="Engineering"/>');
     expect(prompt).toContain("<label>Frontend</label>");
     expect(prompt).toContain('<project name="Activation"/>');
-    expect(prompt).toContain('<parent-issue identifier="ENG-400">');
-    expect(prompt).toContain("<id>parent-uuid</id>");
-    expect(prompt).toContain('<sub-issue identifier="ENG-404">');
-    expect(prompt).toContain("<id>child-uuid</id>");
+    expect(prompt).toContain('<parent-issue ref="ENG-400">');
+    expect(prompt).toContain('<criterion ref="ENG-404">');
+    expect(prompt).toContain("<title>Child task</title>");
     expect(prompt).not.toContain("<url>");
+    // the internal Linear uuid is not carried into the neutral brief
+    expect(prompt).not.toContain("<id>");
   });
 
-  it("falls back when Linear data is unavailable", () => {
+  it("renders a source label other than Linear", () => {
+    const prompt = renderPrompt(
+      { criteria: [{ title: "Fix crashes" }], identifier: "db-35a2097c" },
+      "db-35a2097c",
+      "donebear"
+    );
+    expect(prompt).toContain("Work on donebear issue db-35a2097c:");
+    // a ref-less donebear checklist item renders as a bare criterion
+    expect(prompt).toContain("<criterion>");
+    expect(prompt).toContain("<title>Fix crashes</title>");
+  });
+
+  it("falls back when issue data is unavailable", () => {
     expect(renderPrompt(undefined, "ENG-999")).toBe(
       "Work on Linear issue ENG-999."
     );

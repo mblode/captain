@@ -27,6 +27,13 @@ describe("withImplicitStart", () => {
     expect(route(url)).toEqual(argv("start", url));
   });
 
+  it("splices start before a bare donebear task UUID and URL", () => {
+    const uuid = "35a2097c-a5c9-477f-b50c-d39b942567a9";
+    expect(route(uuid)).toEqual(argv("start", uuid));
+    const url = `https://donebear.com/matthew-blode/task/${uuid}`;
+    expect(route(url)).toEqual(argv("start", url));
+  });
+
   it("splices start before a free-form task, preserving following args", () => {
     expect(route("tidy the readme", "--agent", "codex")).toEqual(
       argv("start", "tidy the readme", "--agent", "codex")

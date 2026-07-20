@@ -1,6 +1,6 @@
 import { DEFAULT_MODEL, loadAgentEnv, loadEffort, loadModel } from "./config";
-import { isIssueId } from "./issue";
 import { commandExists, run, runRequired, shellQuote } from "./shell";
+import { isIssueToken } from "./source";
 
 interface OpenWorkspaceOptions {
   agent: string;
@@ -11,8 +11,10 @@ interface OpenWorkspaceOptions {
   worktreePath: string;
 }
 
+// A fan-out is ≥2 issue tokens on one line — any source's tokens, mixable,
+// since prepareIssue routes each token to its own source via the registry.
 export const isFanOutInput = (tokens: string[], print: boolean): boolean =>
-  !print && tokens.length >= 2 && tokens.every(isIssueId);
+  !print && tokens.length >= 2 && tokens.every(isIssueToken);
 
 export const cmuxReachable = (env: NodeJS.ProcessEnv): boolean =>
   commandExists("cmux", env) && run("cmux", ["ping"], { env }).status === 0;

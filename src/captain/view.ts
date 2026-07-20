@@ -53,8 +53,21 @@ export interface FleetRow {
   handle?: string;
 }
 
-// The canonical ticket id inside a name/path ("tig-494"), lowercased.
+// The canonical ticket id inside a name/path ("tig-494"), lowercased. A donebear
+// id (`db-<hex>`) is matched FIRST: a donebear worktree dir carries the repo name
+// as a prefix ("donebear-db-35a2097c"), and the Linear pattern would otherwise
+// greedily match the "donebear-35" boundary and return a bogus partial. The
+// donebear pattern anchors on the `db-` prefix, so it can't collide that way.
+//
+// SOURCE SEAM: the `db-` shape is donebear-specific knowledge (see source.ts /
+// donebear.ts). It lives inline here rather than in the registry on purpose —
+// the pure core (lint-enforced no-fs/subprocess) may not import the fetch-side
+// source modules. A third source's id shape would extend this list.
 export const ticketFrom = (text: string): string | undefined => {
+  const db = text.match(/db-[0-9a-f]{6,}/iu);
+  if (db) {
+    return db[0].toLowerCase();
+  }
   const m = text.match(/([a-z]+-\d+)/iu);
   return m ? m[1].toLowerCase() : undefined;
 };

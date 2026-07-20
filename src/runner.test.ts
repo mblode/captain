@@ -715,6 +715,38 @@ describe("runStart routing", () => {
     expect(output.value()).toContain(`cd ${join(root, "src-tst-7")}`);
   });
 
+  it("routes a donebear task UUID to the worktree fan-out (no-token coarse path)", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    // No DONEBEAR_TOKEN in safeEnv → fetch degrades to undefined, so the brief
+    // uses the coarse donebear wording and a db-<8hex> worktree, deterministically.
+    const uuid = "35a2097c-a5c9-477f-b50c-d39b942567a9";
+    await runStart({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      stdout: output.stream,
+      tokens: [uuid],
+    });
+
+    const worktree = join(root, "src-db-35a2097c");
+    expect(
+      runRequired("git", ["-C", worktree, "branch", "--show-current"], {
+        env: safeEnv(),
+      })
+    ).toBe("db-35a2097c");
+    // The brief names donebear, not Linear.
+    expect(output.value()).toContain("Work on donebear issue db-35a2097c.");
+    const rubric = await readFile(
+      join(worktree, ".captain", "rubric.md"),
+      "utf-8"
+    );
+    expect(rubric).toContain("# Definition of done — db-35a2097c");
+    expect(rubric).toContain("implements donebear issue db-35a2097c");
+  });
+
   it("routes free-form text to a current-dir dispatch", async () => {
     const { repo, root } = await createGitRepo("src");
     cleanup.push(root);
