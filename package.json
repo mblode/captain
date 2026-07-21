@@ -1,6 +1,6 @@
 {
   "name": "cmux-captain",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "Drive a fleet of cmux worktrees through the SDLC, live — from Linear ticket to PR-ready",
   "keywords": [
     "captain",
