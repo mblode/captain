@@ -1,5 +1,11 @@
 # linear-worktree
 
+## 0.8.5
+
+### Patch Changes
+
+- f62c589: Keep retried workspaces visible by restoring missing Captain rubrics, and label free-form task rubrics accurately.
+
 ## 0.8.4
 
 ### Patch Changes
