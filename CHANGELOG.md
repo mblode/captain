@@ -1,5 +1,11 @@
 # linear-worktree
 
+## 0.8.3
+
+### Patch Changes
+
+- 81ad736: Skip blank donebear checklist rows (empty title) when building acceptance criteria, so a task with an empty checklist item no longer renders an empty `<criterion>` in the agent brief. The rubric already ignored blank rows; this aligns the prompt.
+
 ## 0.8.2
 
 ### Patch Changes
