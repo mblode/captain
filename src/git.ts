@@ -3,7 +3,7 @@ import { mkdir, rmdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
-import { CliError } from "./errors";
+import { CliError, EXIT } from "./errors";
 import { run, runRequired } from "./shell";
 import type { WorktreeResult } from "./types";
 
@@ -89,8 +89,23 @@ const resolveBaseRef = (
 };
 
 export const fetchOrigin = (repoRoot: string, env: NodeJS.ProcessEnv): void => {
-  run("git", ["-C", repoRoot, "fetch", "origin", "--quiet"], { env });
+  const result = run("git", ["-C", repoRoot, "fetch", "origin", "--quiet"], {
+    env,
+  });
+  if (result.status !== 0) {
+    throw new CliError(
+      `git fetch origin failed in ${repoRoot} — run \`git fetch origin\` there to diagnose; verify the origin remote and network, then retry`,
+      EXIT.GENERIC,
+      "GIT_FETCH_FAILED"
+    );
+  }
 };
+
+// Captain's issue worktree location is derivable from the repo and parsed issue
+// id alone. Keeping this formula in one place lets the runner identify a live
+// retry before fetching the issue or touching the worktree.
+export const worktreePathFor = (repoRoot: string, issueId: string): string =>
+  join(dirname(repoRoot), `${basename(repoRoot)}-${issueId}`);
 
 const reuseExistingWorktree = (
   worktreePath: string,
@@ -124,6 +139,16 @@ const reuseExistingWorktree = (
     worktreePath,
   };
 };
+
+// Read an already-materialized issue worktree without fetching, pruning, or
+// creating anything. Used by the runner's early retry path after cmux proves an
+// agent is actively attached to the exact derived cwd.
+export const existingIssueWorktree = (
+  repoRoot: string,
+  issueId: string,
+  env: NodeJS.ProcessEnv
+): WorktreeResult | undefined =>
+  reuseExistingWorktree(worktreePathFor(repoRoot, issueId), issueId, env);
 
 const refExists = (
   repoRoot: string,
@@ -246,10 +271,7 @@ export const ensureWorktree = async (
   options: EnsureWorktreeOptions
 ): Promise<WorktreeResult> => {
   const branch = `${options.issueId}${options.slug ? `-${options.slug}` : ""}`;
-  const worktreePath = join(
-    dirname(options.repoRoot),
-    `${basename(options.repoRoot)}-${options.issueId}`
-  );
+  const worktreePath = worktreePathFor(options.repoRoot, options.issueId);
 
   // Re-running for an issue is a no-op: reuse the existing worktree as-is.
   const existing = reuseExistingWorktree(worktreePath, branch, options.env);
@@ -280,6 +302,16 @@ export const ensureWorktree = async (
 
   await acquireLock(lockDir);
   try {
+    // Another captain invocation may have created this exact worktree while we
+    // waited for the shared lock. Recheck under the lock before prune/add.
+    const concurrentlyCreated = reuseExistingWorktree(
+      worktreePath,
+      branch,
+      options.env
+    );
+    if (concurrentlyCreated) {
+      return concurrentlyCreated;
+    }
     // Clear stale registrations whose directories were deleted out from under git.
     run("git", ["-C", options.repoRoot, "worktree", "prune"], {
       env: options.env,

@@ -15,12 +15,13 @@ const INBOX_HEADING = "## Inbox";
 
 // Injection caps: keep the excerpt a small, fixed prompt cost.
 const INBOX_MAX_ENTRIES = 20;
-const INBOX_MAX_CHARS = 4096;
+const EXCERPT_MAX_CHARS = 2048;
+const TRUNCATION_MARKER = "[… truncated]";
 
 const SKELETON = `# Fleet learnings
 
-Shared memory for every worktree of this repo. Agents: append 1-3 verified,
-general bullets to ${INBOX_HEADING} at the end of a run. Humans (the captain
+Shared memory for every worktree of this repo. Agents: append zero or one
+verified bullet to ${INBOX_HEADING} at the end of a run. Humans (the captain
 skill): periodically distill ${INBOX_HEADING} into ${RULES_HEADING} and delete
 what didn't hold up.
 
@@ -62,24 +63,77 @@ export const ensureMemoryFile = (
   return path;
 };
 
-// Pure: slice the excerpt out of the file content — all of `## Rules`, plus the
-// tail of `## Inbox` capped by entry count and character length (String.length
-// counts UTF-16 code units, not bytes).
+const learningKey = (line: string): string =>
+  line
+    .trim()
+    .replace(/^-\s+(?:\[[^\]]+\]\s*)?/u, "")
+    .trim();
+
+// Node 18 still appears via repo-local version managers. Avoid ES2023
+// `toReversed` while also leaving the caller's array untouched.
+const reversedCopy = <T>(values: readonly T[]): T[] => {
+  const result: T[] = [];
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    result.push(values[index] as T);
+  }
+  return result;
+};
+
+// Keep the prompt budget fail-safe without emitting half an instruction. Long
+// content is clipped only between lines and carries an explicit marker. If the
+// first line alone is over budget, the marker is safer than a misleading
+// fragment of it.
+const clipWholeLines = (content: string): string => {
+  if (content.length <= EXCERPT_MAX_CHARS) {
+    return content;
+  }
+  const budget = EXCERPT_MAX_CHARS - TRUNCATION_MARKER.length - 1;
+  const kept: string[] = [];
+  let length = 0;
+  for (const line of content.split("\n")) {
+    const nextLength = length + (kept.length > 0 ? 1 : 0) + line.length;
+    if (nextLength > budget) {
+      break;
+    }
+    kept.push(line);
+    length = nextLength;
+  }
+  return kept.length > 0
+    ? `${kept.join("\n")}\n${TRUNCATION_MARKER}`
+    : TRUNCATION_MARKER;
+};
+
+// Pure: slice the excerpt out of the file content — curated rules first, then
+// the newest unique inbox entries. The single total cap includes both sections
+// (String.length counts UTF-16 code units, not bytes).
 export const memoryExcerptOf = (content: string): string => {
   const inboxAt = content.indexOf(INBOX_HEADING);
   const rulesAt = content.indexOf(RULES_HEADING);
   if (rulesAt === -1 && inboxAt === -1) {
-    return content.trim();
+    return clipWholeLines(content.trim());
   }
 
   // A heading with nothing under it (the skeleton) contributes nothing.
   let rules = "";
+  const seen = new Set<string>();
   if (rulesAt !== -1) {
-    const section = content
+    const lines = content
       .slice(rulesAt, inboxAt === -1 ? content.length : inboxAt)
-      .trim();
-    if (section !== RULES_HEADING) {
-      rules = section;
+      .trim()
+      .split("\n");
+    const unique = lines.filter((line) => {
+      if (!line.trim().startsWith("- ")) {
+        return true;
+      }
+      const key = learningKey(line);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    if (unique.join("\n") !== RULES_HEADING) {
+      rules = unique.join("\n");
     }
   }
 
@@ -89,16 +143,38 @@ export const memoryExcerptOf = (content: string): string => {
       .slice(inboxAt + INBOX_HEADING.length)
       .split("\n")
       .filter((l) => l.trim().startsWith("- "));
-    let tail = entries.slice(-INBOX_MAX_ENTRIES);
-    while (tail.length > 1 && tail.join("\n").length > INBOX_MAX_CHARS) {
-      tail = tail.slice(1);
-    }
-    if (tail.length > 0) {
-      inbox = `${INBOX_HEADING}\n${tail.join("\n")}`;
+    const tail = reversedCopy(entries)
+      .filter((entry) => {
+        const key = learningKey(entry);
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+      .slice(0, INBOX_MAX_ENTRIES);
+    const chronologicalTail = reversedCopy(tail);
+    if (chronologicalTail.length > 0) {
+      inbox = `${INBOX_HEADING}\n${chronologicalTail.join("\n")}`;
     }
   }
 
-  return [rules, inbox].filter(Boolean).join("\n\n").trim();
+  const excerpt = [rules, inbox].filter(Boolean).join("\n\n").trim();
+  if (excerpt.length <= EXCERPT_MAX_CHARS) {
+    return excerpt;
+  }
+
+  // Rules are curated and therefore win the fixed prompt budget. Inbox lines
+  // are removed oldest-first before the rules themselves are clipped.
+  const inboxLines = inbox ? inbox.split("\n").slice(1) : [];
+  let bounded = excerpt;
+  while (inboxLines.length > 0 && bounded.length > EXCERPT_MAX_CHARS) {
+    inboxLines.shift();
+    const keptInbox =
+      inboxLines.length > 0 ? `${INBOX_HEADING}\n${inboxLines.join("\n")}` : "";
+    bounded = [rules, keptInbox].filter(Boolean).join("\n\n").trim();
+  }
+  return clipWholeLines(bounded);
 };
 
 // The injectable excerpt; empty string when the file is missing or has nothing

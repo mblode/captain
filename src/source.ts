@@ -14,6 +14,9 @@ import type { Issue, ParsedIssue } from "./types";
 export interface IssueSource {
   // the brief/rubric label ("Linear" | "donebear")
   name: string;
+  // environment variable required to fetch this source; diagnostics stay at
+  // the source seam so adding a source does not add a runner branch.
+  credential: string;
   // does this source claim the token? (a bare id/URL/UUID, no trailing words)
   claims(token: string): boolean;
   // parse the token, then bind the fetch that resolves it to a neutral Issue.
@@ -27,6 +30,7 @@ export interface IssueSource {
 
 const linearSource: IssueSource = {
   claims: isLinearToken,
+  credential: "LINEAR_API_KEY",
   name: "Linear",
   prepare: (token) => {
     const parsed = parseIssueInput(token);
@@ -36,6 +40,7 @@ const linearSource: IssueSource = {
 
 const donebearSource: IssueSource = {
   claims: isDonebearToken,
+  credential: "DONEBEAR_TOKEN",
   name: "donebear",
   prepare: (token) => {
     const parsed = parseDonebearInput(token);

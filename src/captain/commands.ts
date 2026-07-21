@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+
 import { CliError, EXIT } from "../errors";
-import { run } from "../shell";
+import { run, shellQuote } from "../shell";
 import { realCmux } from "./control";
 import type { CmuxPort } from "./control";
 import {
@@ -125,6 +127,10 @@ export const resolveTargets = (
 
 export interface StatusOptions {
   json?: boolean;
+  // friendly ticket/workspace refs, using the same resolution rules as
+  // approve/reject. Applied after --repo so that filter can disambiguate a
+  // ticket shared across repos.
+  refs?: string;
   // narrow to one repo's worktrees (label match, e.g. "linkiq")
   repo?: string;
   // only the NEEDS YOU group
@@ -132,8 +138,12 @@ export interface StatusOptions {
   // only the READY group
   ready?: boolean;
   // compact view: group counts + the NEEDS YOU rows only — a near-zero-token
-  // poll. Composes with --repo. Honoured by both --json and the TTY render.
+  // poll. Composes with refs/--repo. Honoured by both --json and the TTY render.
   summary?: boolean;
+  // Compare the current aggregate fleet snapshot with a token returned by an
+  // earlier `--summary --json` call. This is deliberately caller-held state:
+  // Captain persists nothing and simply reports whether the live view changed.
+  since?: string;
   // --watch: a stateless foreground live view that re-renders on a timer. NOT a
   // daemon — it holds no state, every tick re-derives the fleet from scratch
   // (same as re-running `status`), and Ctrl-C ends it. The agent driver does
@@ -193,9 +203,92 @@ const cmuxUnreachable = (
   return true;
 };
 
+const assertCmuxReachable = (port: CmuxPort): void => {
+  if (!port.reachable()) {
+    throw new CliError(
+      "cmux is not reachable — is it running? run 'captain install'",
+      EXIT.CMUX_UNREACHABLE,
+      "CMUX_UNREACHABLE"
+    );
+  }
+};
+
+const badRef = (message: string): CliError =>
+  new CliError(message, EXIT.USAGE, "BAD_REF");
+
+const badOptions = (message: string): CliError =>
+  new CliError(message, EXIT.USAGE, "BAD_OPTIONS");
+
+const validateStatusOptions = (options: StatusOptions): void => {
+  if (options.needs && options.ready) {
+    throw badOptions("--needs and --ready cannot be used together");
+  }
+  if (options.summary && (options.needs || options.ready)) {
+    throw badOptions("--summary cannot be combined with --needs or --ready");
+  }
+  if (
+    options.since !== undefined &&
+    (!options.summary || !options.json || options.watch)
+  ) {
+    throw badOptions(
+      "--since requires --summary --json and cannot be used with --watch"
+    );
+  }
+};
+
+const repoRows = (rows: FleetRow[], raw: string): FleetRow[] => {
+  const token = raw.trim().toLowerCase();
+  const repos = [
+    ...new Set(rows.flatMap((row) => (row.repo ? [row.repo] : []))),
+  ].toSorted((a, b) => a.localeCompare(b));
+  const exact = repos.find((repo) => repo.toLowerCase() === token);
+  if (exact) {
+    return rows.filter((row) => row.repo === exact);
+  }
+  const matches = repos.filter((repo) => repo.toLowerCase().includes(token));
+  if (matches.length === 1) {
+    return rows.filter((row) => row.repo === matches[0]);
+  }
+  if (matches.length === 0) {
+    throw badRef(`no Captain repo matches: ${raw}`);
+  }
+  throw badRef(
+    `"${raw}" is an ambiguous repo — use one of: ${matches.join(", ")}`
+  );
+};
+
+// Hash only the summary/action contract. Raw busy/idle/unknown churn inside the
+// IN FLIGHT group does not change counts and cannot create a new action, so it
+// must not wake a polling driver. Missing targeted refs are part of the token so
+// a disappearing worktree produces exactly one transition.
+const fleetSnapshot = (
+  counts: ReturnType<typeof groupCounts>,
+  needsYou: FleetRow[],
+  missing: string[]
+): string => {
+  const projection = {
+    counts,
+    missing: missing.toSorted((a, b) => a.localeCompare(b)),
+    needsYou: needsYou
+      .map((row) => ({
+        gate: row.gate,
+        group: row.group,
+        identity: row.name,
+        nextCommand: row.nextCommand,
+        summary: row.summary,
+        verdict: row.verdict,
+      }))
+      .toSorted((a, b) => a.identity.localeCompare(b.identity)),
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(projection))
+    .digest("hex")
+    .slice(0, 16);
+};
+
 // The one read surface: the fleet view derived live from cmux + the worktrees,
 // grouped with the few that need a decision on top — each carrying its inline
-// resolve command. --repo/--needs/--ready narrow the view. One independent,
+// resolve command. refs/--repo/--needs/--ready narrow the view. One independent,
 // stateless derivation per call.
 const statusOnce = (
   options: StatusOptions,
@@ -206,18 +299,54 @@ const statusOnce = (
     return;
   }
   let rows = fleetRows(port);
+  let missing: string[] = [];
   if (options.repo) {
-    const token = options.repo.trim().toLowerCase();
-    rows = rows.filter((r) => (r.repo ?? "").toLowerCase().includes(token));
+    rows = repoRows(rows, options.repo);
+  }
+  if (options.refs) {
+    const { ambiguous, matched, unknown } = resolveTargets(rows, options.refs);
+    // A first targeted poll stays strict so typos never become a valid empty
+    // baseline. Once the caller presents a valid snapshot, a missing ref is a
+    // normal completion/removal transition; ambiguity still always errors.
+    if (
+      ambiguous.length > 0 ||
+      (unknown.length > 0 && options.since === undefined)
+    ) {
+      const parts = [
+        unknown.length > 0
+          ? `no Captain worktree matches: ${unknown.join(", ")}`
+          : "",
+        ...ambiguous.map(
+          (a) =>
+            `"${a.token}" is ambiguous — qualify it: ${a.candidates.join(", ")}`
+        ),
+      ].filter(Boolean);
+      throw badRef(parts.join("; "));
+    }
+    missing = unknown;
+    rows = matched;
   }
   // --summary: counts for every group + full detail for NEEDS YOU only. Counts
-  // come off the (repo-filtered) full set, so they stay honest regardless of
-  // any narrowing flags.
+  // come off the (repo/ref-filtered) full set, so they stay honest regardless
+  // of any group-narrowing flags.
   if (options.summary) {
     const counts = groupCounts(rows);
     const needsYou = rows.filter((r) => r.group === "needs-you");
     if (options.json) {
-      out.write(`${JSON.stringify({ counts, needsYou })}\n`);
+      const snapshot = fleetSnapshot(counts, needsYou, missing);
+      if (options.since === snapshot) {
+        out.write(`${JSON.stringify({ changed: false, snapshot })}\n`);
+        return;
+      }
+      out.write(
+        `${JSON.stringify({
+          ...(options.since === undefined ? {} : { changed: true }),
+          counts,
+          ...(missing.length === 0 ? {} : { missing }),
+          needsYou,
+          snapshot,
+        })}\n`
+      );
       return;
     }
     out.write(renderSummary(rows, styleFor(out)));
@@ -230,7 +359,7 @@ const statusOnce = (
     rows = rows.filter((r) => r.group === "ready");
   }
   if (options.json) {
-    out.write(`${JSON.stringify(rows, null, 2)}\n`);
+    out.write(`${JSON.stringify(rows)}\n`);
     return;
   }
   // Merge-order pass (human-display hint only): runs 2 git calls per ready
@@ -263,6 +392,7 @@ export const status = (
   out: NodeJS.WritableStream,
   port: CmuxPort = realCmux(process.env)
 ): (() => void) | undefined => {
+  validateStatusOptions(options);
   if (!options.watch) {
     statusOnce(options, out, port);
     return undefined;
@@ -276,20 +406,48 @@ export const status = (
   const isTty = (out as Partial<NodeJS.WriteStream>).isTTY === true;
   const render = (): void => {
     // Clear+home on a TTY so each tick repaints in place; on a pipe just append.
-    if (isTty) {
+    if (isTty && !options.json) {
       out.write("\u001B[2J\u001B[H");
     }
-    out.write(
-      `${styleFor(out).dim(`captain status — watching every ${seconds}s · Ctrl-C to exit`)}\n`
-    );
+    if (!options.json) {
+      out.write(
+        `${styleFor(out).dim(`captain status — watching every ${seconds}s · Ctrl-C to exit`)}\n`
+      );
+    }
     statusOnce(options, out, port);
   };
   // Paint immediately, then again on each tick.
   render();
-  const handle = setInterval(render, seconds * 1000);
+  const renderTick = (): void => {
+    try {
+      render();
+    } catch (error) {
+      // A targeted workspace disappearing is a normal watch transition. The
+      // first render still validates refs through the CLI error boundary; later
+      // ticks surface the typed error inline and keep the foreground watch alive.
+      if (!(error instanceof CliError)) {
+        throw error;
+      }
+      if (options.json) {
+        out.write(
+          `${JSON.stringify({
+            error: {
+              message: error.message,
+              type: error.errorType ?? "GENERIC",
+            },
+          })}\n`
+        );
+      } else {
+        out.write(`${msg.err(styleFor(out), error.message)}\n`);
+      }
+    }
+  };
+  const handle = setInterval(renderTick, seconds * 1000);
   const onSigint = (): void => {
     clearInterval(handle);
-    out.write("\n");
+    if (!options.json) {
+      out.write("\n");
+    }
     process.exit(0);
   };
   process.on("SIGINT", onSigint);
@@ -299,9 +457,53 @@ export const status = (
   };
 };
 
-// Rows currently parked at the plan gate — what approve/reject act on.
-const planGated = (port: CmuxPort): FleetRow[] =>
-  fleetRows(port).filter((r) => r.gate?.kind === "plan");
+const unresolvedPlanMessage = (resolved: ResolvedTargets): string =>
+  [
+    resolved.unknown.length > 0
+      ? `no plan-ready worktree matches: ${resolved.unknown.join(", ")}`
+      : "",
+    ...resolved.ambiguous.map(
+      (item) =>
+        `"${item.token}" is ambiguous — qualify it: ${item.candidates.join(", ")}`
+    ),
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+// Resolve controls against the plan-gated subset, but use the full fleet to
+// distinguish a genuine typo from a known worktree whose plan already moved
+// on. Only a fully unresolved/ambiguous ref is a usage error; comma lists with
+// at least one plan match preserve the established partial-success contract.
+const resolvePlanTargets = (port: CmuxPort, spec: string): ResolvedTargets => {
+  const rows = fleetRows(port);
+  const resolved = resolveTargets(
+    rows.filter((row) => row.gate?.kind === "plan"),
+    spec
+  );
+  if (
+    resolved.matched.length === 0 &&
+    (resolved.unknown.length > 0 || resolved.ambiguous.length > 0)
+  ) {
+    const known = resolveTargets(rows, spec);
+    if (known.matched.length === 0) {
+      throw badRef(unresolvedPlanMessage(resolved));
+    }
+  }
+  return resolved;
+};
+
+const appendDecision = (
+  record: Parameters<typeof appendLog>[0],
+  unlogged: string[]
+): void => {
+  try {
+    appendLog(record);
+  } catch {
+    // The cmux control operation is authoritative. A local telemetry write must
+    // never report a successful approval/rejection as failed.
+    unlogged.push(record.name);
+  }
+};
 
 // Approve plan(s): reply to the cmux exit-plan feed item directly — there is
 // no state to update and no watcher to hand off to, so the reply IS the
@@ -312,37 +514,22 @@ export const approve = (
   port: CmuxPort = realCmux(process.env),
   options: { json?: boolean } = {}
 ): void => {
-  const { matched, unknown, ambiguous } = resolveTargets(planGated(port), spec);
-  // A fully-unresolvable ref under --json is a usage error, not an empty
-  // success — surface it as a structured {error} (exit 2) so a driver can tell
-  // "I typed a bad ref" apart from "there was nothing to approve". An ambiguous
-  // ref is the same class of usage error: it never picks one silently. A
-  // partial match still succeeds (the good refs are approved, the rest
-  // reported).
-  if (
-    options.json &&
-    matched.length === 0 &&
-    (unknown.length > 0 || ambiguous.length > 0)
-  ) {
-    const parts = [
-      unknown.length > 0
-        ? `no plan-ready worktree matches: ${unknown.join(", ")}`
-        : "",
-      ...ambiguous.map(
-        (a) =>
-          `"${a.token}" is ambiguous — qualify it: ${a.candidates.join(", ")}`
-      ),
-    ].filter(Boolean);
-    throw new CliError(parts.join("; "), EXIT.USAGE, "BAD_REF");
-  }
+  assertCmuxReachable(port);
+  const { matched, unknown, ambiguous } = resolvePlanTargets(port, spec);
+  const unlogged: string[] = [];
   // The reply IS the approval (no state), so do it regardless of output mode.
   for (const row of matched) {
     port.replyExitPlan(row.gate?.id ?? "", true);
-    appendLog({ kind: "approve", name: row.name, ts: now() });
+    appendDecision({ kind: "approve", name: row.name, ts: now() }, unlogged);
   }
   if (options.json) {
     out.write(
-      `${JSON.stringify({ ambiguous, approved: matched.map((r) => r.name), unknown })}\n`
+      `${JSON.stringify({
+        ambiguous,
+        approved: matched.map((r) => r.name),
+        unknown,
+        ...(unlogged.length === 0 ? {} : { unlogged }),
+      })}\n`
     );
     return;
   }
@@ -362,11 +549,16 @@ export const approve = (
   for (const row of matched) {
     out.write(`${msg.ok(s, `approved ${s.bold(row.name)} — implementing`)}\n`);
   }
+  if (unlogged.length > 0) {
+    out.write(
+      `  ${msg.warn(s, `approval succeeded but the audit log failed for: ${unlogged.join(", ")}`)}\n`
+    );
+  }
   out.write(`${msg.hint(s, "next: captain status")}\n`);
 };
 
-// Reject a plan: reply false to the plan gate, then type the feedback into the
-// workspace so the agent actually receives the why and revises against it.
+// Reject a plan: deliver the feedback first, then reply false to the plan gate
+// so the agent receives the why before it resumes planning.
 export const reject = (
   ref: string,
   note: string,
@@ -374,33 +566,59 @@ export const reject = (
   port: CmuxPort = realCmux(process.env),
   options: { json?: boolean } = {}
 ): void => {
+  const trimmedNote = note.trim();
+  if (!trimmedNote) {
+    throw badOptions("--note must contain feedback");
+  }
+  assertCmuxReachable(port);
   const s = styleFor(out);
-  const { matched, ambiguous, unknown } = resolveTargets(planGated(port), ref);
-  // Reject every matched worktree (a repo label / comma list resolves to many),
-  // mirroring approve. Deliver the feedback FIRST (best-effort) per row: if we
-  // rejected first and the send then threw, the plan would be back in planning
-  // with the agent never told why. Sending first means a failed send still lets
-  // the rejection through — we flag the ones whose reason didn't land so the
-  // human can re-send them.
-  const rejected: string[] = [];
-  const undelivered: string[] = [];
+  const { matched, ambiguous, unknown } = resolvePlanTargets(port, ref);
+  const feedback = `Plan rejected — revise it: ${trimmedNote}`;
+  const deliveryFailures: FleetRow[] = [];
+  // Two-phase fail-closed rejection: every target must receive the feedback
+  // before any gate is resolved. Otherwise a partial cmux failure could resume
+  // agents without the reason they need to revise safely.
   for (const row of matched) {
-    let feedbackDelivered = true;
     try {
-      port.send(row.workspaceId, `Plan rejected — revise it: ${note}`);
+      port.send(row.workspaceId, feedback);
     } catch {
-      feedbackDelivered = false;
+      deliveryFailures.push(row);
     }
+  }
+  if (deliveryFailures.length > 0) {
+    const resend = deliveryFailures
+      .map(
+        (row) =>
+          `cmux send --workspace ${shellQuote(row.workspaceId)} ${shellQuote(`${feedback}\n`)}`
+      )
+      .join("; ");
+    throw new CliError(
+      `feedback delivery failed for ${deliveryFailures.map((row) => row.name).join(", ")}; no plan gates were changed. Retry the rejection, or resend manually: ${resend}`,
+      EXIT.CMUX_UNREACHABLE,
+      "CMUX_UNREACHABLE"
+    );
+  }
+
+  const rejected: string[] = [];
+  const unlogged: string[] = [];
+  for (const row of matched) {
     port.replyExitPlan(row.gate?.id ?? "", false);
-    appendLog({ kind: "reject", name: row.name, note, ts: now() });
+    appendDecision(
+      { kind: "reject", name: row.name, note: trimmedNote, ts: now() },
+      unlogged
+    );
     rejected.push(row.name);
-    if (!feedbackDelivered) {
-      undelivered.push(row.name);
-    }
   }
   if (options.json) {
     out.write(
-      `${JSON.stringify({ ambiguous, note, rejected, undelivered, unknown })}\n`
+      `${JSON.stringify({
+        ambiguous,
+        note: trimmedNote,
+        rejected,
+        undelivered: [],
+        unknown,
+        ...(unlogged.length === 0 ? {} : { unlogged }),
+      })}\n`
     );
     return;
   }
@@ -420,11 +638,13 @@ export const reject = (
     return;
   }
   for (const name of rejected) {
-    out.write(`${s.yellow("↩")} ${s.bold(name)} back to planning: ${note}\n`);
-  }
-  for (const name of undelivered) {
     out.write(
-      `  ${msg.warn(s, `couldn't deliver the feedback to ${name} — re-send it manually`)}\n`
+      `${s.yellow("↩")} ${s.bold(name)} back to planning: ${trimmedNote}\n`
+    );
+  }
+  if (unlogged.length > 0) {
+    out.write(
+      `  ${msg.warn(s, `rejection succeeded but the audit log failed for: ${unlogged.join(", ")}`)}\n`
     );
   }
   out.write(`${msg.hint(s, "next: captain status")}\n`);

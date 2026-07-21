@@ -3,12 +3,20 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { realCmux } from "./captain/control";
+import type { CmuxPort, CmuxWorkspace } from "./captain/control";
 import { appendLog, now } from "./captain/log";
 import { identityOf, ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
-import { ensureWorktree, fetchOrigin, gitCommonDir, repoLabel } from "./git";
+import {
+  ensureWorktree,
+  existingIssueWorktree,
+  fetchOrigin,
+  gitCommonDir,
+  repoLabel,
+  worktreePathFor,
+} from "./git";
 import { downloadIssueImages, worktreeTmpDir } from "./images";
 import { slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
@@ -20,12 +28,35 @@ import { resolveRepo } from "./repo";
 import { renderRubric, RUBRIC_RELPATH } from "./rubric";
 import { commandExists } from "./shell";
 import { isIssueToken, sourceFor } from "./source";
-import type { CliOptions, DispatchOptions, WorktreeResult } from "./types";
+import type {
+  CliOptions,
+  DispatchOptions,
+  Issue,
+  WorktreeResult,
+} from "./types";
 
 interface PreparedIssue {
   displayId: string;
   prompt: string;
   worktree: WorktreeResult;
+}
+
+interface PreparedIssueData {
+  displayId: string;
+  issue: Issue;
+  issueId: string;
+  prompt: string;
+  slug: string;
+  source: string;
+}
+
+interface IssueSeed {
+  credential: string;
+  displayId: string;
+  fetch: (env: NodeJS.ProcessEnv) => Promise<Issue | undefined>;
+  issueId: string;
+  parsedSlug: string;
+  source: string;
 }
 
 // One launched target's machine-readable identity for `start --json`. Fields
@@ -55,6 +86,22 @@ const workspaceIdForCwd = (
   cwd: string,
   workspaces: { id: string; cwd: string }[]
 ): string | undefined => workspaces.find((w) => ownsCwd(w.cwd, cwd))?.id;
+
+// A retry is reusable only when cmux reports an active tagged agent in the
+// exact derived worktree cwd. Snapshotting once lets batch start skip all issue
+// and git I/O for reusable tokens without N workspace/top calls.
+const activeWorkspacesByCwd = (port: CmuxPort): Map<string, CmuxWorkspace> => {
+  const workspaces = port.listWorkspaces();
+  if (workspaces.length === 0) {
+    return new Map();
+  }
+  const runs = port.runStates();
+  return new Map(
+    workspaces
+      .filter((workspace) => workspace.id.toLowerCase() in runs)
+      .map((workspace) => [workspace.cwd, workspace])
+  );
+};
 
 // Drop undefined-valued fields so the emitted JSON never carries `undefined`.
 const compactEntry = (entry: StartedEntry): StartedEntry => {
@@ -183,6 +230,15 @@ interface LaunchTarget {
   progress: Progress;
   // the resolved coding agent (claude | codex)
   agent: string;
+  // Issue retries may reuse a live cmux workspace for the same worktree.
+  // Dispatch runs in the current checkout, where an existing workspace may be
+  // unrelated, so only issue targets enable this.
+  reuseExisting?: boolean;
+}
+
+interface LaunchOutcome {
+  reused: boolean;
+  workspaceId?: string;
 }
 
 // Resolve the agent for a run, flag-over-config: an explicit `--agent` value
@@ -219,23 +275,22 @@ const logLaunch = (
   }
 };
 
-// The decision-side identity falls back to the cmux workspace's OWN name
-// (surface.ts feeds identityOf `w.name`), which can differ from the label we
-// asked for when cmux dedupes/renames it. Resolve the real name so the launch
-// record's join key matches; fail-soft to the label (empty list, dead RPC).
-const launchedWorkspaceName = (
-  cwd: string,
-  label: string,
-  env: NodeJS.ProcessEnv
-): string =>
-  realCmux(env)
-    .listWorkspaces()
-    .find((w) => ownsCwd(w.cwd, cwd))?.name ?? label;
-
 const launchViaCmux = async (
   target: LaunchTarget,
   focus: boolean
-): Promise<void> => {
+): Promise<LaunchOutcome> => {
+  const port = realCmux(target.env);
+  if (target.reuseExisting) {
+    // Same-cwd alone is not enough: cmux groups can leave an anchor or stale
+    // shell in the worktree. A run-state key means `cmux top` sees an actual
+    // tagged agent process (the same signal surface.ts trusts). Fail-soft top
+    // output therefore degrades to a fresh launch, never a false reuse.
+    const existing = activeWorkspacesByCwd(port).get(target.cwd);
+    if (existing) {
+      return { reused: true, workspaceId: existing.id };
+    }
+  }
+
   target.progress.step(`opening cmux workspace ${target.label}`);
   const promptPath = await writePromptFile(target.displayId, target.prompt);
   openIssueWorkspace({
@@ -246,11 +301,14 @@ const launchViaCmux = async (
     promptPath,
     worktreePath: target.cwd,
   });
-  logLaunch(
-    target.cwd,
-    launchedWorkspaceName(target.cwd, target.label, target.env),
-    target.env
-  );
+  // The decision-side identity falls back to cmux's OWN workspace name, which
+  // can differ from our requested label when cmux dedupes/renames it. Resolve
+  // it once after launch for both the ledger join key and --json id.
+  const launched = port
+    .listWorkspaces()
+    .find((workspace) => ownsCwd(workspace.cwd, target.cwd));
+  logLaunch(target.cwd, launched?.name ?? target.label, target.env);
+  return { reused: false, workspaceId: launched?.id };
 };
 
 // The single-target launch strategy, shared by single-issue fanout and dispatch:
@@ -284,13 +342,16 @@ const launchOrFallback = async (
   };
   if (cmuxReachable(env) && commandExists(target.agent, env)) {
     try {
-      await launchViaCmux(target, true);
-      progress.done(`opened cmux workspace ${target.label}`);
+      const outcome = await launchViaCmux(target, true);
+      progress.done(
+        `${outcome.reused ? "reusing" : "opened"} cmux workspace ${target.label}`
+      );
       if (meta?.json) {
-        emitStarted(
-          workspaceIdForCwd(target.cwd, realCmux(env).listWorkspaces())
-        );
+        emitStarted(outcome.workspaceId);
       } else {
+        if (outcome.reused) {
+          stdout.write(`reusing existing cmux workspace ${target.label}\n`);
+        }
         stdout.write("follow along: captain status\n");
       }
       return 0;
@@ -311,7 +372,8 @@ const targetOf = (
   prepared: PreparedIssue,
   progress: Progress,
   env: NodeJS.ProcessEnv,
-  agent: string
+  agent: string,
+  reuseExisting = true
 ): LaunchTarget => ({
   agent,
   cwd: prepared.worktree.worktreePath,
@@ -320,6 +382,7 @@ const targetOf = (
   label: prepared.worktree.branch,
   progress,
   prompt: prepared.prompt,
+  reuseExisting,
 });
 
 // Keep `.captain/` (rubric + verdict) out of every worktree's diff. Linked
@@ -376,16 +439,10 @@ const withLoopExtras = async (
   );
 };
 
-const prepareIssue = async (
-  token: string,
-  context: PrepareContext
-): Promise<PreparedIssue> => {
-  const { env, progress } = context;
-
-  // Resolve the token's source (Linear or donebear) once via the registry; the
-  // routing above only reaches here for issue tokens, so sourceFor is defined.
-  // Match on the first word so a `TST-1 some slug words` single-issue token
-  // still resolves (its trailing slug is parsed by the source, not matched).
+// Parse the source-owned token without doing I/O. The resulting issue id is
+// enough to derive the worktree cwd and identify a live retry before fetching
+// issue context or touching git.
+const issueSeed = (token: string): IssueSeed => {
   const firstWord = token.trim().split(/\s+/u)[0] ?? token;
   const source = sourceFor(firstWord);
   if (!source) {
@@ -395,32 +452,56 @@ const prepareIssue = async (
       "USAGE"
     );
   }
-  const { parsed: parsedIssue, fetch: fetchIssue } = source.prepare(token);
+  const { parsed, fetch } = source.prepare(token);
+  return {
+    credential: source.credential,
+    displayId: parsed.displayId,
+    fetch,
+    issueId: parsed.issueId,
+    parsedSlug: parsed.slug,
+    source: source.name,
+  };
+};
 
-  progress.step("resolving repo");
-  const repo = resolveRepo({
-    cwd: context.cwd,
-    env: context.env,
-    repoOverride: context.repoOverride,
-  });
+const requireIssueCredential = (
+  seed: IssueSeed,
+  env: NodeJS.ProcessEnv
+): void => {
+  if (!env[seed.credential]) {
+    throw new CliError(
+      `cannot fetch ${seed.source} issue ${seed.displayId} — set ${seed.credential}, then retry`,
+      EXIT.GENERIC,
+      "ISSUE_FETCH_FAILED"
+    );
+  }
+};
 
-  // Dispatch the issue request first (async, non-blocking) so it travels the
-  // network while the synchronous `git fetch origin` blocks the main thread.
-  // Both sources converge on the neutral Issue — everything below is agnostic.
-  progress.step(`fetching ${parsedIssue.displayId} from ${source.name}`);
-  const issuePromise = fetchIssue(env);
-  progress.step("git fetch origin");
-  fetchOrigin(repo.repoRoot, env);
-  const issue = await issuePromise;
+// Fetch and render the source-owned part of an issue without touching git or a
+// worktree. Fan-out starts all source requests together after the repository
+// fetch precondition passes, so independent Linear/donebear requests overlap.
+const prepareIssueData = async (
+  seed: IssueSeed,
+  context: PrepareContext
+): Promise<PreparedIssueData> => {
+  const { env, progress } = context;
+  progress.step(`fetching ${seed.displayId} from ${seed.source}`);
+  const issue = await seed.fetch(env);
+  if (!issue) {
+    throw new CliError(
+      `cannot fetch ${seed.source} issue ${seed.displayId} — verify the issue id, credentials, and network, then retry`,
+      EXIT.GENERIC,
+      "ISSUE_FETCH_FAILED"
+    );
+  }
 
-  const slug = parsedIssue.slug || (issue?.title ? slugify(issue.title) : "");
+  const slug = seed.parsedSlug || (issue.title ? slugify(issue.title) : "");
 
-  let prompt = renderPrompt(issue, parsedIssue.displayId, source.name);
-  if (issue?.description && env.LINEAR_API_KEY) {
+  let prompt = renderPrompt(issue, seed.displayId, seed.source);
+  if (issue.description && env.LINEAR_API_KEY) {
     progress.step("downloading screenshots");
     const screenshots = await downloadIssueImages(
       issue.description,
-      parsedIssue.displayId,
+      seed.displayId,
       env.LINEAR_API_KEY
     );
     if (screenshots.length > 0) {
@@ -428,30 +509,174 @@ const prepareIssue = async (
     }
   }
 
+  return {
+    displayId: seed.displayId,
+    issue,
+    issueId: seed.issueId,
+    prompt,
+    slug,
+    source: seed.source,
+  };
+};
+
+// Serialize the mutation-heavy half: worktree creation, rubric/exclude writes,
+// and memory wiring. Keeping this out of prepareIssueData makes fan-out network
+// concurrency explicit without racing git worktree operations.
+const materializeIssue = async (
+  data: PreparedIssueData,
+  context: PrepareContext,
+  repoRoot: string
+): Promise<PreparedIssue> => {
+  const { env, progress } = context;
   progress.step("creating worktree");
   const worktree = await ensureWorktree({
     base: context.base,
     env,
-    issueId: parsedIssue.issueId,
-    repoRoot: repo.repoRoot,
+    issueId: data.issueId,
+    repoRoot,
     skipFetch: true,
-    slug,
+    slug: data.slug,
   });
 
-  prompt = await withLoopExtras(
-    prompt,
+  const prompt = await withLoopExtras(
+    data.prompt,
     worktree.worktreePath,
-    repo.repoRoot,
-    issue,
-    parsedIssue.displayId,
+    repoRoot,
+    data.issue,
+    data.displayId,
     env,
     context.skills,
     context.dataScope,
     context.agent,
-    source.name
+    data.source
   );
 
-  return { displayId: parsedIssue.displayId, prompt, worktree };
+  return { displayId: data.displayId, prompt, worktree };
+};
+
+interface ReusableIssue {
+  workspace: CmuxWorkspace;
+  worktree: WorktreeResult;
+}
+
+const reusableIssue = (
+  seed: IssueSeed,
+  repoRoot: string,
+  activeByCwd: Map<string, CmuxWorkspace>,
+  env: NodeJS.ProcessEnv
+): ReusableIssue | undefined => {
+  const cwd = worktreePathFor(repoRoot, seed.issueId);
+  const workspace = activeByCwd.get(cwd);
+  if (!workspace) {
+    return undefined;
+  }
+  const worktree = existingIssueWorktree(repoRoot, seed.issueId, env);
+  return worktree ? { workspace, worktree } : undefined;
+};
+
+interface LaunchFleetArgs extends DispatchArgs {
+  agent: string;
+  dataByIndex: Map<number, PreparedIssueData>;
+  repoRoot: string;
+  reusable: (ReusableIssue | undefined)[];
+  scopedContexts: PrepareContext[];
+  seeds: IssueSeed[];
+}
+
+const launchPreparedFleet = async ({
+  agent,
+  dataByIndex,
+  env,
+  options,
+  progress,
+  repoRoot,
+  reusable,
+  scopedContexts,
+  seeds,
+  stdout,
+  tokens,
+}: LaunchFleetArgs): Promise<number> => {
+  const worktreePaths: string[] = [];
+  const launched: {
+    name: string;
+    branch: string;
+    cwd: string;
+    workspaceId?: string;
+  }[] = [];
+  let reused = 0;
+  for (let index = 0; index < seeds.length; index += 1) {
+    const scoped = scopedContexts[index];
+    const existing = reusable[index];
+    if (existing) {
+      reused += 1;
+      worktreePaths.push(existing.worktree.worktreePath);
+      launched.push({
+        branch: existing.worktree.branch,
+        cwd: existing.worktree.worktreePath,
+        name: existing.worktree.branch,
+        workspaceId: existing.workspace.id,
+      });
+      scoped.progress.done(
+        `reusing ${existing.worktree.branch} (${index + 1}/${tokens.length})`
+      );
+      continue;
+    }
+    const data = dataByIndex.get(index);
+    if (!data) {
+      throw new CliError(
+        `internal error preparing ${seeds[index].displayId}`,
+        EXIT.GENERIC,
+        "PREPARE_FAILED"
+      );
+    }
+    const prepared = await materializeIssue(data, scoped, repoRoot);
+    worktreePaths.push(prepared.worktree.worktreePath);
+    const outcome = await launchViaCmux(
+      targetOf(prepared, scoped.progress, env, agent),
+      false
+    );
+    if (outcome.reused) {
+      reused += 1;
+    }
+    launched.push({
+      branch: prepared.worktree.branch,
+      cwd: prepared.worktree.worktreePath,
+      name: prepared.worktree.branch,
+      workspaceId: outcome.workspaceId,
+    });
+    progress.done(
+      `${outcome.reused ? "reusing" : "opened"} ${prepared.worktree.branch} (${index + 1}/${tokens.length})`
+    );
+  }
+
+  // One workspace listing serves both collapse detection and --json id lookup.
+  const workspaces = realCmux(env).listWorkspaces();
+  if (options.json) {
+    const started = launched.map((item) =>
+      compactEntry({
+        ...item,
+        workspaceId:
+          item.workspaceId ?? workspaceIdForCwd(item.cwd, workspaces),
+      })
+    );
+    stdout.write(`${JSON.stringify({ started })}\n`);
+    return 0;
+  }
+  stdout.write(
+    reused === 0
+      ? `spawned ${tokens.length} workspaces — each agent drives its own pipeline to PR-ready\n`
+      : `ready ${tokens.length} workspaces — ${tokens.length - reused} launched, ${reused} reused\n`
+  );
+  // All tokens in one invocation share a repo, so one worktree speaks for all.
+  const jestNote = worktreePaths[0] && uncappedJestNote(worktreePaths[0]);
+  if (jestNote) {
+    stdout.write(`  ${jestNote}\n`);
+  }
+  for (const note of collapsedWorktreeNotes(worktreePaths, workspaces)) {
+    stdout.write(`  ${note}\n`);
+  }
+  stdout.write("follow along: captain status\n");
+  return 0;
 };
 
 const dispatch = async ({
@@ -471,67 +696,123 @@ const dispatch = async ({
         "CMUX_UNREACHABLE"
       );
     }
-    if (!commandExists(agent, env)) {
+    progress.step("resolving repo");
+    const repo = resolveRepo({
+      cwd: context.cwd,
+      env,
+      repoOverride: context.repoOverride,
+    });
+    const scopedContexts = tokens.map((token, index) => ({
+      ...context,
+      progress: withPrefix(
+        progress,
+        `[${index + 1}/${tokens.length}] ${token.toUpperCase()} · `
+      ),
+    }));
+    const seeds = tokens.map(issueSeed);
+    const activeByCwd = activeWorkspacesByCwd(realCmux(env));
+    const reusable = seeds.map((seed) =>
+      reusableIssue(seed, repo.repoRoot, activeByCwd, env)
+    );
+    const pendingIndexes = reusable.flatMap((item, index) =>
+      item ? [] : [index]
+    );
+    if (pendingIndexes.length > 0 && !commandExists(agent, env)) {
       throw new CliError(
         `${agent} is not on PATH — install it, then \`captain install\``,
         EXIT.USAGE,
         "MISSING_DEPENDENCY"
       );
     }
-
-    const worktreePaths: string[] = [];
-    const launched: { name: string; branch: string; cwd: string }[] = [];
-    let index = 0;
-    for (const token of tokens) {
-      index += 1;
-      const scoped = withPrefix(
-        progress,
-        `[${index}/${tokens.length}] ${token.toUpperCase()} · `
-      );
-      const prepared = await prepareIssue(token, {
-        ...context,
-        progress: scoped,
-      });
-      worktreePaths.push(prepared.worktree.worktreePath);
-      await launchViaCmux(targetOf(prepared, scoped, env, agent), false);
-      launched.push({
-        branch: prepared.worktree.branch,
-        cwd: prepared.worktree.worktreePath,
-        name: prepared.worktree.branch,
-      });
-      progress.done(
-        `opened ${prepared.worktree.branch} (${index}/${tokens.length})`
-      );
+    for (const index of pendingIndexes) {
+      requireIssueCredential(seeds[index], env);
     }
-
-    // One workspace listing serves both collapse detection and --json id lookup.
-    const workspaces = realCmux(env).listWorkspaces();
-    if (options.json) {
-      const started = launched.map((l) =>
-        compactEntry({
-          ...l,
-          workspaceId: workspaceIdForCwd(l.cwd, workspaces),
-        })
-      );
-      stdout.write(`${JSON.stringify({ started })}\n`);
-      return 0;
+    // Validate repository freshness before source requests. This is slightly
+    // less overlapped than starting both together, but a failed git precondition
+    // cannot strand an unobserved rejecting source promise. An all-reused batch
+    // still performs neither fetch.
+    if (pendingIndexes.length > 0) {
+      progress.step("git fetch origin");
+      fetchOrigin(repo.repoRoot, env);
     }
-    stdout.write(
-      `spawned ${tokens.length} workspaces — each agent drives its own pipeline to PR-ready\n`
+    const pendingData = await Promise.all(
+      pendingIndexes.map((index) =>
+        prepareIssueData(seeds[index], scopedContexts[index])
+      )
     );
-    // All tokens in one invocation share a repo, so one worktree speaks for all.
-    const jestNote = worktreePaths[0] && uncappedJestNote(worktreePaths[0]);
-    if (jestNote) {
-      stdout.write(`  ${jestNote}\n`);
-    }
-    for (const note of collapsedWorktreeNotes(worktreePaths, workspaces)) {
-      stdout.write(`  ${note}\n`);
-    }
-    stdout.write("follow along: captain status\n");
-    return 0;
+    const dataByIndex = new Map(
+      pendingIndexes.map((pendingIndex, index) => [
+        pendingIndex,
+        pendingData[index],
+      ])
+    );
+
+    return launchPreparedFleet({
+      agent,
+      context,
+      dataByIndex,
+      env,
+      options,
+      progress,
+      repoRoot: repo.repoRoot,
+      reusable,
+      scopedContexts,
+      seeds,
+      stdout,
+      tokens,
+    });
   }
 
-  const prepared = await prepareIssue(tokens.join(" "), context);
+  progress.step("resolving repo");
+  const repo = resolveRepo({
+    cwd: context.cwd,
+    env,
+    repoOverride: context.repoOverride,
+  });
+  const seed = issueSeed(tokens.join(" "));
+  // A real launch retry can be answered from cmux + the derived worktree path
+  // alone. Do this before issue/git I/O and before rewriting the rubric hash.
+  // `--print` deliberately stays on the preparation path. Agent selection does
+  // not force a duplicate while an agent is already active in this worktree.
+  if (!options.print && cmuxReachable(env)) {
+    const existing = reusableIssue(
+      seed,
+      repo.repoRoot,
+      activeWorkspacesByCwd(realCmux(env)),
+      env
+    );
+    if (existing) {
+      progress.done(`reusing cmux workspace ${existing.worktree.branch}`);
+      if (options.json) {
+        stdout.write(
+          `${JSON.stringify({
+            started: [
+              compactEntry({
+                branch: existing.worktree.branch,
+                cwd: existing.worktree.worktreePath,
+                name: existing.worktree.branch,
+                workspaceId: existing.workspace.id,
+              }),
+            ],
+          })}\n`
+        );
+      } else {
+        stdout.write(
+          `reusing existing cmux workspace ${existing.worktree.branch}\n`
+        );
+        stdout.write("follow along: captain status\n");
+      }
+      return 0;
+    }
+  }
+  requireIssueCredential(seed, env);
+  progress.step("git fetch origin");
+  fetchOrigin(repo.repoRoot, env);
+  const prepared = await materializeIssue(
+    await prepareIssueData(seed, context),
+    context,
+    repo.repoRoot
+  );
 
   if (options.print) {
     const cdCommand = `cd ${prepared.worktree.worktreePath}`;
@@ -572,7 +853,7 @@ const dispatch = async ({
 };
 
 // The worktree fan-out path: one worktree + cmux workspace per issue token. Each
-// token routes to its own source in prepareIssue (Linear id/URL or donebear task
+// token routes to its own source in prepareIssueData (Linear id/URL or donebear task
 // URL/UUID), so a single invocation can mix both.
 export const runLinearWorktree = async (
   options: CliOptions
@@ -585,6 +866,17 @@ export const runLinearWorktree = async (
   if (tokens.length === 0) {
     throw new CliError(
       "usage: captain start [--print] [--repo-path <path>] <issue-id|url> [more issue-ids...]",
+      EXIT.USAGE,
+      "USAGE"
+    );
+  }
+  if (
+    options.print &&
+    tokens.length > 1 &&
+    tokens.every((token) => isIssueToken(token))
+  ) {
+    throw new CliError(
+      "--print accepts one issue at a time because it prepares a worktree; run it once per issue",
       EXIT.USAGE,
       "USAGE"
     );

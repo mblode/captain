@@ -1,20 +1,5 @@
 import { DEFAULT_SKILLS } from "./config";
-import type { Issue, IssueCriterion } from "./types";
-
-const renderCriterion = (
-  tag: "parent-issue" | "criterion",
-  criterion: IssueCriterion
-): string => {
-  let output = criterion.ref
-    ? `<${tag} ref="${criterion.ref}">\n`
-    : `<${tag}>\n`;
-  output += `<title>${criterion.title}</title>\n`;
-  if (criterion.description) {
-    output += `<description>\n${criterion.description}\n</description>\n`;
-  }
-  output += `</${tag}>\n`;
-  return output;
-};
+import type { Issue } from "./types";
 
 export const renderPrompt = (
   issue: Issue | undefined,
@@ -24,45 +9,13 @@ export const renderPrompt = (
   // Issue shape upstream (linear.ts / donebear.ts).
   source = "Linear"
 ): string => {
-  if (!issue) {
-    return `Work on ${source} issue ${displayId}.`;
-  }
-
-  let prompt = `Work on ${source} issue ${issue.identifier}:\n\n`;
-  prompt += `<issue identifier="${issue.identifier}">\n`;
-  prompt += `<title>${issue.title ?? ""}</title>\n`;
-
-  if (issue.description) {
-    prompt += `<description>\n${issue.description}\n</description>\n`;
-  }
-
-  if (issue.team) {
-    prompt += `<team name="${issue.team.name ?? ""}"/>\n`;
-  }
-
-  for (const label of issue.labels?.nodes ?? []) {
-    prompt += `<label>${label.name ?? ""}</label>\n`;
-  }
-
-  if (issue.project) {
-    prompt += `<project name="${issue.project.name ?? ""}"/>\n`;
-  }
-
-  if (issue.parent) {
-    prompt += renderCriterion("parent-issue", issue.parent);
-  }
-
-  const criteria = issue.criteria ?? [];
-  if (criteria.length > 0) {
-    prompt += "<criteria>\n";
-    for (const criterion of criteria) {
-      prompt += renderCriterion("criterion", criterion);
-    }
-    prompt += "</criteria>\n";
-  }
-
-  prompt += "</issue>\n";
-  return prompt;
+  const identifier = issue?.identifier ?? displayId;
+  const title = issue?.title ? `: ${issue.title}` : "";
+  return (
+    `Work on ${source} issue ${identifier}${title}.\n\n` +
+    "Read `.captain/rubric.md` before planning; it is the complete authoritative " +
+    "issue contract and definition of done."
+  );
 };
 
 export interface PromptExtras {
@@ -166,13 +119,14 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       out += `Learnings from previous runs on this repo — consult these before re-deriving repo facts:\n\n${extras.memory}\n\n`;
     }
     out +=
-      `At the end of your run, append 1-3 distilled learnings to ${extras.memoryPath} ` +
-      'under its "## Inbox" heading, each as `- [<TICKET> <YYYY-MM-DD>] <general rule>`, ' +
-      "using a single `cat >> … <<'EOF'` command. Only write general rules you actually " +
-      "VERIFIED this run (something you confirmed, not something you guessed). If your " +
-      "verifier failed any run before eventually passing, one of your learnings MUST be " +
-      "the root cause of that failure, stated as a general preventive rule — the eventual " +
-      "pass is its verification. Skip the section entirely if nothing qualifies.\n";
+      `At the end of your run, append zero or one learning to ${extras.memoryPath} under ` +
+      'its "## Inbox" heading as `- [<TICKET> <YYYY-MM-DD>] <general rule>`. The whole ' +
+      "bullet must be at most 200 characters. Write one only for either (a) the root cause " +
+      "of a verifier failure that an eventual pass confirmed, or (b) a repo command or " +
+      "environment trap you directly confirmed. Before appending, use a non-printing " +
+      `fixed-string search (\`grep -Fq\`) against ${extras.memoryPath}; skip the write if ` +
+      "the exact general-rule text already appears. Do not print or read the whole file into " +
+      "context. Otherwise write nothing; ordinary implementation facts do not qualify.\n";
     out += "</fleet-memory>\n";
   }
 

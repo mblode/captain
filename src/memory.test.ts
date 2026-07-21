@@ -119,4 +119,32 @@ describe("memoryExcerptOf", () => {
     expect(excerpt).toContain("rule number 30");
     expect(excerpt).toContain("rule number 49");
   });
+
+  it("deduplicates exact learning text across rules and the inbox", () => {
+    const excerpt = memoryExcerptOf(
+      [
+        "## Rules",
+        "- run yarn install first",
+        "- run yarn install first",
+        "",
+        "## Inbox",
+        "- [TIG-1 2026-06-01] run yarn install first",
+        "- [TIG-2 2026-06-02] set FORCE_COLOR=0",
+        "- [TIG-3 2026-06-03] set FORCE_COLOR=0",
+      ].join("\n")
+    );
+    expect(excerpt.match(/run yarn install first/gu)).toHaveLength(1);
+    expect(excerpt.match(/set FORCE_COLOR=0/gu)).toHaveLength(1);
+    expect(excerpt).toContain("TIG-3");
+  });
+
+  it("caps the entire injected excerpt including curated rules", () => {
+    const oversizedRule = `- ${"x".repeat(5000)}`;
+    const excerpt = memoryExcerptOf(
+      `## Rules\n${oversizedRule}\n\n## Inbox\n- newest trap\n`
+    );
+    expect(excerpt.length).toBeLessThanOrEqual(2048);
+    expect(excerpt).toContain("[… truncated]");
+    expect(excerpt).not.toContain(oversizedRule.slice(0, 100));
+  });
 });

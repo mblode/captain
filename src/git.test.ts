@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { ensureWorktree } from "./git";
+import { ensureWorktree, fetchOrigin, worktreePathFor } from "./git";
 import { runRequired } from "./shell";
 
 describe("ensureWorktree --base", () => {
@@ -83,5 +83,41 @@ describe("ensureWorktree --base", () => {
         slug: "x",
       })
     ).rejects.toThrow("cannot resolve --base");
+  });
+
+  it("rechecks for a concurrently-created worktree after acquiring the lock", async () => {
+    const options = {
+      base: "main",
+      env,
+      issueId: "tig-202",
+      repoRoot: repo,
+      skipFetch: true,
+      slug: "concurrent",
+    };
+
+    const [first, second] = await Promise.all([
+      ensureWorktree(options),
+      ensureWorktree(options),
+    ]);
+
+    expect(second).toEqual(first);
+    expect(git("worktree", "list", "--porcelain")).toContain(
+      `worktree ${first.worktreePath}`
+    );
+  });
+
+  it("derives the canonical sibling path in one shared helper", () => {
+    expect(worktreePathFor(repo, "tig-999")).toBe(join(root, "linkiq-tig-999"));
+  });
+
+  it("fails closed with a stable actionable error when origin fetch fails", () => {
+    expect(() => fetchOrigin(repo, env)).toThrowError(
+      expect.objectContaining({
+        errorType: "GIT_FETCH_FAILED",
+        message: expect.stringContaining(
+          "verify the origin remote and network, then retry"
+        ),
+      })
+    );
   });
 });

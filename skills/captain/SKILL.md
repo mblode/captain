@@ -13,17 +13,21 @@ running any pipeline step yourself — the agent self-drives plan → implement 
 session, not a human at a keyboard; Captain keeps **no state** (`status` derives live from cmux +
 each worktree's `.captain/`).
 
+`/tidy` and `/pr-reviewer` remain separate configured stages; never treat one as a replacement for
+the other.
+
 ## Mental model
 
-- **Agents self-drive** the whole pipeline; nothing types into a workspace — if one stalls, nudge
-  it.
+- **Agents self-drive** the whole pipeline; do not send routine "continue" prompts. Answer a real
+  gate, deliver rejection feedback, or nudge only after `status` plus a screen read provides
+  evidence of a stall.
 - **Status is stateless**, derived fresh each call: membership = a cmux workspace whose cwd has a
   `.captain/` dir; busy/idle = `cmux top` run-state tags; gates = the newest _unresolved_ feed item
   per cwd; done = a hash-checked `.captain/verdict.json`. Re-run any time — nothing desyncs.
-- **Human gates**: plan approval (mandatory — implementation never starts un-approved),
-  questions/blocked agents, and the merge. Everything else flows on its own. (Claude agents only:
-  a codex agent has no plan mode, so its fleet has **no plan gate** — `approve`/`reject` have
-  nothing to reply to; its brief tells it to plan then proceed.)
+- **Human gates**: Claude plan approval (mandatory — implementation never starts un-approved),
+  questions/blocked agents, and the merge. Everything else flows on its own. A codex agent has no
+  plan mode, so its fleet has **no plan gate** — `approve`/`reject` have nothing to reply to; its
+  brief tells it to plan then proceed.
 - **Verdict gate**: fan-out writes the definition of done to `.captain/rubric.md`; the agent's
   fresh-context verifier writes `.captain/verdict.json` citing the rubric's hash. A valid pass shows
   READY with the `✓ verified` label; a fail → NEEDS YOU and its summary; no verdict → in flight.
@@ -46,14 +50,17 @@ each worktree's `.captain/`).
    (one worktree + workspace + self-driving agent each; `start` is implicit — bare `captain TIG-430`
    works, though a single non-Linear word is treated as a typo'd subcommand and errors). A non-Linear
    arg starts a free-form task in the current checkout. `--base <ref>` stacks on a prerequisite
-   branch; `--print` previews. Confirm each `started[].cwd` (`--json`) before approving any plan — a
-   worktree in the wrong repo can never pass its rubric. Each agent launches on a **pinned model +
+   branch. Confirm each `started[].cwd` (`--json`) before approving any plan — a worktree in the
+   wrong repo can never pass its rubric. `--print` performs preparation and
+   writes/prints the brief without launching (issue input prepares one worktree; free-form input
+   writes in the current checkout). It is not a dry-run, and multiple issue ids are rejected. Each
+   agent launches on a **pinned model +
    effort** (default `default` / `high`, where `default` = the machine's configured default model),
    so it never inherits your driver's tier — override per fleet with `CAPTAIN_MODEL` /
    `CAPTAIN_EFFORT` (or config `.model` / `.effort`). The agent binary is claude unless you pass
    `--agent codex` (or set `CAPTAIN_AGENT` / config `.agent`) — codex is **best-effort**: full
-   autonomy, an adapted brief (plan then proceed), no plan gate, and no busy/idle run-state in
-   `status` (codex emits no `cmux top` tag, so its rows read `—`).
+   autonomy, an adapted brief (plan then proceed), and no plan gate. Status accepts any live cmux
+   workspace tag; `run=unknown`/`—` means no live tag was observed, regardless of agent.
 4. **Arm the heartbeat** — the driver re-invokes itself on a timer (no daemon, no foreground pane;
    each wake re-derives status fresh). Take the first available rung; never skip a missing rung to
    "ask the human to ping me":
@@ -65,11 +72,17 @@ each worktree's `.captain/`).
    3. **`/loop`** (only when already inside one): the only place `ScheduleWakeup` is ungated —
       outside it that tool hard-fails "dynamic runtime gate is off".
 
-   `send_later` is one-shot, not a heartbeat. Each wake: poll `captain status --summary --json`
-   (group `counts` + NEEDS YOU rows, each with a `stateHash` fingerprint of gate + verdict +
-   run-state); a changed count or NEEDS YOU hash is a transition — act, then re-arm. Use plain
-   `--json` for every row's hash. ~200–260s lets gates accumulate and verdicts land between sweeps.
-   (A human can watch a terminal with `captain status --watch`.)
+   `send_later` is one-shot, not a heartbeat. For an ordinary fleet, retain the `started[].name`
+   refs and poll only those. On the first session-preserving wake run `captain status <refs…>
+   --summary --json` and retain its opaque `snapshot`; on later wakes run the same command with
+   `--since <snapshot>`. `changed:false` means no new fleet action: re-arm immediately.
+   `changed:true` returns the current `counts` and `needsYou`: act, replace the snapshot, then
+   re-arm. Captain persists nothing — the snapshot belongs to this driver session. Retain any
+   intentionally deferred plan-review overflow and drain the next bounded batch even when the
+   fleet is otherwise unchanged. A `CronCreate` wake cannot retain the snapshot, so it uses the
+   first form each time. Omit `<refs…>` only for an explicitly fleet-wide request. Use full
+   `--json` when every row is required, including auto-pickup below. ~200–260s lets transitions
+   accumulate. (A human can watch a terminal with `captain status --watch`.)
 
 ## Auto-pickup loop
 
@@ -85,9 +98,10 @@ re-arms.
   and only when already inside `/loop`). **Never** the `CronCreate` rung — fresh context each tick
   can't carry the explicit arm or per-ticket suppression. No session-preserving rung available → stop
   auto-pickup, surface the error once, leave the fleet untouched.
-- **Gates before pickup, every wake.** Derive the fleet with `captain status --json` (full, not
-  `--summary` — summary lacks the rows dedupe needs), work the NEEDS YOU batch, _then_ consider
-  pickup. A structured status error (`{"error":{"type":"CMUX_UNREACHABLE"}}`) or non-zero exit **fails
+- **Gates before pickup, every wake.** Derive the fleet with unfiltered `captain status --json` —
+  no targeted refs, `--summary`, or `--since`; capacity and dedupe require every current row. Work
+  the NEEDS YOU batch, _then_ consider pickup. A structured status error
+  (`{"error":{"type":"CMUX_UNREACHABLE"}}`) or non-zero exit **fails
   closed** — dispatch nothing, surface once, re-arm.
 - **Capacity.** `active` = NEEDS YOU + IN FLIGHT rows (READY rows have finished, so they free a slot
   but still count for dedupe); `available = max(0, cap − active)`. Zero available → skip the Linear
@@ -134,26 +148,33 @@ the driver never writes Linear; test-worker caps are untouched.
 
 | You say                                      | Run                                                                                                                                                                                          |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "status" / "what's blocked" / "what's ready" | `captain status` (`--json`, `--repo`, `--needs`, `--ready` to narrow) — NEEDS YOU / IN FLIGHT / READY, each gate with its resolve command, each PR its merge hint + overlap warnings         |
-| "show me the plans"                          | per plan gate, fan out a **read-only subagent** that reads the plan and returns `{summary, scopeDrift, risk, recommendation}`; present the batch — never spend your window on `--scrollback` |
+| "status" / "what's blocked" / "what's ready" | For a known run, use `captain status <ticket-or-workspace…> --json`; add `--summary` for polling. Use unfiltered `captain status` only when the request is fleet-wide. `--repo`, `--needs`, and `--ready` also narrow — never fetch the full fleet merely to post-filter it. |
+| "show me the plans"                          | send up to the bounded batch below to **one read-only reviewer** per heartbeat; it returns one compact `{ticket, summary, scopeDrift, risk, recommendation}` decision card per plan. Deep-read only plans it flags high-risk or ambiguous; present the batch — never spend your window on `--scrollback` |
 | "approve all plans"                          | `captain approve all` (or comma-separated names, or a repo label)                                                                                                                            |
 | "send 404 back: don't touch auth"            | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace                                                                                                  |
 | "what's verified"                            | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging                                                                                         |
 | "this one's gone quiet"                      | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge                                                                              |
 | "distill the learnings"                      | edit `~/.claude/captain/memory/<repo>/learnings.md` — promote held-up Inbox bullets to `## Rules`, cut slop; `~/.claude/captain/log.jsonl` has approve/reject notes                          |
 
-**Escalating NEEDS YOU:** batch gated plans into **one** AskUserQuestion — one per gate with its
-decision card, options **approve** (`captain approve <ticket>`), **reject-with-note**
-(`captain reject <ticket> --note "…"`), **read-more** (deeper subagent, re-ask). Off-script
-questions surface the same way, answered verbatim with `cmux send --workspace <id> "…\n"`. One ask
-per wake, not per gate.
+**Escalating NEEDS YOU:** once per heartbeat, give pending plan gates to **one read-only batch
+reviewer** with the ticket, repo, and captured plan for each gate. Bound a review batch to at most
+8 plans, 6,000 input characters per plan, and 24,000 input characters total, in status order;
+leave overflow pending for the next heartbeat and mark a truncated plan ambiguous. It returns one
+decision card of at most 80 words per gate: `{ticket, summary, scopeDrift, risk, recommendation}`.
+Spend a separate deeper review only on a card marked high-risk or ambiguous, or when the human
+selects **read-more**. Then batch the cards into **one** AskUserQuestion — one decision per gate
+with options **approve** (`captain approve <ticket>`), **reject-with-note** (`captain reject
+<ticket> --note "…"`), **read-more** (deeper subagent, re-ask). Off-script questions surface in
+that same ask and are answered verbatim with `cmux send --workspace <id> "…\n"`. One reviewer and
+one ask per wake, not per gate.
 
 ## Gotchas
 
 - **Wrong dir is the #1 silent failure.** No `--repo-path` fans the worktree into your cwd — a repo
   with none of the ticket's code, whose rubric never passes. Reroute: close the workspace (never a
   group anchor), `git worktree remove --force`, delete the branch, relaunch.
-- **Never approve a plan with no decision card behind it** — the read-only subagent reads it first.
+- **Never approve a plan with no decision card behind it** — the read-only batch reviewer reads it
+  first; high-risk or ambiguous cards get a deeper second read.
 - **Never guess off-script questions** — answer verbatim in the workspace, or `reject` if it's a
   plan.
 - **Stops at PR-ready** — merging and deploying stay with you.
@@ -169,13 +190,11 @@ per wake, not per gate.
   you spot a second (don't trust worktree reuse to catch it).
 - **`cmux send` can silently no-op** (text parked unsubmitted while `status` still reads "working")
   — follow every send with `cmux send-key --workspace <id> enter` and re-read the screen.
-- **Verify run-state right after launch** — a launch race leaves a workspace at an empty shell
-  (`run=unknown`); relaunch from `/tmp/linear-worktree/<TICKET>/prompt.txt` (match captain's pinned
-  tier: `claude --model default --effort high --permission-mode plan --allow-dangerously-skip-permissions
-"$(cat …/prompt.txt)"`), and run `captain start` in the **foreground** (backgrounding has returned
-  no workspace + a half-made worktree). **Codex workspaces are the exception**: they emit no
-  run-state tag, so `run=unknown`/`—` is their normal — read the screen before concluding a race,
-  never blind-relaunch a codex row.
+- **Verify an unknown run-state before retrying.** `run=unknown`/`—` means no live cmux tag was
+  observed, regardless of agent. Read the screen first. If it is an empty shell, rerun the same
+  original `captain start` command in the foreground, including its repo/base/agent options;
+  Captain's idempotent retry path handles the prepared worktree. Never reconstruct a hard-coded
+  launch from `prompt.txt` or blind-relaunch.
 - **Workspace ids, not names** — `status` prints the right `cmux` command per row; copy it.
 - **Never close an apparent duplicate workspace** — it's likely a group anchor (closing ungroups the
   fleet); a real duplicate means a stale binary, so rebuild instead.

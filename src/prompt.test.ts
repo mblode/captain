@@ -4,7 +4,7 @@ import { renderPrompt, renderPromptExtras } from "./prompt";
 import type { Issue } from "./types";
 
 describe("prompt rendering", () => {
-  it("renders the neutral issue-as-prompt shape without url", () => {
+  it("renders only the issue identity and points to the canonical rubric", () => {
     const issue: Issue = {
       criteria: [
         {
@@ -28,17 +28,10 @@ describe("prompt rendering", () => {
 
     const prompt = renderPrompt(issue, "ENG-403");
 
-    expect(prompt).toContain("Work on Linear issue ENG-403:");
-    expect(prompt).toContain('<issue identifier="ENG-403">');
-    expect(prompt).toContain('<team name="Engineering"/>');
-    expect(prompt).toContain("<label>Frontend</label>");
-    expect(prompt).toContain('<project name="Activation"/>');
-    expect(prompt).toContain('<parent-issue ref="ENG-400">');
-    expect(prompt).toContain('<criterion ref="ENG-404">');
-    expect(prompt).toContain("<title>Child task</title>");
-    expect(prompt).not.toContain("<url>");
-    // the internal Linear uuid is not carried into the neutral brief
-    expect(prompt).not.toContain("<id>");
+    expect(prompt).toContain("Work on Linear issue ENG-403: Fix launch flow.");
+    expect(prompt).toContain("Read `.captain/rubric.md` before planning");
+    expect(prompt).not.toContain("Raw markdown");
+    expect(prompt).not.toContain("Child body");
   });
 
   it("renders a source label other than Linear", () => {
@@ -47,15 +40,17 @@ describe("prompt rendering", () => {
       "db-35a2097c",
       "donebear"
     );
-    expect(prompt).toContain("Work on donebear issue db-35a2097c:");
-    // a ref-less donebear checklist item renders as a bare criterion
-    expect(prompt).toContain("<criterion>");
-    expect(prompt).toContain("<title>Fix crashes</title>");
+    expect(prompt).toContain("Work on donebear issue db-35a2097c.");
+    expect(prompt).toContain("Read `.captain/rubric.md`");
+    expect(prompt).not.toContain("Fix crashes");
   });
 
   it("falls back when issue data is unavailable", () => {
-    expect(renderPrompt(undefined, "ENG-999")).toBe(
+    expect(renderPrompt(undefined, "ENG-999")).toContain(
       "Work on Linear issue ENG-999."
+    );
+    expect(renderPrompt(undefined, "ENG-999")).toContain(
+      "Read `.captain/rubric.md`"
     );
   });
 });
@@ -133,9 +128,13 @@ describe("prompt extras", () => {
     expect(out).toContain("<fleet-memory>");
     expect(out).toContain("run yarn install first");
     expect(out).toContain("/mem/repo/learnings.md");
-    expect(out).toContain("VERIFIED this run");
-    // failure analysis: a verifier failure's root cause must be distilled
-    expect(out).toContain("root cause of that failure");
+    expect(out).toContain("zero or one learning");
+    expect(out).toContain("at most 200 characters");
+    expect(out).toContain("root cause of a verifier failure");
+    expect(out).toContain("repo command or environment trap");
+    expect(out).toContain("exact general-rule text already appears");
+    expect(out).toContain("grep -Fq");
+    expect(out).toContain("Do not print or read the whole file into context");
     expect(out).not.toContain("<finishing-protocol>");
   });
 
@@ -145,7 +144,7 @@ describe("prompt extras", () => {
       memoryPath: "/mem/repo/learnings.md",
     });
     expect(out).not.toContain("consult these");
-    expect(out).toContain("append 1-3 distilled learnings");
+    expect(out).toContain("append zero or one learning");
   });
 
   it("renders the data-scope guardrail when set", () => {

@@ -38,16 +38,18 @@ const criteriaFor = (
 ): string[] => {
   const criteria: string[] = [
     issue?.title
-      ? `The diff implements: **${issue.title}** (the issue description below is the contract).`
+      ? `The diff implements: **${issue.title}** (the issue description in Issue context is the contract).`
       : `The diff implements ${source} issue ${displayId}.`,
   ];
   for (const criterion of issue?.criteria ?? []) {
     if (criterion.title) {
-      criteria.push(
-        criterion.ref
-          ? `${criterion.title} (${criterion.ref}).`
-          : `${criterion.title}.`
-      );
+      let text = criterion.ref
+        ? `${criterion.title} (${criterion.ref}).`
+        : `${criterion.title}.`;
+      if (criterion.description) {
+        text += `\n\n${criterion.description}`;
+      }
+      criteria.push(text);
     }
   }
   criteria.push(
@@ -61,6 +63,48 @@ const criteriaFor = (
     );
   }
   return criteria;
+};
+
+const renderParentContext = (parent: Issue["parent"]): string => {
+  if (!parent) {
+    return "";
+  }
+  const ref = parent.ref ? ` (${parent.ref})` : "";
+  let context = `\n### Parent issue\n\n${parent.title}${ref}\n`;
+  if (parent.description) {
+    context += `\n${parent.description}\n`;
+  }
+  return context;
+};
+
+const renderIssueContext = (
+  issue: Issue | undefined,
+  displayId: string,
+  source: string
+): string => {
+  let context = "## Issue context\n\n";
+  context += `- Source: ${source}\n`;
+  context += `- Identifier: ${issue?.identifier ?? displayId}\n`;
+  if (issue?.title) {
+    context += `- Title: ${issue.title}\n`;
+  }
+  if (issue?.team?.name) {
+    context += `- Team: ${issue.team.name}\n`;
+  }
+  if (issue?.project?.name) {
+    context += `- Project: ${issue.project.name}\n`;
+  }
+  const labels = (issue?.labels?.nodes ?? [])
+    .map((label) => label.name)
+    .filter((name): name is string => Boolean(name));
+  if (labels.length > 0) {
+    context += `- Labels: ${labels.join(", ")}\n`;
+  }
+  context += renderParentContext(issue?.parent);
+  if (issue?.description) {
+    context += `\n### Issue description (the contract)\n\n${issue.description}\n`;
+  }
+  return context;
 };
 
 // The per-worktree definition of done, written to `.captain/rubric.md` at
@@ -78,17 +122,16 @@ export const renderRubric = (
   body +=
     "Captain wrote this file at fan-out. Do not edit it; your verdict must cite its hash.\n\n";
 
-  body += "## Acceptance criteria\n\n";
+  body += renderIssueContext(issue, displayId, source);
+
+  body += "\n## Acceptance criteria\n\n";
   for (const [i, criterion] of criteriaFor(
     issue,
     displayId,
     dataScope,
     source
   ).entries()) {
-    body += `${i + 1}. ${criterion}\n`;
-  }
-  if (issue?.description) {
-    body += `\n### Issue description (the contract)\n\n${issue.description}\n`;
+    body += `${i + 1}. ${criterion.replaceAll("\n", "\n   ")}\n`;
   }
 
   body += "\n## How to verify\n\n";

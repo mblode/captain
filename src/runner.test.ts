@@ -1,4 +1,5 @@
 import {
+  access,
   chmod,
   mkdir,
   mkdtemp,
@@ -10,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readLog } from "./captain/log";
 import { launchPlanMode } from "./launch";
@@ -32,7 +33,45 @@ const memoryDir = join(tmpdir(), `lw-test-memory-${process.pid}`);
 // ~/.claude/captain/log.jsonl.
 const homeDir = join(tmpdir(), `lw-test-home-${process.pid}`);
 
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const variables = JSON.parse(String(init?.body ?? "{}")) as {
+        variables?: { id?: string };
+      };
+      const id = variables.variables?.id ?? "TST-123";
+      if (String(input).includes("donebear")) {
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({
+              data: {
+                task: { description: null, id, title: null },
+                taskChecklistItems: { nodes: [] },
+              },
+            }),
+          ok: true,
+        } as Response);
+      }
+      return Promise.resolve({
+        json: () =>
+          Promise.resolve({
+            data: {
+              issue: {
+                description: null,
+                identifier: id,
+                title: null,
+              },
+            },
+          }),
+        ok: true,
+      } as Response);
+    })
+  );
+});
+
 afterEach(async () => {
+  vi.unstubAllGlobals();
   cleanup.push(memoryDir, homeDir);
   for (const path of cleanup.splice(0)) {
     await rm(path, { force: true, recursive: true });
@@ -42,7 +81,9 @@ afterEach(async () => {
 const safeEnv = (): NodeJS.ProcessEnv => ({
   CAPTAIN_HOME: homeDir,
   CAPTAIN_MEMORY_DIR: memoryDir,
+  DONEBEAR_TOKEN: "test-donebear-token",
   HOME: process.env.HOME,
+  LINEAR_API_KEY: "test-linear-key",
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
 });
 
@@ -182,6 +223,84 @@ describe("runner integration", () => {
     ).rejects.toThrow(/not in a git repo/u);
   });
 
+  it("fails closed with an actionable error when issue context is unavailable", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const env = safeEnv();
+    delete env.LINEAR_API_KEY;
+
+    await expect(
+      runLinearWorktree({ cwd: repo, env, print: true, tokens: ["TST-404"] })
+    ).rejects.toMatchObject({
+      errorType: "ISSUE_FETCH_FAILED",
+      message:
+        "cannot fetch Linear issue TST-404 — set LINEAR_API_KEY, then retry",
+    });
+    await expect(access(join(root, "src-tst-404"))).rejects.toThrow();
+
+    vi.mocked(fetch).mockResolvedValueOnce({
+      json: () => Promise.resolve({}),
+      ok: false,
+    } as Response);
+    await expect(
+      runLinearWorktree({
+        cwd: repo,
+        env: safeEnv(),
+        print: true,
+        tokens: ["TST-405"],
+      })
+    ).rejects.toMatchObject({
+      errorType: "ISSUE_FETCH_FAILED",
+      message: expect.stringContaining(
+        "verify the issue id, credentials, and network"
+      ),
+    });
+    await expect(access(join(root, "src-tst-405"))).rejects.toThrow();
+  });
+
+  it("fails before source preparation or launch when git fetch fails", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const env = safeEnv();
+    runRequired(
+      "git",
+      ["-C", repo, "remote", "set-url", "origin", join(root, "missing.git")],
+      { env }
+    );
+
+    await expect(
+      runLinearWorktree({
+        cwd: repo,
+        env,
+        print: true,
+        tokens: ["TST-406"],
+      })
+    ).rejects.toMatchObject({ errorType: "GIT_FETCH_FAILED" });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(access(join(root, "src-tst-406"))).rejects.toThrow();
+    expect(readLog(env)).toEqual([]);
+  });
+
+  it("rejects multi-issue --print before preparing any worktree", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+
+    await expect(
+      runLinearWorktree({
+        cwd: repo,
+        env: safeEnv(),
+        print: true,
+        tokens: ["TST-1", "TST-2"],
+      })
+    ).rejects.toMatchObject({
+      errorType: "USAGE",
+      message: expect.stringContaining("one issue at a time"),
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(access(join(root, "src-tst-1"))).rejects.toThrow();
+    await expect(access(join(root, "src-tst-2"))).rejects.toThrow();
+  });
+
   it("reuses an existing worktree on a repeat run instead of erroring", async () => {
     const { repo, root } = await createGitRepo("src");
     cleanup.push(root);
@@ -280,6 +399,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     expect(errput.value()).toContain("[1/2] TST-1 ·");
     expect(errput.value()).toContain("opened tst-1 (1/2)");
     expect(errput.value()).toContain("opened tst-2 (2/2)");
+    expect(errput.value().match(/git fetch origin/gu)).toHaveLength(1);
 
     const worktree1 = join(root, "src repo-tst-1");
     expect(
@@ -295,6 +415,70 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
       "src repo-tst-1",
       "src repo-tst-2",
     ]);
+  });
+
+  it("skips source and git preparation for an all-reused batch", async () => {
+    const { repo, root } = await createGitRepo("src");
+    const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+    cleanup.push(root, binDir);
+
+    await runLinearWorktree({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      tokens: ["TST-1"],
+    });
+    await runLinearWorktree({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      tokens: ["TST-2"],
+    });
+    const fetchesBeforeRetry = vi.mocked(fetch).mock.calls.length;
+
+    await writeExecutable(
+      join(binDir, "cmux"),
+      `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+if [ "$1" = "rpc" ] && [ "$2" = "workspace.list" ]; then
+  printf '{"workspaces":[{"id":"ANCHOR-1","ref":"a1","description":"anchor-1","current_directory":"%s/src-tst-1"},{"id":"WS-1","ref":"r1","description":"tst-1","current_directory":"%s/src-tst-1"},{"id":"ANCHOR-2","ref":"a2","description":"anchor-2","current_directory":"%s/src-tst-2"},{"id":"WS-2","ref":"r2","description":"tst-2","current_directory":"%s/src-tst-2"}]}' "$ROOT" "$ROOT" "$ROOT" "$ROOT"
+  exit 0
+fi
+if [ "$1" = "top" ]; then
+  printf '0\t0\t0\ttag\tworkspace:WS-1:tag:claude_code\tworkspace:WS-1\tRunning\n'
+  printf '0\t0\t0\ttag\tworkspace:WS-2:tag:claude_code\tworkspace:WS-2\tRunning\n'
+fi
+`
+    );
+    const env = {
+      ...safeEnv(),
+      PATH: `${binDir}:${safeEnv().PATH}`,
+      ROOT: root,
+    };
+    runRequired(
+      "git",
+      ["-C", repo, "remote", "set-url", "origin", join(root, "missing.git")],
+      { env }
+    );
+
+    const output = captureWritable();
+    const status = await runLinearWorktree({
+      cwd: repo,
+      env,
+      json: true,
+      stdout: output.stream,
+      tokens: ["TST-1", "TST-2"],
+    });
+
+    expect(status).toBe(0);
+    const result = JSON.parse(output.value()) as {
+      started: { workspaceId?: string }[];
+    };
+    expect(result.started.map((item) => item.workspaceId)).toEqual([
+      "WS-1",
+      "WS-2",
+    ]);
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(fetchesBeforeRetry);
   });
 
   it("ledgers the launch under cmux's actual workspace name when it differs", async () => {
@@ -410,6 +594,110 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
         env: safeEnv(),
       })
     ).toBe("tst-789");
+  });
+
+  it("reuses a live cmux workspace on retry instead of launching a duplicate", async () => {
+    const { repo, root } = await createGitRepo("src");
+    const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+    cleanup.push(root, binDir);
+    const log = join(root, "cmux.log");
+    const state = join(root, "cmux.state");
+    const active = join(root, "cmux.active");
+    const worktree = join(root, "src-tst-790");
+
+    await writeExecutable(
+      join(binDir, "cmux"),
+      `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+if [ "$1" = "rpc" ] && [ "$2" = "workspace.list" ]; then
+  if [ -f "$CMUX_STATE" ]; then
+    printf '{"workspaces":[{"id":"WS-ANCHOR","ref":"anchor","description":"group anchor","current_directory":"%s"},{"id":"WS-REUSE","ref":"r","description":"tst-790","current_directory":"%s"}]}' "$WORKTREE" "$WORKTREE"
+  fi
+  exit 0
+fi
+if [ "$1" = "top" ]; then
+  if [ -f "$CMUX_ACTIVE" ]; then
+    printf '0\t0\t0\ttag\tworkspace:WS-REUSE:tag:claude_code\tworkspace:WS-REUSE\tRunning\n'
+  fi
+  exit 0
+fi
+if [ "$1" = "new-workspace" ]; then
+  printf '%s\\n' "$*" >> "$CMUX_LOG"
+  touch "$CMUX_STATE"
+  touch "$CMUX_ACTIVE"
+fi
+`
+    );
+    await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+    await writeExecutable(join(binDir, "codex"), "#!/bin/sh\nexit 0\n");
+    const env = {
+      ...safeEnv(),
+      CMUX_ACTIVE: active,
+      CMUX_LOG: log,
+      CMUX_STATE: state,
+      PATH: `${binDir}:${safeEnv().PATH}`,
+      WORKTREE: worktree,
+    };
+
+    await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
+    const rubricPath = join(worktree, ".captain", "rubric.md");
+    await writeFile(rubricPath, "retry sentinel\n");
+    const sourceFetchesBeforeRetry = vi.mocked(fetch).mock.calls.length;
+    // A retry must not touch origin either. Making the remote invalid turns any
+    // accidental fetch into a hard failure while the live reuse still succeeds.
+    runRequired(
+      "git",
+      ["-C", repo, "remote", "set-url", "origin", join(root, "missing.git")],
+      { env }
+    );
+    const retryOutput = captureWritable();
+    const status = await runLinearWorktree({
+      cwd: repo,
+      env,
+      stdout: retryOutput.stream,
+      tokens: ["TST-790"],
+    });
+
+    expect(status).toBe(0);
+    expect(retryOutput.value()).toContain(
+      "reusing existing cmux workspace tst-790"
+    );
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(sourceFetchesBeforeRetry);
+    expect(await readFile(rubricPath, "utf-8")).toBe("retry sentinel\n");
+    const cmuxLog = await readFile(log, "utf-8");
+    expect(cmuxLog.match(/new-workspace/gu)).toHaveLength(1);
+    expect(
+      readLog(env).filter((record) => record.kind === "launch")
+    ).toHaveLength(1);
+
+    runRequired(
+      "git",
+      ["-C", repo, "remote", "set-url", "origin", join(root, "origin.git")],
+      { env }
+    );
+
+    // --agent selects the agent for a NEW launch; it does not force a duplicate
+    // while an exact-cwd tagged agent is still active.
+    await runLinearWorktree({
+      agent: "codex",
+      cwd: repo,
+      env,
+      tokens: ["TST-790"],
+    });
+    const switchedAgentLog = await readFile(log, "utf-8");
+    expect(switchedAgentLog.match(/new-workspace/gu)).toHaveLength(1);
+    expect(
+      readLog(env).filter((record) => record.kind === "launch")
+    ).toHaveLength(1);
+
+    // A same-cwd shell with no cmux-top agent tag is stale, not reusable.
+    await rm(active);
+    await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
+    const relaunchedLog = await readFile(log, "utf-8");
+    expect(relaunchedLog.match(/new-workspace/gu)).toHaveLength(2);
+    expect(
+      readLog(env).filter((record) => record.kind === "launch")
+    ).toHaveLength(2);
   });
 
   it("launches codex (best-effort, no plan mode) when --agent codex is set", async () => {

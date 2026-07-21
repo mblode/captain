@@ -4,7 +4,13 @@ import { renderRubric, rubricBody, rubricHash } from "./rubric";
 import type { Issue } from "./types";
 
 const issue: Issue = {
-  criteria: [{ ref: "ENG-404", title: "Child task" }],
+  criteria: [
+    {
+      description: "The complete child contract",
+      ref: "ENG-404",
+      title: "Child task",
+    },
+  ],
   description: "The contract body",
   identifier: "ENG-403",
   title: "Fix launch flow",
@@ -16,10 +22,38 @@ describe("renderRubric", () => {
     expect(text).toContain("# Definition of done — ENG-403");
     expect(text).toContain("**Fix launch flow**");
     expect(text).toContain("Child task (ENG-404).");
+    expect(text).toContain("The complete child contract");
     expect(text).toContain("The contract body");
     expect(text).toContain("test command passes");
     expect(text).toContain("typecheck and lint commands pass");
     expect(text).toContain('"ENG-403" in the title');
+  });
+
+  it("keeps complete source and optional issue context in the rubric", () => {
+    const { text } = renderRubric(
+      {
+        ...issue,
+        labels: { nodes: [{ name: "Frontend" }, { name: "Bug" }] },
+        parent: {
+          description: "The parent contract",
+          ref: "ENG-400",
+          title: "Parent task",
+        },
+        project: { name: "Activation" },
+        team: { name: "Engineering" },
+      },
+      "ENG-403",
+      undefined,
+      "Linear"
+    );
+    expect(text).toContain("## Issue context");
+    expect(text).toContain("- Source: Linear");
+    expect(text).toContain("- Identifier: ENG-403");
+    expect(text).toContain("- Team: Engineering");
+    expect(text).toContain("- Project: Activation");
+    expect(text).toContain("- Labels: Frontend, Bug");
+    expect(text).toContain("Parent task (ENG-400)");
+    expect(text).toContain("The parent contract");
   });
 
   it("always ships the verification procedure and verdict schema", () => {

@@ -47,7 +47,9 @@ Workflow:
   $ captain "tidy the README"            a free-form task in the current dir (no Linear)
   $ captain TIG-430 --agent codex        launch codex instead of Claude Code (best-effort)
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
+  $ captain status TIG-430 --json        one ticket/workspace, compact JSON
   $ captain status --summary             compact: counts + only what needs you
+  $ captain status --summary --json      compact poll + reusable snapshot token
   $ captain status --repo linkiq         one repo's worktrees only
   $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
   $ captain reject tig-430 --note "…"    send a plan back with feedback
@@ -75,7 +77,10 @@ program
     "[input...]",
     "Linear issue id(s)/URL, or a free-form task description"
   )
-  .option("--print", "write the brief without launching")
+  .option(
+    "--print",
+    "prepare the task and print its brief without launching (not a dry-run)"
+  )
   .option("--json", "emit JSON: { started: [...] }")
   .option(
     "--repo-path <path>",
@@ -137,6 +142,10 @@ program
   .description(
     "the one view: NEEDS YOU / IN FLIGHT / READY, with resolve commands"
   )
+  .argument(
+    "[refs...]",
+    "ticket/workspace refs to show (space- or comma-separated)"
+  )
   .option("--json", "emit JSON")
   .option(
     "--repo <name>",
@@ -149,6 +158,10 @@ program
     "compact: group counts + NEEDS YOU detail only (a cheap poll)"
   )
   .option(
+    "--since <snapshot>",
+    "with --summary --json: return only changed:false when unchanged"
+  )
+  .option(
     "--watch",
     "live foreground view: re-render every --interval seconds (Ctrl-C to exit). Stateless — every tick re-derives the fleet fresh, no daemon"
   )
@@ -158,21 +171,26 @@ program
     "5"
   )
   .action(
-    (options: {
-      json?: boolean;
-      repo?: string;
-      needs?: boolean;
-      ready?: boolean;
-      summary?: boolean;
-      watch?: boolean;
-      interval?: string;
-    }) => {
+    (
+      refs: string[],
+      options: {
+        json?: boolean;
+        repo?: string;
+        needs?: boolean;
+        ready?: boolean;
+        summary?: boolean;
+        since?: string;
+        watch?: boolean;
+        interval?: string;
+      }
+    ) => {
       status(
         {
           ...options,
           interval: options.interval
             ? Number.parseFloat(options.interval)
             : undefined,
+          refs: refs.length > 0 ? refs.join(",") : undefined,
         },
         process.stdout
       );
