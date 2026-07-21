@@ -108,6 +108,19 @@ describe("mapTaskToIssue", () => {
     expect(issue.criteria).toBeNull();
     expect(issue.description).toBe("just a task");
   });
+
+  it("skips a blank checklist row so it never renders as an empty criterion", () => {
+    const issue = mapTaskToIssue(
+      { description: "", id: UUID, title: "t" },
+      [
+        item({ sortOrder: 1, title: "Fix crashes" }),
+        item({ sortOrder: 2, title: "   " }),
+        item({ sortOrder: 3, title: "" }),
+      ],
+      "db-abc12345"
+    );
+    expect(issue.criteria).toEqual([{ title: "Fix crashes" }]);
+  });
 });
 
 const jsonResponse = (data: unknown): Response => Response.json({ data });
