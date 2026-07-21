@@ -1,4 +1,5 @@
 import { DEFAULT_SKILLS } from "./config";
+import { RUBRIC_RELPATH } from "./rubric";
 import type { Issue } from "./types";
 
 export const renderPrompt = (
@@ -13,7 +14,7 @@ export const renderPrompt = (
   const title = issue?.title ? `: ${issue.title}` : "";
   return (
     `Work on ${source} issue ${identifier}${title}.\n\n` +
-    "Read `.captain/rubric.md` before planning; it is the complete authoritative " +
+    `Read \`${RUBRIC_RELPATH}\` before planning; it is the complete authoritative ` +
     "issue contract and definition of done."
   );
 };

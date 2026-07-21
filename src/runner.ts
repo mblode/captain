@@ -1,11 +1,11 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { realCmux } from "./captain/control";
 import type { CmuxPort, CmuxWorkspace } from "./captain/control";
 import { appendLog, now } from "./captain/log";
-import { identityOf, ticketFrom } from "./captain/view";
+import { identityOf, pickAgentWorkspaces, ticketFrom } from "./captain/view";
 import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
 import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
@@ -97,7 +97,7 @@ const activeWorkspacesByCwd = (port: CmuxPort): Map<string, CmuxWorkspace> => {
   }
   const runs = port.runStates();
   return new Map(
-    workspaces
+    pickAgentWorkspaces(workspaces, runs)
       .filter((workspace) => workspace.id.toLowerCase() in runs)
       .map((workspace) => [workspace.cwd, workspace])
   );
@@ -570,6 +570,9 @@ const reusableIssue = (
   if (!workspace) {
     return undefined;
   }
+  if (!existsSync(join(cwd, RUBRIC_RELPATH))) {
+    return undefined;
+  }
   const worktree = existingIssueWorktree(repoRoot, seed.issueId, env);
   return worktree ? { workspace, worktree } : undefined;
 };
@@ -947,7 +950,8 @@ export const runDispatch = async (
       env,
       loadSkills(env),
       loadDataScope(env),
-      agent
+      agent,
+      "free-form"
     );
 
     if (options.print) {

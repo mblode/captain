@@ -69,16 +69,6 @@ const learningKey = (line: string): string =>
     .replace(/^-\s+(?:\[[^\]]+\]\s*)?/u, "")
     .trim();
 
-// Node 18 still appears via repo-local version managers. Avoid ES2023
-// `toReversed` while also leaving the caller's array untouched.
-const reversedCopy = <T>(values: readonly T[]): T[] => {
-  const result: T[] = [];
-  for (let index = values.length - 1; index >= 0; index -= 1) {
-    result.push(values[index] as T);
-  }
-  return result;
-};
-
 // Keep the prompt budget fail-safe without emitting half an instruction. Long
 // content is clipped only between lines and carries an explicit marker. If the
 // first line alone is over budget, the marker is safer than a misleading
@@ -143,7 +133,8 @@ export const memoryExcerptOf = (content: string): string => {
       .slice(inboxAt + INBOX_HEADING.length)
       .split("\n")
       .filter((l) => l.trim().startsWith("- "));
-    const tail = reversedCopy(entries)
+    const tail = entries
+      .toReversed()
       .filter((entry) => {
         const key = learningKey(entry);
         if (seen.has(key)) {
@@ -153,7 +144,7 @@ export const memoryExcerptOf = (content: string): string => {
         return true;
       })
       .slice(0, INBOX_MAX_ENTRIES);
-    const chronologicalTail = reversedCopy(tail);
+    const chronologicalTail = tail.toReversed();
     if (chronologicalTail.length > 0) {
       inbox = `${INBOX_HEADING}\n${chronologicalTail.join("\n")}`;
     }

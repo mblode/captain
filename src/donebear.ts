@@ -80,7 +80,7 @@ const renderChecklistBlock = (items: DonebearChecklistItem[]): string => {
 
 // PURE: fold a donebear task + its checklist into the neutral Issue the rest of
 // captain consumes. Unchecked items with a title become acceptance criteria
-// (renderRubric turns each into a numbered criterion, renderPrompt lists them);
+// (renderRubric turns each into a numbered criterion in the authoritative rubric);
 // the full checklist (with state) is appended to the description as context.
 // Completed items are never re-implemented as criteria, and a blank checklist
 // row (empty title) is not a criterion — it would render as an empty one.

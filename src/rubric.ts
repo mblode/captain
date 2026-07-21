@@ -36,11 +36,13 @@ const criteriaFor = (
   dataScope?: string,
   source = "Linear"
 ): string[] => {
-  const criteria: string[] = [
-    issue?.title
-      ? `The diff implements: **${issue.title}** (the issue description in Issue context is the contract).`
-      : `The diff implements ${source} issue ${displayId}.`,
-  ];
+  let contract = `The diff implements the task **${displayId}**.`;
+  if (issue?.title) {
+    contract = `The diff implements: **${issue.title}** (the issue description in Issue context is the contract).`;
+  } else if (issue) {
+    contract = `The diff implements ${source} issue ${displayId}.`;
+  }
+  const criteria: string[] = [contract];
   for (const criterion of issue?.criteria ?? []) {
     if (criterion.title) {
       let text = criterion.ref
@@ -107,9 +109,9 @@ const renderIssueContext = (
   return context;
 };
 
-// The per-worktree definition of done, written to `.captain/rubric.md` at
-// fan-out. Mechanically derived from the Linear issue — captain makes no LLM
-// call and does no summarising. The "How to verify" section is the fixed
+// The per-run definition of done, written to `.captain/rubric.md` for issue
+// fan-out and free-form dispatch. Mechanically derived from the source-neutral
+// issue/task contract — captain makes no LLM call and does no summarising. The "How to verify" section is the fixed
 // grading procedure (a fresh-context verifier sub-agent), so the verification
 // standard is set by captain once, not improvised per agent.
 export const renderRubric = (

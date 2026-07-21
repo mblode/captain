@@ -690,6 +690,20 @@ fi
       readLog(env).filter((record) => record.kind === "launch")
     ).toHaveLength(1);
 
+    // An active agent without Captain's authoritative rubric is not reusable:
+    // normal preparation must restore fleet membership before rejoining it.
+    await rm(rubricPath);
+    const sourceFetchesBeforeRepair = vi.mocked(fetch).mock.calls.length;
+    await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(
+      sourceFetchesBeforeRepair + 1
+    );
+    expect(await readFile(rubricPath, "utf-8")).toContain(
+      "# Definition of done — TST-790"
+    );
+    const repairedLog = await readFile(log, "utf-8");
+    expect(repairedLog.match(/new-workspace/gu)).toHaveLength(1);
+
     // A same-cwd shell with no cmux-top agent tag is stale, not reusable.
     await rm(active);
     await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
@@ -929,6 +943,9 @@ describe("runDispatch (non-Linear, current dir)", () => {
     // .captain/ lands in the repo root itself (no sibling worktree created).
     const rubric = await readFile(join(repo, ".captain", "rubric.md"), "utf-8");
     expect(rubric).toContain("# Definition of done — tidy-the-readme");
+    expect(rubric).toContain("- Source: free-form");
+    expect(rubric).toContain("implements the task **tidy-the-readme**");
+    expect(rubric).not.toContain("Linear issue");
     expect(
       await readFile(join(repo, ".git", "info", "exclude"), "utf-8")
     ).toContain(".captain/");
