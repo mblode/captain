@@ -177,6 +177,27 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   verdict yet" (`parseVerdict` returns null — a malformed verdict must never read as a pass), and
   the verdict gates the _label_ (`✓ verified`), never the merge — the human merge gate stays
   authoritative.
+- **A criterion has three states, not two.** `na: true` (reason in `evidence`) means the criterion
+  cannot apply to this diff — it is neither a pass nor a failure, and `gain` never tallies it. It
+  exists because pass/fail alone had no honest answer for e.g. a docs-only diff facing "the repo's
+  test command passes", so agents argued those into passes, each inventing a different exemption
+  and some rewording the criterion itself. Hence the rubric pins `name` to the criterion verbatim:
+  a softened bar must show up as a rename, never as a silent pass. Don't add a fourth state — the
+  criteria array is evidence for the human, not a scoring system.
+- **`parseVerdict` accepts `ts` as a number OR a quoted integer.** The rubric's schema example
+  modelled it as a string for months, so most verdicts on disk carry `"1784854700"`; scoring those
+  0 silently dropped them from `gain`'s launch→verdict latency. Tolerate at the parser — don't
+  "fix" this by teaching the type in the rubric as well, that's the same bug patched twice.
+- **Fleet-memory headings are matched at LINE START** (`headingAt` in `memory.ts`), and `SKELETON`
+  must never name a heading in its prose. Both halves matter: locating `## Rules`/`## Inbox` with
+  `indexOf` matched the skeleton's own preamble, which mentioned `## Inbox` first — so
+  `slice(rulesAt, inboxAt)` was backwards and **empty**, and the curated rules were silently
+  dropped from every brief for months. The unit tests missed it because they all hand-build content
+  with no preamble; `memory.test.ts` now drives the real `SKELETON` for exactly this reason.
+- **`SKELETON` states no append policy** — `prompt.ts` is the single owner of what an agent may
+  append. `ensureMemoryFile` only writes the skeleton when the file is ABSENT, so any policy stated
+  there can never be refreshed: the old "1-3 bullets" text contradicted the brief's "zero or one"
+  forever, and agents followed the file (measured mode: 3 bullets per run).
 - **Never trust cmux's built-in workspace status glyph** (it desyncs). The trusted signals are
   `cmux top`'s per-workspace run-state **tag** (live process accounting, `runStates` in
   `control.ts`) and the feed's `resolved_at` field. An unreadable tag parses as "unknown" =

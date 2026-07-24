@@ -70,8 +70,19 @@ describe("prompt extras", () => {
       expect(at).toBeGreaterThan(last);
       last = at;
     }
-    expect(out).toContain("without waiting to be told to continue");
+    expect(out).toContain("nobody will tell you to continue");
     expect(out).not.toContain("<finishing-protocol>");
+  });
+
+  // The plan gate is the human's one cheap chance to redirect a run, so both
+  // agent variants must ask for the unknowns rather than just "a plan".
+  it("asks the plan to lead with ambiguities and assumptions", () => {
+    for (const agent of ["claude", "codex"]) {
+      const out = renderPromptExtras({ agent, workflow: true });
+      expect(out).toContain("Lead it with what you are least sure of");
+      expect(out).toContain("assumptions you had to make");
+      expect(out).toContain("Never resolve an ambiguity silently.");
+    }
   });
 
   it("renders the configured skills in order between implement and finish", () => {
@@ -128,13 +139,14 @@ describe("prompt extras", () => {
     expect(out).toContain("<fleet-memory>");
     expect(out).toContain("run yarn install first");
     expect(out).toContain("/mem/repo/learnings.md");
-    expect(out).toContain("zero or one learning");
+    expect(out).toContain("append ONE learning");
     expect(out).toContain("at most 200 characters");
     expect(out).toContain("root cause of a verifier failure");
-    expect(out).toContain("repo command or environment trap");
-    expect(out).toContain("exact general-rule text already appears");
-    expect(out).toContain("grep -Fq");
-    expect(out).toContain("Do not print or read the whole file into context");
+    expect(out).toContain("command or environment trap");
+    // the discriminator is what the next agent DOES, not a two-branch prose test
+    expect(out).toContain("would change what the next agent DOES");
+    expect(out).toContain("Where code lives is not a learning");
+    expect(out).toContain("without reading the file into context");
     expect(out).not.toContain("<finishing-protocol>");
   });
 
@@ -144,7 +156,7 @@ describe("prompt extras", () => {
       memoryPath: "/mem/repo/learnings.md",
     });
     expect(out).not.toContain("consult these");
-    expect(out).toContain("append zero or one learning");
+    expect(out).toContain("append ONE learning");
   });
 
   it("renders the data-scope guardrail when set", () => {

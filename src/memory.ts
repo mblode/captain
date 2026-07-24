@@ -13,17 +13,30 @@ import { captainHome } from "./home";
 const RULES_HEADING = "## Rules";
 const INBOX_HEADING = "## Inbox";
 
+// Headings are located at LINE START, never by substring. The file's own prose
+// can name a heading inline (the old skeleton's preamble did), and with `## Inbox`
+// mentioned before `## Rules`, indexOf ordered the two matches backwards — the
+// rules slice came out EMPTY and the curated section was silently dropped from
+// every brief. Anchoring to a line makes prose unmatchable.
+const headingAt = (content: string, heading: string): number =>
+  new RegExp(`^${heading}[ \\t]*$`, "mu").exec(content)?.index ?? -1;
+
 // Injection caps: keep the excerpt a small, fixed prompt cost.
 const INBOX_MAX_ENTRIES = 20;
 const EXCERPT_MAX_CHARS = 2048;
 const TRUNCATION_MARKER = "[… truncated]";
 
+// Deliberately states no append policy: the brief is the single owner of what an
+// agent may append (prompt.ts). The old skeleton restated it as "1-3 bullets",
+// which then contradicted the brief's "zero or one" forever — ensureMemoryFile
+// only writes this when the file is ABSENT, so a stale policy never refreshes,
+// and agents followed the file. It also names no heading inline, so the prose can
+// never shadow the real headings.
 const SKELETON = `# Fleet learnings
 
-Shared memory for every worktree of this repo. Agents: append zero or one
-verified bullet to ${INBOX_HEADING} at the end of a run. Humans (the captain
-skill): periodically distill ${INBOX_HEADING} into ${RULES_HEADING} and delete
-what didn't hold up.
+Shared memory for every worktree of this repo. Curated rules come first and are
+always injected; the inbox is where agents append. Humans (the captain skill):
+periodically distill the inbox into the rules and delete what didn't hold up.
 
 ${RULES_HEADING}
 
@@ -97,8 +110,8 @@ const clipWholeLines = (content: string): string => {
 // the newest unique inbox entries. The single total cap includes both sections
 // (String.length counts UTF-16 code units, not bytes).
 export const memoryExcerptOf = (content: string): string => {
-  const inboxAt = content.indexOf(INBOX_HEADING);
-  const rulesAt = content.indexOf(RULES_HEADING);
+  const inboxAt = headingAt(content, INBOX_HEADING);
+  const rulesAt = headingAt(content, RULES_HEADING);
   if (rulesAt === -1 && inboxAt === -1) {
     return clipWholeLines(content.trim());
   }

@@ -15,8 +15,13 @@ export const DEFAULT_SKILLS = [
 // The data-scope guardrail injected into every brief by default — the agent may
 // touch the repo's own source/config/tests/docs, but not customer data, secrets,
 // or PII. On by default; a setup can override it (or widen it) via config.
+//
+// States WHAT to do when blocked and names no tool: HOW to surface a blocker is
+// owned by the brief's <workflow> section, which is agent-aware (claude has
+// AskUserQuestion, codex does not and stops instead). Naming a tool here would
+// re-break that for codex — and for any custom .dataScope text a user writes.
 export const DEFAULT_DATA_SCOPE =
-  "Operate on source code, configuration, tests, and documentation in this repository only. Do not access, read, log, exfiltrate, or commit customer data, production secrets, credentials, payment information, or PII. If a task appears to require any of these, stop and surface the blocker via AskUserQuestion instead of proceeding.";
+  "Operate on source code, configuration, tests, and documentation in this repository only. Do not access, read, log, exfiltrate, or commit customer data, production secrets, credentials, payment information, or PII. If a task appears to require any of these, stop and surface the blocker to a human as described above instead of proceeding.";
 
 // Env injected into every fleet agent's claude process — and therefore every
 // Bash tool it runs. Defaults cap what test runners respect via env (vitest's

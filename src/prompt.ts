@@ -14,8 +14,8 @@ export const renderPrompt = (
   const title = issue?.title ? `: ${issue.title}` : "";
   return (
     `Work on ${source} issue ${identifier}${title}.\n\n` +
-    `Read \`${RUBRIC_RELPATH}\` before planning; it is the complete authoritative ` +
-    "issue contract and definition of done."
+    `Read \`${RUBRIC_RELPATH}\` before planning: it is the complete authoritative ` +
+    "issue contract and your definition of done. Do not edit it."
   );
 };
 
@@ -60,20 +60,43 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     // are data-driven. The plan step's wording is agent-aware: telling codex to
     // wait for a plan approval would stall it forever (no gate exists).
     const skillSteps = skills.map((skill, i) => `${i + 3}. Run ${skill}.`);
+    // The plan is the human's one cheap chance to redirect the run, so both
+    // variants ask for the unknowns first: an ambiguity resolved at the gate
+    // costs a sentence, the same ambiguity guessed wrong costs the whole run.
+    const planLead =
+      "Lead it with what you are least sure of: any ambiguity in the ticket, the " +
+      "assumptions you had to make, and the decisions a reviewer is most likely to " +
+      "want changed. Mechanical work goes last. Never resolve an ambiguity silently.";
+    // Agent-aware, same as the plan steps: codex has no AskUserQuestion, and
+    // naming a tool it cannot call while forbidding its only fallback leaves it
+    // no legal move. A stopped codex agent is what captain reads as needing a
+    // human anyway, so stopping IS the instruction there.
+    const blockedSteps =
+      extras.agent === "codex"
+        ? [
+            "If you are ever blocked on a decision only a human can make, print the question and",
+            "stop. Never guess and never continue past it — captain surfaces a stopped agent as",
+            "needing input. Otherwise keep moving to the next step on your own.",
+          ]
+        : [
+            "If you are ever blocked on a decision only a human can make, surface it via the",
+            "AskUserQuestion tool and wait for the answer — never guess, and never just print the",
+            "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
+          ];
     const planSteps =
       extras.agent === "codex"
         ? [
-            "1. Plan first: write out a short plan of your approach before touching code.",
+            `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
             "2. Implement the plan. (This session has no plan-approval gate — do not stop to wait for one.)",
           ]
         : [
-            "1. Plan first (you are launched in plan mode) and present the plan for approval.",
+            `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
             "2. Once the plan is approved, implement it.",
           ];
     out += "\n<workflow>\n";
     out += [
-      "You own this ticket end to end. Drive the whole pipeline yourself, in order,",
-      "without waiting to be told to continue:",
+      "You own this ticket end to end: drive every step yourself, in order. The only",
+      "stops are the ones named in this brief — nobody will tell you to continue.",
       "",
       ...planSteps,
       ...skillSteps,
@@ -85,9 +108,7 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       "uncapped worker pools across concurrent agents have exhausted system memory and",
       "gotten the whole fleet killed.",
       "",
-      "If you are ever blocked on a decision only a human can make, surface it via the",
-      "AskUserQuestion tool and wait for the answer — never guess, and never just print the",
-      "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
+      ...blockedSteps,
     ].join("\n");
     out += "\n</workflow>\n";
   }
@@ -100,9 +121,8 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
 
   if (extras.rubricPath) {
     out += "\n<finishing-protocol>\n";
-    out += `${extras.rubricPath} in this worktree is your definition of done — do not edit it.\n`;
     out +=
-      'Before declaring the ticket done, follow its "How to verify" section: spawn a ' +
+      `Before declaring the ticket done, follow ${extras.rubricPath}'s "How to verify" section: spawn a ` +
       "fresh-context verifier sub-agent to grade the diff against the acceptance criteria, " +
       "fix and re-verify until it passes, then write the verdict file exactly as the " +
       'rubric\'s "Verdict" section specifies. Captain will not mark this worktree ' +
@@ -119,15 +139,20 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     if (extras.memory) {
       out += `Learnings from previous runs on this repo — consult these before re-deriving repo facts:\n\n${extras.memory}\n\n`;
     }
+    // One test ("would this change what the next agent DOES here?") plus the one
+    // failure mode worth naming. The previous wording spent a paragraph on a
+    // two-branch eligibility test and a mandated `grep -Fq` dedupe; measured over
+    // 685 real bullets the dedupe never fired (every bullet is fresh prose, so
+    // fixed-string matching cannot see a paraphrase) and 45% of output was still
+    // "X lives in Y" topography. The length cap is the constraint that pays.
     out +=
-      `At the end of your run, append zero or one learning to ${extras.memoryPath} under ` +
-      'its "## Inbox" heading as `- [<TICKET> <YYYY-MM-DD>] <general rule>`. The whole ' +
-      "bullet must be at most 200 characters. Write one only for either (a) the root cause " +
-      "of a verifier failure that an eventual pass confirmed, or (b) a repo command or " +
-      "environment trap you directly confirmed. Before appending, use a non-printing " +
-      `fixed-string search (\`grep -Fq\`) against ${extras.memoryPath}; skip the write if ` +
-      "the exact general-rule text already appears. Do not print or read the whole file into " +
-      "context. Otherwise write nothing; ordinary implementation facts do not qualify.\n";
+      `At the end of your run you may append ONE learning to ${extras.memoryPath} under its ` +
+      '"## Inbox" heading, as `- [<TICKET> <YYYY-MM-DD>] <rule>`, at most 200 characters. ' +
+      "Append only something that would change what the next agent DOES in this repo: a " +
+      "command or environment trap you hit, or the root cause of a verifier failure. Where " +
+      'code lives is not a learning — "X is implemented in Y" helps nobody. If nothing ' +
+      "qualifies, or the rules above already cover it, write nothing. Append without reading " +
+      "the file into context.\n";
     out += "</fleet-memory>\n";
   }
 

@@ -8,7 +8,15 @@ export interface Verdict {
   issue: string;
   rubricHash: string;
   verdict: "pass" | "fail";
-  criteria: { name: string; pass: boolean; evidence: string }[];
+  criteria: {
+    name: string;
+    pass: boolean;
+    evidence: string;
+    // "cannot apply to this diff" (reason in `evidence`) — a third state, so an
+    // inapplicable criterion has an honest answer instead of being argued into a
+    // pass. Neither a pass nor a failure: gain never tallies it.
+    na?: boolean;
+  }[];
   summary: string;
   // the opened PR, when the agent includes it — wires the status merge hint
   prUrl?: string;
@@ -20,7 +28,21 @@ const isCriterion = (c: unknown): boolean =>
   c !== null &&
   typeof (c as { name?: unknown }).name === "string" &&
   typeof (c as { pass?: unknown }).pass === "boolean" &&
-  typeof (c as { evidence?: unknown }).evidence === "string";
+  typeof (c as { evidence?: unknown }).evidence === "string" &&
+  ((c as { na?: unknown }).na === undefined ||
+    typeof (c as { na?: unknown }).na === "boolean");
+
+// Agents write `ts` as a JSON string about as often as a number (the rubric's
+// schema example modelled it as one for months, so most verdicts on disk carry
+// `"1784854700"`). A quoted integer is unambiguous, so accept it rather than
+// silently scoring it 0 — gain's launch→verdict latency drops every 0 sample.
+const epochSeconds = (raw: unknown): number => {
+  if (typeof raw === "number") {
+    return raw;
+  }
+  const text = typeof raw === "string" ? raw.trim() : "";
+  return /^\d+$/u.test(text) ? Number(text) : 0;
+};
 
 // Pure: validate the agent-written verdict file's shape. Anything malformed is
 // null — a garbage verdict must read as "no verdict yet", never as a pass.
@@ -50,7 +72,7 @@ export const parseVerdict = (text: string): Verdict | null => {
     prUrl: typeof v.prUrl === "string" ? v.prUrl : undefined,
     rubricHash: v.rubricHash,
     summary: v.summary,
-    ts: typeof v.ts === "number" ? v.ts : 0,
+    ts: epochSeconds(v.ts),
     verdict: v.verdict,
   };
 };

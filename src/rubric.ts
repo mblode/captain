@@ -60,8 +60,11 @@ const criteriaFor = (
     `A PR is open with "${displayId}" in the title and a description that matches the diff.`
   );
   if (dataScope) {
+    // Phrased as a scan with output, not as a negative to be asserted. The old
+    // wording ("no PII is accessed") is unevidencable from a diff, so verdicts
+    // answered it with conclusion-prose; a grep over the diff is a real artifact.
     criteria.push(
-      "The diff stays within the stated data-scope guardrail: no customer data, secrets, credentials, payment information, or PII is accessed, logged, or committed."
+      "The diff introduces no customer data, secret, credential, payment detail, or PII. Evidence must be a scan you ran over the diff (e.g. `git diff <base>...HEAD | grep -niE 'secret|token|password|api[_-]?key|bearer'`) plus its output, not an assertion."
     );
   }
   return criteria;
@@ -141,9 +144,11 @@ export const renderRubric = (
     "Before you may declare this ticket done:",
     "",
     "1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file and the branch diff against the base branch (plus read access to the worktree). Do not share your own reasoning or summary of the work.",
-    "2. The verifier grades each acceptance criterion pass/fail and must cite concrete evidence per criterion (file and line, or command output).",
-    "3. If any criterion fails, fix the code, then re-run the verifier in another fresh context. Iterate until it passes.",
-    "4. You may not write a pass verdict without a verifier run backing it.",
+    "2. The verifier grades every acceptance criterion above, in order, and must cite concrete evidence per criterion (file and line, or command output).",
+    "3. Prefer a mechanical referee to your own reading. Where a criterion names a command, run the repo's own command — not a hand-picked subset of test files — and quote it with its exit code or summary line. CI status (`gh pr checks`) beats anything run locally; cite it once the PR is open.",
+    "4. If a criterion genuinely cannot apply to this diff, mark it `na` with the reason as its evidence. Do NOT reword the criterion to something you can pass, and do not pass it on an exemption argument — `na` is the honest answer and captain surfaces it as one.",
+    "5. If any criterion fails, fix the code, then re-run the verifier in another fresh context. Iterate until it passes.",
+    "6. You may not write a pass verdict without a verifier run backing it.",
     "",
   ].join("\n");
 
@@ -152,12 +157,20 @@ export const renderRubric = (
   const schema = JSON.stringify(
     {
       criteria: [
-        { evidence: "<file:line or command output>", name: "…", pass: true },
+        {
+          evidence: "<file:line, or the command you ran and its output>",
+          na: false,
+          name: "<the criterion's number and text, copied verbatim>",
+          pass: true,
+        },
       ],
       issue: displayId,
       prUrl: "<the PR url, once opened>",
       rubricHash: hash,
       summary: "<one line>",
+      // Left as a descriptive placeholder like every other field: parseVerdict
+      // accepts an epoch as a number OR a quoted integer, so there is no type to
+      // teach here and no third way to get it wrong.
       ts: "<epoch seconds>",
       verdict: "pass | fail",
     },
@@ -171,7 +184,11 @@ export const renderRubric = (
     schema,
     "```",
     "",
-    `\`rubricHash\` must be exactly \`${hash}\` — copy it verbatim.`,
+    "One entry per acceptance criterion above, in the same order.",
+    "",
+    `- \`rubricHash\` must be exactly \`${hash}\` — copy it verbatim.`,
+    "- `name` must be the criterion's number and text copied verbatim. Rewording a criterion to a bar you can clear reads as a pass on the criterion you were actually given — use `na`, or fail it.",
+    "- `na: true` means the criterion cannot apply to this diff (put the reason in `evidence`). It is not a pass and not a failure; `pass` is ignored.",
     "",
   ].join("\n");
 

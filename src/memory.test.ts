@@ -106,6 +106,45 @@ describe("memoryExcerptOf", () => {
     expect(excerpt).toContain("FORCE_COLOR=0");
   });
 
+  // Regression: every case above hand-builds content with no preamble, which is
+  // exactly how the curated section could be dropped in production unnoticed.
+  // Drive the REAL skeleton so the file's own prose is part of the input.
+  it("injects curated rules promoted into the real skeleton", () => {
+    const env = tmpEnv();
+    const path = ensureMemoryFile("/code/repo", env);
+    const promoted = "- always run yarn install in a fresh worktree";
+    writeFileSync(
+      path,
+      readFileSync(path, "utf-8").replace(
+        "## Rules\n",
+        `## Rules\n${promoted}\n`
+      )
+    );
+    expect(readMemoryExcerpt("/code/repo", env)).toContain(promoted);
+  });
+
+  it("ignores headings named in prose rather than at a line start", () => {
+    // The legacy on-disk preamble mentions ## Inbox BEFORE ## Rules; locating
+    // headings by substring ordered them backwards and emptied the rules slice.
+    const excerpt = memoryExcerptOf(
+      [
+        "# Fleet learnings",
+        "",
+        "Agents: append to ## Inbox. Humans: distill ## Inbox into ## Rules.",
+        "",
+        "## Rules",
+        "- curated: the build needs node 22",
+        "",
+        "## Inbox",
+        "- [TIG-1 2026-06-01] a raw learning",
+      ].join("\n")
+    );
+    expect(excerpt).toContain("- curated: the build needs node 22");
+    expect(excerpt).toContain("a raw learning");
+    // the preamble itself is never injected
+    expect(excerpt).not.toContain("Humans: distill");
+  });
+
   it("caps the inbox to its tail so uncurated slop ages out", () => {
     const entries = Array.from(
       { length: 50 },

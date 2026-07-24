@@ -220,7 +220,8 @@ export const computeGain = (input: GainInput): GainMetrics => {
       continue;
     }
     for (const c of verdict.criteria) {
-      if (c.pass === false) {
+      // `na` is a third state, not a failure — it never enters the tally.
+      if (c.pass === false && c.na !== true) {
         failMap.set(c.name, (failMap.get(c.name) ?? 0) + 1);
       }
     }

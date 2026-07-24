@@ -104,8 +104,10 @@ describe("renderRubric", () => {
   it("adds a data-scope criterion only when a guardrail is passed", () => {
     const without = renderRubric(issue, "ENG-403");
     const withScope = renderRubric(issue, "ENG-403", "no customer data");
-    expect(without.text).not.toContain("data-scope guardrail");
-    expect(withScope.text).toContain("data-scope guardrail");
+    expect(without.text).not.toContain("credential, payment detail, or PII");
+    expect(withScope.text).toContain("credential, payment detail, or PII");
+    // phrased as a scan with output — a negative asserted in prose is not evidence
+    expect(withScope.text).toContain("Evidence must be a scan you ran");
     // a criterion change must move the body hash (it gates the verdict)
     expect(withScope.hash).not.toBe(without.hash);
   });
