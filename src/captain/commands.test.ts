@@ -270,6 +270,37 @@ describe("stateless approve/reject/status over the real surface", () => {
     expect(JSON.parse(log.trim())).toMatchObject({ kind: "approve" });
   });
 
+  it("approve --note records the reviewer's reasoning in the ledger", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "tig-430" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out, text } = capture();
+    approve("tig-430", out, port, { note: "low risk, scope matches" });
+    const log = readFileSync(join(root, "home", "log.jsonl"), "utf-8");
+    expect(JSON.parse(log.trim())).toMatchObject({
+      kind: "approve",
+      note: "low risk, scope matches",
+    });
+    expect(text()).toContain("low risk, scope matches");
+  });
+
+  // The deliberate asymmetry with reject: the cmux reply is authoritative, so a
+  // blank rationale degrades to "unnoted" rather than blocking the approval.
+  it("approve with a blank --note still approves, unnoted", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "tig-430" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }]
+    );
+    const { out } = capture();
+    approve("tig-430", out, port, { note: "   " });
+    expect(port.replies).toEqual([{ approve: true, id: "feed-1" }]);
+    const log = readFileSync(join(root, "home", "log.jsonl"), "utf-8");
+    expect(JSON.parse(log.trim())).not.toHaveProperty("note");
+  });
+
   it("approve all approves every plan gate and nothing else", () => {
     const a = worktree("tig-430");
     const b = worktree("tig-431");

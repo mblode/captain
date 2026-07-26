@@ -12,6 +12,11 @@ export interface LogRecord {
   ts: number;
   kind: "approve" | "reject" | "launch";
   name: string;
+  // The decision's reasoning, keyed by `kind`: on a reject, what to change (it
+  // is also delivered to the agent); on an approve, why it was safe to proceed.
+  // Optional on both — an approval carrying none is what `gain` counts as
+  // unexplained. Every reader already switches on `kind`, so one note key
+  // serves both; a second field would buy nothing (kind, note) doesn't carry.
   note?: string;
 }
 

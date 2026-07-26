@@ -25,7 +25,7 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: install | start | status | approve | reject; bare-token routing via withImplicitStart
+  cli.ts            # Commander entry: install | start | status | approve [--note] | reject --note; bare-token routing via withImplicitStart
   route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-issue word = likely typo, untouched); routes via source.ts isIssueToken
   runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
   source.ts         # THE ISSUE-SOURCE SEAM: IssueSource registry (name/claims/prepare) — the one owner of "which source claims this token + how to parse/fetch it". sourceFor + isIssueToken. Adding a source touches only this file.
@@ -46,7 +46,7 @@ src/
     gain.ts         # 100% PURE: computeGain (decisions + launch ledger + live fleet snapshot + verdict tallies → metrics incl. launch→detection latency); the gain command's fs/cmux edge lives in commands.ts
     doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
     format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
-    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/launch); readLog feeds gain
+    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/launch); `note` carries the reasoning on BOTH decisions; readLog feeds gain
 ```
 
 ## How it works
@@ -149,6 +149,13 @@ plain). Launch records join decisions/verdicts by the qualified `${repo}-${ticke
 **latency to detection** (launch→decision from the ledger, launch→verdict from the live verdict
 files); `--print` never logs a launch. `--git` opt-in approximates merged-PR counts via `gh`,
 fail-soft. No counters, no event stream — operation-level throughput is not recorded, by design.
+`approve` takes an optional `--note` (the reviewer's recommendation), so the ledger records _why_
+a plan was approved and not just that it was; `gain` then reports `decisions.unexplainedApprovals`
++ `recentApprovalReasons`. That block is **omitted wholesale** until the machine's ledger contains
+at least one noted approval — a pre-`--note` history carries no rationale by construction, and
+reporting all of it as unexplained would be a false alarm dressed as a metric (same "no sample ⇒
+omit" rule as `latency`). It measures whether the review step ran, never plan quality; the caveat
+says so.
 
 ## The verdict gate & fleet memory (the agent-side loops)
 
@@ -244,6 +251,33 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
 - **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
   gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
   wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
+- **The security controls captain deliberately does NOT adopt.** Anthropic's AI-native SDLC
+  writeup (Jul 2026) is the reference; captain already has its core loops under other names
+  (fresh-context verifier = independent reviewers with separate context windows, per-criterion
+  evidence = "prove the finding", fleet memory = the discovery→instructions loop, `gain` = the
+  vitals dashboard, plan+merge = humans at the leverage points). Five of its controls are out of
+  scope, and re-proposing them is re-litigating a decided boundary:
+  - **A `/security-review` pipeline step + a graded security criterion** — built and reverted
+    Jul 2026. The step is the only control here with a **recurring** per-ticket cost (a full
+    extra review pass on every diff, forever), and grading it in the rubric is *stricter than
+    the article*: there `/security-review` is the cheap shift-left nudge and CI is the hard
+    gate. Worse, the criterion contradicted a decision already made in this file — criterion 2
+    was deliberately softened to "add tests only where the change genuinely warrants coverage"
+    because ceremony on trivial diffs teaches agents to argue exemptions, and most fleet
+    tickets are copy/label/refactor diffs with no security surface. If this comes back, it
+    needs an `na` path for surface-free diffs, and it should probably stay effort (a skill
+    step) rather than becoming enforcement (a graded criterion).
+  - **SIEM / event-stream routing** — streaming every tool call and agent message needs a
+    persistent listener, i.e. the forbidden daemon class above. The ledger stays three record
+    kinds; `gain`'s caveats already say throughput is not recorded.
+  - **Egress allowlisting and remote-VM containment** — cmux/environment concerns. Captain
+    launches agents; it does not own their network or sandbox.
+  - **`codex`'s `--dangerously-bypass-approvals-and-sandbox`** is the article's least-agency
+    anti-pattern, kept knowingly: codex has no plan mode, so a gated launch would stall every
+    codex run at step 1. This is why `claude` is the gated default.
+  - **Risk-tiering in code** — blast radius lives in the ticket contract
+    (`skills/captain/references/auto-pickup.md`) and the driver's decision card. A tier enum in
+    `src/` would be a taxonomy with no consumer.
 
 ## Env knobs
 

@@ -92,6 +92,87 @@ describe("computeGain — decisions", () => {
     expect(m.decisions.recentRejectReasons[0].note).toBe("");
   });
 
+  it("counts unnoted approvals as unexplained and lists the noted ones", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "approve", note: "low risk, scope matches" }),
+          decision({ kind: "approve" }),
+          decision({ kind: "approve" }),
+          decision({ kind: "reject", note: "split it" }),
+        ],
+      })
+    );
+    expect(m.decisions.unexplainedApprovals).toBe(2);
+    expect(m.decisions.recentApprovalReasons).toHaveLength(1);
+    expect(m.decisions.recentApprovalReasons?.[0].note).toBe(
+      "low risk, scope matches"
+    );
+  });
+
+  // The backward-compat contract: a ledger written before --note existed must
+  // not report every historical approval as a governance failure.
+  it("omits the unexplained-approval block entirely when no approval was ever noted", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "approve" }),
+          decision({ kind: "reject", note: "split it" }),
+        ],
+      })
+    );
+    expect(m.decisions.unexplainedApprovals).toBeUndefined();
+    expect(m.decisions.recentApprovalReasons).toBeUndefined();
+    expect(m.caveats.some((c) => c.includes("unexplained approvals"))).toBe(
+      false
+    );
+  });
+
+  // The probe runs over the FULL log (like launches) but the count respects the
+  // window — so a window holding only unnoted approvals still reports them.
+  it("reports the block once any approval is noted, even outside the window", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "approve", note: "reviewed", ts: NOW - 10 * DAY }),
+          decision({ kind: "approve", ts: NOW }),
+        ],
+        since: NOW - 7 * DAY,
+      })
+    );
+    expect(m.decisions.unexplainedApprovals).toBe(1);
+    expect(m.decisions.recentApprovalReasons).toEqual([]);
+    expect(m.caveats.some((c) => c.includes("unexplained approvals"))).toBe(
+      true
+    );
+  });
+
+  it("a whitespace-only note is not a rationale", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "approve", note: "reviewed" }),
+          decision({ kind: "approve", note: "   " }),
+        ],
+      })
+    );
+    expect(m.decisions.unexplainedApprovals).toBe(1);
+    expect(m.decisions.recentApprovalReasons).toHaveLength(1);
+  });
+
+  it("recentApprovalReasons is newest first and bounded to 5", () => {
+    const decisions: LogRecord[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      decisions.push(
+        decision({ kind: "approve", note: `card ${i}`, ts: NOW - i * 60 })
+      );
+    }
+    const m = computeGain(input({ log: decisions }));
+    expect(m.decisions.recentApprovalReasons).toHaveLength(5);
+    expect(m.decisions.recentApprovalReasons?.[0].note).toBe("card 0");
+    expect(m.decisions.recentApprovalReasons?.[0].ts).toBe(NOW);
+  });
+
   it("buckets cadence by UTC day, sorted ascending", () => {
     const m = computeGain(
       input({

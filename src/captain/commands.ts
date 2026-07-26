@@ -492,6 +492,12 @@ const resolvePlanTargets = (port: CmuxPort, spec: string): ResolvedTargets => {
   return resolved;
 };
 
+// One trim rule for both decision notes: whitespace-only is no note at all.
+// reject then makes emptiness a usage error; approve degrades it to "unnoted"
+// (the reply is authoritative — a blank note must never block an approval).
+const cleanNote = (note: string | undefined): string | undefined =>
+  note?.trim() || undefined;
+
 const appendDecision = (
   record: Parameters<typeof appendLog>[0],
   unlogged: string[]
@@ -512,15 +518,19 @@ export const approve = (
   spec: string,
   out: NodeJS.WritableStream,
   port: CmuxPort = realCmux(process.env),
-  options: { json?: boolean } = {}
+  options: { json?: boolean; note?: string } = {}
 ): void => {
   assertCmuxReachable(port);
+  const note = cleanNote(options.note);
   const { matched, unknown, ambiguous } = resolvePlanTargets(port, spec);
   const unlogged: string[] = [];
   // The reply IS the approval (no state), so do it regardless of output mode.
   for (const row of matched) {
     port.replyExitPlan(row.gate?.id ?? "", true);
-    appendDecision({ kind: "approve", name: row.name, ts: now() }, unlogged);
+    appendDecision(
+      { kind: "approve", name: row.name, ts: now(), ...(note ? { note } : {}) },
+      unlogged
+    );
   }
   if (options.json) {
     out.write(
@@ -528,6 +538,7 @@ export const approve = (
         ambiguous,
         approved: matched.map((r) => r.name),
         unknown,
+        ...(note ? { note } : {}),
         ...(unlogged.length === 0 ? {} : { unlogged }),
       })}\n`
     );
@@ -547,7 +558,9 @@ export const approve = (
     return;
   }
   for (const row of matched) {
-    out.write(`${msg.ok(s, `approved ${s.bold(row.name)} — implementing`)}\n`);
+    out.write(
+      `${msg.ok(s, `approved ${s.bold(row.name)} — implementing`)}${note ? s.dim(` · ${note}`) : ""}\n`
+    );
   }
   if (unlogged.length > 0) {
     out.write(
@@ -566,7 +579,7 @@ export const reject = (
   port: CmuxPort = realCmux(process.env),
   options: { json?: boolean } = {}
 ): void => {
-  const trimmedNote = note.trim();
+  const trimmedNote = cleanNote(note);
   if (!trimmedNote) {
     throw badOptions("--note must contain feedback");
   }

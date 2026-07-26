@@ -85,7 +85,7 @@ them in control.
 | --- | --- |
 | "status" / "what's blocked" / "what's ready" | For a known run, `captain status <ticket-or-workspace…> --json`; add `--summary` for polling. Use unfiltered `captain status` only when the request is fleet-wide. `--repo`, `--needs`, and `--ready` also narrow — never fetch the full fleet merely to post-filter it. |
 | "show me the plans" | Send up to the bounded batch below to **one read-only reviewer** per heartbeat; it returns one compact `{ticket, summary, scopeDrift, risk, recommendation}` decision card per plan. Deep-read only plans it flags high-risk or ambiguous — never spend your window on `--scrollback` |
-| "approve all plans" | `captain approve all` (or comma-separated names, or a repo label) |
+| "approve all plans" | `captain approve <ticket> --note "<the card's recommendation>"`, one call per gate so each carries its own card. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
 | "send 404 back: don't touch auth" | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace |
 | "what's verified" | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging |
 | "this one's gone quiet" | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge |
@@ -98,8 +98,11 @@ overflow pending for the next heartbeat and mark a truncated plan ambiguous. It 
 one decision card of at most 80 words per gate. Spend a deeper review only on a card
 marked high-risk or ambiguous, or when the human selects **read-more**. Then batch the
 cards into **one** AskUserQuestion — one decision per gate, options **approve**
-(`captain approve <ticket>`), **reject-with-note** (`captain reject <ticket> --note "…"`),
-**read-more** (deeper subagent, re-ask). Off-script questions surface in that same ask and
+(`captain approve <ticket> --note "<the card's recommendation, one line>"`),
+**reject-with-note** (`captain reject <ticket> --note "…"`),
+**read-more** (deeper subagent, re-ask). The card always rides along: `--note` is the only
+thing that puts the reasoning into `log.jsonl`, and an approve without one is counted by
+`captain gain` as an unexplained approval. Off-script questions surface in that same ask and
 are answered verbatim with `cmux send --workspace <id> "…\n"`. One reviewer and one ask
 per wake, not per gate.
 
@@ -110,7 +113,10 @@ per wake, not per gate.
   workspace (never a group anchor), `git worktree remove --force`, delete the branch,
   relaunch.
 - **Never approve a plan with no decision card behind it** — the read-only batch reviewer
-  reads it first; high-risk or ambiguous cards get a deeper second read.
+  reads it first; high-risk or ambiguous cards get a deeper second read. Pass the card
+  through: `captain approve <ticket> --note "…"`. This is now measurable —
+  `captain gain` reports `decisions.unexplainedApprovals`, so a skipped review shows up in
+  the ledger instead of vanishing.
 - **Never guess off-script questions** — answer verbatim in the workspace, or `reject` if
   it's a plan.
 - **Stops at PR-ready** — merging and deploying stay with you.

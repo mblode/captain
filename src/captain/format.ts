@@ -273,9 +273,18 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
     lines.push(
       `  ${s.green(`${m.decisions.approvals} approved`)} ${s.dim("·")} ${s.yellow(`${m.decisions.rejections} rejected`)} ${s.dim("·")} ${pct(m.decisions.approvalRate)} approval rate`
     );
+    // A governance signal, not a failure count — dim prose, no ✗/red.
+    if (m.decisions.unexplainedApprovals !== undefined) {
+      lines.push(
+        `  ${s.dim(`${m.decisions.unexplainedApprovals} of ${m.decisions.approvals} approvals carry no recorded reasoning`)}`
+      );
+    }
     for (const r of m.decisions.recentRejectReasons) {
       const note = r.note ? `: ${r.note}` : "";
       lines.push(`  ${s.yellow("↩")} ${s.bold(r.name)}${s.dim(note)}`);
+    }
+    for (const r of m.decisions.recentApprovalReasons ?? []) {
+      lines.push(`  ${s.green("✓")} ${s.bold(r.name)}${s.dim(`: ${r.note}`)}`);
     }
     if (m.decisions.cadence.length > 0) {
       const recent = m.decisions.cadence

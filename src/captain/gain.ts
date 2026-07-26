@@ -49,8 +49,14 @@ export interface GainMetrics {
     rejections: number;
     // approvals / (approvals + rejections); 0 when there are no decisions
     approvalRate: number;
+    // the most recent approvals that recorded a rationale (bounded), newest
+    // first. Omitted entirely until this machine's ledger uses --note at all.
+    recentApprovalReasons?: { name: string; note: string; ts: number }[];
     // the most recent rejections with their notes (bounded), newest first
     recentRejectReasons: { name: string; note: string; ts: number }[];
+    // in-window approvals whose ledger record carries no --note: did the
+    // reviewer step get recorded? Omitted on the same rule as the list above.
+    unexplainedApprovals?: number;
     cadence: CadenceDay[];
     // present only when a --since window was applied (the epoch-seconds floor)
     window?: { since: number };
@@ -79,9 +85,43 @@ export interface GainMetrics {
   caveats: string[];
 }
 
-// How many recent reject reasons to surface — enough to spot a pattern, few
-// enough to stay glanceable.
-const RECENT_REJECTS = 5;
+// How many recent decision notes to surface per kind — enough to spot a
+// pattern, few enough to stay glanceable.
+const RECENT_NOTES = 5;
+
+// A note counts as a rationale only if it is a non-empty string. The ledger is
+// append-only from any process and isLogRecord deliberately doesn't type-check
+// `note` (tightening it would newly DROP whole records), so the fail-safe check
+// belongs here, at the point of use.
+const noted = (r: LogRecord): boolean =>
+  typeof r.note === "string" && r.note.trim().length > 0;
+
+// Is --note in use on this machine AT ALL? Probed over the FULL log, like
+// launches: a ledger written entirely before the flag existed carries no
+// rationale by construction, and reporting every one of those as a governance
+// failure would be a false alarm dressed as a metric. Same "no sample ⇒ omit
+// the block" rule as latency.
+const approvalsAreNoted = (log: LogRecord[]): boolean =>
+  log.some((r) => r.kind === "approve" && noted(r));
+
+// PURE: the governance signal over the in-window approvals — how many carry no
+// rationale, and the most recent ones that do.
+const approvalNotes = (
+  decisions: LogRecord[]
+): {
+  recentApprovalReasons: { name: string; note: string; ts: number }[];
+  unexplainedApprovals: number;
+} => {
+  const approvals = decisions.filter((d) => d.kind === "approve");
+  return {
+    recentApprovalReasons: approvals
+      .filter((d) => noted(d))
+      .toSorted((a, b) => b.ts - a.ts)
+      .slice(0, RECENT_NOTES)
+      .map((d) => ({ name: d.name, note: d.note ?? "", ts: d.ts })),
+    unexplainedApprovals: approvals.filter((d) => !noted(d)).length,
+  };
+};
 
 // PURE: epoch-seconds floor for a "since" spec. "7d"/"24h"/"30m" are relative
 // to `now`; a bare ISO date ("2026-06-01") or datetime parses absolute.
@@ -124,6 +164,14 @@ const caveatsFor = (input: GainInput): string[] => {
     "latency joins launch→decision/verdict records by name — decisions predating launch logging (or a cleared ledger) carry no sample",
     "launch→verdict latency is a live read of current verdict files, not a ledger",
   ];
+  if (approvalsAreNoted(input.log)) {
+    // Sits with the other ledger caveat, above the snapshot ones.
+    lines.splice(
+      1,
+      0,
+      "unexplained approvals are approvals logged with no --note: a record of whether the review step RAN, not a judgement of plan quality — approvals predating the --note flag carry none by construction"
+    );
+  }
   if (input.merged) {
     lines.push(
       "merged counts come from --git (gh/git), an opt-in approximation gathered at call time"
@@ -165,6 +213,51 @@ const launchBefore = (
   return best;
 };
 
+// PURE: the whole decisions block over the already-windowed decisions. The
+// ledger is captain's one gap-free history, so everything here is true history
+// — unlike the fleet/verdict blocks, which are live snapshots.
+const decisionsBlockOf = (
+  decisions: LogRecord[],
+  input: GainInput
+): GainMetrics["decisions"] => {
+  const approvals = decisions.filter((d) => d.kind === "approve").length;
+  const rejections = decisions.filter((d) => d.kind === "reject").length;
+  const total = approvals + rejections;
+
+  const cadenceMap = new Map<string, number>();
+  for (const d of decisions) {
+    const day = dayOf(d.ts);
+    cadenceMap.set(day, (cadenceMap.get(day) ?? 0) + 1);
+  }
+
+  const block: GainMetrics["decisions"] = {
+    approvalRate: total === 0 ? 0 : approvals / total,
+    approvals,
+    cadence: [...cadenceMap.entries()]
+      .map(([day, count]) => ({ count, day }))
+      .toSorted((a, b) => a.day.localeCompare(b.day)),
+    recentRejectReasons: decisions
+      .filter((d) => d.kind === "reject")
+      .toSorted((a, b) => b.ts - a.ts)
+      .slice(0, RECENT_NOTES)
+      .map((d) => ({ name: d.name, note: d.note ?? "", ts: d.ts })),
+    rejections,
+  };
+  // Omit the governance signal wholesale until this machine has ever recorded a
+  // rationale — otherwise a pre-flag ledger reports every historical approval as
+  // unexplained, which reads as a compliance score rather than as a no-sample.
+  if (approvalsAreNoted(input.log)) {
+    const { recentApprovalReasons, unexplainedApprovals } =
+      approvalNotes(decisions);
+    block.recentApprovalReasons = recentApprovalReasons;
+    block.unexplainedApprovals = unexplainedApprovals;
+  }
+  if (input.since !== undefined) {
+    block.window = { since: input.since };
+  }
+  return block;
+};
+
 // PURE: derive every metric. No I/O, no clock read (now is injected) — given
 // the same input it returns the same output, so the unit tests need no mocking.
 export const computeGain = (input: GainInput): GainMetrics => {
@@ -177,25 +270,7 @@ export const computeGain = (input: GainInput): GainMetrics => {
     (r) => r.kind !== "launch" && inWindow(r.ts)
   );
 
-  const approvals = decisions.filter((d) => d.kind === "approve").length;
-  const rejections = decisions.filter((d) => d.kind === "reject").length;
-  const total = approvals + rejections;
-  const approvalRate = total === 0 ? 0 : approvals / total;
-
-  const recentRejectReasons = decisions
-    .filter((d) => d.kind === "reject")
-    .toSorted((a, b) => b.ts - a.ts)
-    .slice(0, RECENT_REJECTS)
-    .map((d) => ({ name: d.name, note: d.note ?? "", ts: d.ts }));
-
-  const cadenceMap = new Map<string, number>();
-  for (const d of decisions) {
-    const day = dayOf(d.ts);
-    cadenceMap.set(day, (cadenceMap.get(day) ?? 0) + 1);
-  }
-  const cadence = [...cadenceMap.entries()]
-    .map(([day, count]) => ({ count, day }))
-    .toSorted((a, b) => a.day.localeCompare(b.day));
+  const decisionsBlock = decisionsBlockOf(decisions, input);
 
   const repoMap = new Map<string, number>();
   for (const r of input.rows) {
@@ -261,17 +336,6 @@ export const computeGain = (input: GainInput): GainMetrics => {
           ...(toVerdict ? { toVerdict } : {}),
         }
       : undefined;
-
-  const decisionsBlock: GainMetrics["decisions"] = {
-    approvalRate,
-    approvals,
-    cadence,
-    recentRejectReasons,
-    rejections,
-  };
-  if (input.since !== undefined) {
-    decisionsBlock.window = { since: input.since };
-  }
 
   return {
     caveats: caveatsFor(input),

@@ -52,6 +52,7 @@ Workflow:
   $ captain status --summary --json      compact poll + reusable snapshot token
   $ captain status --repo linkiq         one repo's worktrees only
   $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
+  $ captain approve tig-430 --note "…"   approve and record why in the ledger
   $ captain reject tig-430 --note "…"    send a plan back with feedback
 
 A bare first argument (a Linear issue id/URL, or a free-form task) is treated as
@@ -217,9 +218,16 @@ program
   .command("approve")
   .description("approve plan(s): all, or comma-separated ticket names")
   .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
-  .option("--json", "emit JSON: { approved, unknown }")
-  .action((refs: string, options: { json?: boolean }) => {
-    approve(refs, process.stdout, undefined, { json: options.json });
+  .option(
+    "--note <text>",
+    "why: the reviewer's recommendation, recorded in the ledger"
+  )
+  .option("--json", "emit JSON: { approved, unknown, note }")
+  .action((refs: string, options: { json?: boolean; note?: string }) => {
+    approve(refs, process.stdout, undefined, {
+      json: options.json,
+      note: options.note,
+    });
   });
 
 program
