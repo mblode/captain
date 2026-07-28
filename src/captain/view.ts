@@ -14,8 +14,12 @@ export type Group = "needs-you" | "in-flight" | "ready";
 // A pending human gate, straight from the cmux feed (the feed IS the gate
 // inventory — captain adds no state of its own on top).
 export interface Gate {
-  // feed item id — the handle `cmux rpc feed.exit_plan.reply` takes
+  // feed item id — this workspace's gate identity (dedup/display)
   id: string;
+  // the handle `cmux rpc feed.exit_plan.reply` takes: the item's request_id,
+  // which is NOT its id. Absent on question gates (and on a cmux too old to
+  // report one) — approve/reject refuse rather than guess.
+  replyId?: string;
   kind: "plan" | "question";
   // what the gate is asking, so status shows it without opening the workspace
   hint?: string;
@@ -129,6 +133,7 @@ export const pendingGate = (
     hint: item.question_prompt || item.text || undefined,
     id: item.id,
     kind: item.kind === "exitPlan" ? "plan" : "question",
+    replyId: item.request_id,
   };
 };
 

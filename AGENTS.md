@@ -212,6 +212,14 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
 - **The feed is the gate inventory**: always filter `!resolved_at` and pick the newest match per
   cwd (`pendingGate` in `view.ts`) — a stale resolved item must never read as a live gate or
   swallow an `exit_plan.reply`.
+- **`feed.exit_plan.reply` takes `{request_id, mode}`, not `{id, approve}`.** The reply handle is
+  the feed item's `request_id` (`Gate.replyId`), a *different* value from its `id` — sending the
+  id fails with `invalid_params: feed.exit_plan.reply requires request_id`, which silently pushed
+  a whole session's approvals onto manual `cmux send` (and out of `log.jsonl`, so `gain` scored
+  them unexplained). `mode` is an enum: approve → `bypassPermissions` (the agent launches with
+  `--allow-dangerously-skip-permissions` and must self-drive unattended; `autoAccept` would strand
+  it at the first non-edit tool), reject → `deny`. Verified on cmux 0.64.17 and pinned by a wire
+  test in `control.test.ts` — re-verify there when a cmux upgrade breaks approvals.
 - **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill
   can parse them.
 - **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.

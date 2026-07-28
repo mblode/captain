@@ -178,8 +178,13 @@ const fakePort = (
   const sent: FakePort["sent"] = [];
   const sendAttempts: string[] = [];
   const toasts: FakePort["toasts"] = [];
+  // Real exitPlan items always carry a request_id (the reply handle, distinct
+  // from the item id); fixtures that don't care get one mirroring their id.
+  const items = feed.map((i) =>
+    i.kind === "exitPlan" && !i.request_id ? { ...i, request_id: i.id } : i
+  );
   return {
-    feedList: () => feed,
+    feedList: () => items,
     listWorkspaces: () => workspaces,
     notify: (title, body) => {
       toasts.push({ body, title });
@@ -268,6 +273,30 @@ describe("stateless approve/reject/status over the real surface", () => {
     expect(text()).toContain("approved");
     const log = readFileSync(join(root, "home", "log.jsonl"), "utf-8");
     expect(JSON.parse(log.trim())).toMatchObject({ kind: "approve" });
+  });
+
+  // Regression: cmux's feed.exit_plan.reply takes the item's request_id, not
+  // its id — sending the id fails with "requires request_id" and every approval
+  // has to be typed into the workspace by hand (losing the ledger note).
+  it("approve replies with the gate's request_id, not the feed item id", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "tig-430" }],
+      [
+        {
+          cwd,
+          id: "FEED-UUID",
+          kind: "exitPlan",
+          request_id: "claude-abc-PermissionRequest-ExitPlanMode-1",
+          status: "pending",
+        },
+      ]
+    );
+    const { out } = capture();
+    approve("tig-430", out, port);
+    expect(port.replies).toEqual([
+      { approve: true, id: "claude-abc-PermissionRequest-ExitPlanMode-1" },
+    ]);
   });
 
   it("approve --note records the reviewer's reasoning in the ledger", () => {

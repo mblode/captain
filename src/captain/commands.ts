@@ -526,7 +526,7 @@ export const approve = (
   const unlogged: string[] = [];
   // The reply IS the approval (no state), so do it regardless of output mode.
   for (const row of matched) {
-    port.replyExitPlan(row.gate?.id ?? "", true);
+    port.replyExitPlan(row.gate?.replyId ?? "", true);
     appendDecision(
       { kind: "approve", name: row.name, ts: now(), ...(note ? { note } : {}) },
       unlogged
@@ -615,7 +615,7 @@ export const reject = (
   const rejected: string[] = [];
   const unlogged: string[] = [];
   for (const row of matched) {
-    port.replyExitPlan(row.gate?.id ?? "", false);
+    port.replyExitPlan(row.gate?.replyId ?? "", false);
     appendDecision(
       { kind: "reject", name: row.name, note: trimmedNote, ts: now() },
       unlogged

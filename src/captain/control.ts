@@ -28,7 +28,19 @@ export interface CmuxFeedItem {
   // ISO timestamp once the item is answered/expired; absent while pending —
   // the wire's "unresolved" marker (status alone reads "expired" after the fact)
   resolved_at?: string;
+  // kind:"exitPlan" — the agent's permission-request handle, NOT the feed item
+  // id. This is the only handle `feed.exit_plan.reply` accepts (verified on
+  // cmux 0.64.17); passing `id` fails with "requires request_id".
+  request_id?: string;
 }
+
+// What `feed.exit_plan.reply` does with the plan, in cmux's own vocabulary.
+// Captain launches claude with --allow-dangerously-skip-permissions so the
+// agent can self-drive its whole brief unattended — "bypassPermissions" is the
+// approval that preserves that (autoAccept still stops the agent on the first
+// non-edit tool, which would strand the workspace at a prompt nobody is
+// watching). "deny" sends it back to planning, where reject's feedback lands.
+const REPLY_MODE = { approve: "bypassPermissions", reject: "deny" } as const;
 
 // The cmux-native run state of a workspace's agent process. This comes from
 // `cmux top`'s per-workspace status TAG (process accounting), NOT the workspace
@@ -52,7 +64,8 @@ export interface CmuxPort {
   send(workspaceId: string, text: string): void;
   notify(title: string, body: string): void;
   feedList(): CmuxFeedItem[];
-  replyExitPlan(id: string, approve: boolean): void;
+  // `requestId` is the feed item's request_id (Gate.replyId), never its id.
+  replyExitPlan(requestId: string, approve: boolean): void;
   // every workspace's agent run state, keyed by workspace id (one `cmux top`)
   runStates(): Record<string, RunState>;
 }
@@ -98,6 +111,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
           question_prompt?: string | null;
           text?: string | null;
           resolved_at?: string | null;
+          request_id?: string | null;
         }[];
       }
     );
@@ -106,6 +120,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
       id: i.id,
       kind: i.kind ?? "",
       question_prompt: i.question_prompt ?? undefined,
+      request_id: i.request_id ?? undefined,
       resolved_at: i.resolved_at ?? undefined,
       status: i.status ?? "",
       text: i.text ?? undefined,
@@ -146,11 +161,25 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
   // Is cmux up? Reuses the shared reachability probe (commandExists + `ping`).
   reachable: (): boolean => cmuxReachable(env),
 
-  replyExitPlan: (id: string, approve: boolean): void => {
+  replyExitPlan: (requestId: string, approve: boolean): void => {
+    if (!requestId) {
+      throw new CliError(
+        "the plan gate carries no request_id — cmux is too old for `captain approve`; answer the plan in the workspace instead",
+        EXIT.CMUX_UNREACHABLE,
+        "CMUX_UNREACHABLE"
+      );
+    }
     try {
       runRequired(
         "cmux",
-        ["rpc", "feed.exit_plan.reply", JSON.stringify({ approve, id })],
+        [
+          "rpc",
+          "feed.exit_plan.reply",
+          JSON.stringify({
+            mode: approve ? REPLY_MODE.approve : REPLY_MODE.reject,
+            request_id: requestId,
+          }),
+        ],
         { env }
       );
     } catch (error) {

@@ -1,4 +1,10 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +93,58 @@ describe("realCmux fails soft on garbage RPC output", () => {
 
   it("listWorkspaces returns [] instead of throwing", () => {
     expect(realCmux(env).listWorkspaces()).toEqual([]);
+  });
+});
+
+// The exit-plan reply is the one write captain makes to a gate, and its wire
+// shape is where cmux version skew bites: 0.64.17 takes {request_id, mode},
+// NOT the {id, approve} of earlier builds ("invalid_params: requires
+// request_id"). Pin the payload at the edge, since nothing above control.ts
+// sees it.
+describe("replyExitPlan speaks the request_id/mode contract", () => {
+  let binDir: string;
+  let argsFile: string;
+
+  const replyWith = (approve: boolean): Record<string, unknown> => {
+    realCmux({
+      ...process.env,
+      CAPTAIN_ARGS_FILE: argsFile,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+    }).replyExitPlan("claude-abc-PermissionRequest-ExitPlanMode-1", approve);
+    return JSON.parse(readFileSync(argsFile, "utf-8").trim().split("\n")[2]);
+  };
+
+  beforeAll(() => {
+    binDir = mkdtempSync(join(tmpdir(), "captain-cmux-reply-"));
+    argsFile = join(binDir, "args.txt");
+    const fake = join(binDir, "cmux");
+    // Records argv one line per arg, so the test reads the JSON params back.
+    writeFileSync(
+      fake,
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$CAPTAIN_ARGS_FILE"\nexit 0\n'
+    );
+    chmodSync(fake, 0o755);
+  });
+
+  afterAll(async () => {
+    await rm(binDir, { force: true, recursive: true });
+  });
+
+  it("approve sends the request_id with bypassPermissions", () => {
+    expect(replyWith(true)).toEqual({
+      mode: "bypassPermissions",
+      request_id: "claude-abc-PermissionRequest-ExitPlanMode-1",
+    });
+  });
+
+  it("reject sends deny", () => {
+    expect(replyWith(false)).toMatchObject({ mode: "deny" });
+  });
+
+  it("refuses a gate with no request_id instead of calling cmux", () => {
+    expect(() => realCmux(process.env).replyExitPlan("", true)).toThrow(
+      /request_id/u
+    );
   });
 });
 
