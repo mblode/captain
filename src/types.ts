@@ -37,11 +37,21 @@ export interface Issue {
   // acceptance sub-items — one rubric criterion each, also listed in the brief.
   // A Linear sub-issue or a donebear checklist item.
   criteria?: IssueCriterion[] | null;
+  // issues that must finish before this one can start. Absent ⇒ unblocked:
+  // sources without a dependency concept (donebear) simply leave it unset.
+  blockedBy?: IssueBlocker[] | null;
   // Linear-provided context, all optional — other sources leave these unset.
   labels?: { nodes?: { name?: string | null }[] | null } | null;
   team?: { name?: string | null } | null;
   project?: { name?: string | null } | null;
   parent?: IssueCriterion | null;
+}
+
+// One blocking issue. `done` is the only thing the frontier rule needs, so the
+// source resolves the tracker's own state vocabulary into a boolean here.
+export interface IssueBlocker {
+  identifier: string;
+  done: boolean;
 }
 
 // One referenced sub-item of an issue (an acceptance criterion, or the parent
@@ -60,6 +70,20 @@ export interface LinearApiRelated {
   description?: string | null;
 }
 
+export interface LinearApiRelationEnd {
+  identifier: string;
+  state?: { type?: string | null } | null;
+}
+
+// A relation record names both ends; which end is "this" issue depends on
+// whether it was reached via relations or inverseRelations, so both are
+// selected and the mapper picks the end that is not the issue itself.
+export interface LinearApiRelation {
+  type?: string | null;
+  issue?: LinearApiRelationEnd | null;
+  relatedIssue?: LinearApiRelationEnd | null;
+}
+
 export interface LinearApiIssue {
   identifier: string;
   title?: string | null;
@@ -69,6 +93,7 @@ export interface LinearApiIssue {
   project?: { name?: string | null } | null;
   parent?: LinearApiRelated | null;
   children?: { nodes?: LinearApiRelated[] | null } | null;
+  inverseRelations?: { nodes?: LinearApiRelation[] | null } | null;
 }
 
 export interface LinearGraphqlResponse {
@@ -108,6 +133,8 @@ export interface CliOptions {
   repoOverride?: string;
   // branch new worktrees off this ref instead of origin's default branch
   base?: string;
+  // fan-out only: launch even when an issue's blockers are still open
+  force?: boolean;
   // machine output: emit a single {started:[...]} JSON value, suppress hints
   json?: boolean;
   stdout?: NodeJS.WritableStream;

@@ -1,5 +1,6 @@
 import type {
   Issue,
+  IssueBlocker,
   IssueCriterion,
   LinearApiIssue,
   LinearApiRelated,
@@ -7,7 +8,11 @@ import type {
 } from "./types";
 
 const issueQuery =
-  "query($id:String!){issue(id:$id){identifier title description team{name} labels{nodes{name}} project{name} parent{identifier title description} children(first:50){nodes{identifier title description}}}}";
+  "query($id:String!){issue(id:$id){identifier title description team{name} labels{nodes{name}} project{name} parent{identifier title description} children(first:50){nodes{identifier title description}} inverseRelations(first:50){nodes{type issue{identifier state{type}} relatedIssue{identifier state{type}}}}}}";
+
+// Linear workflow-state types that mean a blocker is out of the way. Anything
+// else (backlog/unstarted/started/triage) still blocks.
+const DONE_STATE_TYPES = new Set(["canceled", "completed"]);
 
 const toCriterion = (related: LinearApiRelated): IssueCriterion => ({
   description: related.description ?? null,
@@ -15,10 +20,34 @@ const toCriterion = (related: LinearApiRelated): IssueCriterion => ({
   title: related.title ?? "",
 });
 
+// `blocks` relations reaching this issue — i.e. the issues blocking it. Each
+// relation names both ends, so take whichever end is not this issue rather than
+// assuming an orientation for inverseRelations.
+const toBlockers = (raw: LinearApiIssue): IssueBlocker[] => {
+  const blockers: IssueBlocker[] = [];
+  for (const node of raw.inverseRelations?.nodes ?? []) {
+    if (node.type !== "blocks") {
+      continue;
+    }
+    const end =
+      node.issue && node.issue.identifier !== raw.identifier
+        ? node.issue
+        : node.relatedIssue;
+    if (end && end.identifier !== raw.identifier) {
+      blockers.push({
+        done: DONE_STATE_TYPES.has(end.state?.type ?? ""),
+        identifier: end.identifier,
+      });
+    }
+  }
+  return blockers;
+};
+
 // Map the raw Linear issue into the neutral Issue: sub-issues become criteria,
 // the parent becomes a referenced criterion, the rest of the Linear context
 // (team/labels/project) passes through untouched.
 export const mapLinearIssue = (raw: LinearApiIssue): Issue => ({
+  blockedBy: toBlockers(raw),
   criteria: (raw.children?.nodes ?? []).map(toCriterion),
   description: raw.description ?? null,
   identifier: raw.identifier,

@@ -120,6 +120,20 @@ the `/captain` skill). worktree/rubric/memory key off the resolved `repoRoot`. (
 per-repo by basename, now disambiguated by a path hash on collision while keeping any existing
 legacy dir.)
 
+**The frontier rule** (fan-out only): an issue whose blockers are still open is **skipped**,
+and the rest of the fan-out proceeds — `captain start tig-1 tig-2` no longer starts dependent
+work against a prerequisite that hasn't landed. `Issue.blockedBy` (`types.ts`) is optional and
+populated per source (Linear `inverseRelations` of type `blocks` → `mapLinearIssue`; donebear
+has no dependency concept and leaves it unset); `openBlockers` (`issue.ts`) is the pure rule.
+Three properties are load-bearing. It is **read-only** — captain still writes to no tracker.
+It is **launch-time only, never in `status`**: that read derives with no network, so a blocked
+row would mean either a network call in the offline read path or persisting the graph into
+`.captain/` (the no-persisted-fleet-state boundary). And it is **fail-safe** — absent, null,
+or unfetchable relations read as *unblocked*, because refusing to launch on missing data is
+the dangerous default. `--force` launches anyway. Single-issue `start` is deliberately not
+checked: it would need error semantics rather than skip semantics, for a case the driver
+(which fans out) doesn't hit. See `research/wayfinder-browser-harness-audit.md`.
+
 **Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
 
 - membership: a cmux workspace whose cwd has a `.captain/` dir (start writes the rubric there)
@@ -255,7 +269,9 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch,
   an explicit `--repo-path`, the bare-token form (`captain tig-123` == `captain start tig-123`, via
   `withImplicitStart`), and `--print` for each. Repo selection is `--repo-path` else cwd; spanning
-  repos in one session is the driver's job (per-ticket `--repo-path`), not config.
+  repos in one session is the driver's job (per-ticket `--repo-path`), not config. A fan-out may
+  now skip a blocked issue (the frontier rule), so its summary line and `--json` `started` count
+  what actually launched — with nothing blocked, both are byte-identical to before.
 - **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
   gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
   wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
@@ -287,9 +303,30 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
     (`skills/captain/references/auto-pickup.md`) and the driver's decision card. A tier enum in
     `src/` would be a taxonomy with no consumer.
 
+- **Captain reads trackers; it never writes them.** Audited Aug 2026 against Matt Pocock's
+  `wayfinder` and rejected — see `research/wayfinder-browser-harness-audit.md`. The read side
+  landed (the frontier rule above); the write side is the non-goal. Wayfinder's map issue is a
+  read-modify-write of one shared body (Decisions-so-far, fog graduation), i.e. the two-writer
+  `state.json` clobber moved onto a remote tracker, and its claim-by-assignment is an advisory
+  lock with **no CAS** in a system that expects concurrent writers — a worktree plus its
+  `.captain/` marker is a stronger, local, derived claim. If plan→ticket decomposition is ever
+  wanted, the **agent** writes the tracker (as it already opens PRs); `IssueSource` gains no
+  write verb.
+- **No browser daemon, and no graded UI criterion.** `browser-use/browser-harness` was audited
+  Aug 2026 and rejected as a dependency: default-on telemetry that ships the agent's code and
+  page output unredacted (`capture_cli_event` never calls `_safe_properties`), a local path that
+  blocks waiting for a human to click Allow, one shared Chrome that N worktrees fight over, full
+  logged-in-profile access with no origin gate, and a daemon nothing reaps. The real need — an
+  agent looking at the running app — is a per-worktree throwaway headless Chromium, driven by an
+  **opt-in `.skills` entry** (zero captain code, since only plan/implement/finish are fixed).
+  Keep it out of `DEFAULT_SKILLS`, and don't grade it in the rubric: that is the
+  `/security-review` case again.
+
 ## Env knobs
 
-`LINEAR_API_KEY` (Linear issue fetch + screenshots) · `DONEBEAR_TOKEN` (donebear task fetch — a
+`LINEAR_API_KEY` (Linear issue fetch + screenshots — the image download is gated on the issue's
+**source**, not just the key's presence, so a donebear task never routes through the Linear
+download path) · `DONEBEAR_TOKEN` (donebear task fetch — a
 `db_` API key from `donebear api-key create`; read scope is enough, captain never writes back) ·
 `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated

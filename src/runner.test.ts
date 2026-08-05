@@ -417,6 +417,112 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     ]);
   });
 
+  it("skips an issue whose blockers are still open, and launches it under --force", async () => {
+    // TST-2 is blocked by an open TST-9 and a completed TST-8; TST-1 is clear.
+    const blockedFetch = vi.fn((_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        variables?: { id?: string };
+      };
+      const id = body.variables?.id ?? "TST-1";
+      const relations =
+        id === "TST-2"
+          ? [
+              {
+                issue: { identifier: "TST-8", state: { type: "completed" } },
+                type: "blocks",
+              },
+              {
+                issue: { identifier: "TST-9", state: { type: "started" } },
+                type: "blocks",
+              },
+            ]
+          : [];
+      return Promise.resolve({
+        json: () =>
+          Promise.resolve({
+            data: {
+              issue: {
+                description: null,
+                identifier: id,
+                inverseRelations: { nodes: relations },
+                title: null,
+              },
+            },
+          }),
+        ok: true,
+      } as Response);
+    });
+
+    const setup = async (): Promise<{
+      env: NodeJS.ProcessEnv;
+      log: string;
+      repo: string;
+    }> => {
+      const { repo, root } = await createGitRepo("src");
+      const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+      cleanup.push(root, binDir);
+      const log = join(root, "cmux.log");
+      await writeExecutable(
+        join(binDir, "cmux"),
+        `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+printf '%s\\n' "$*" >> "$CMUX_LOG"
+`
+      );
+      await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+      return {
+        env: {
+          ...safeEnv(),
+          CMUX_LOG: log,
+          PATH: `${binDir}:${safeEnv().PATH}`,
+        },
+        log,
+        repo,
+      };
+    };
+
+    vi.stubGlobal("fetch", blockedFetch);
+
+    const blocked = await setup();
+    const output = captureWritable();
+    await runLinearWorktree({
+      cwd: blocked.repo,
+      env: blocked.env,
+      repoOverride: blocked.repo,
+      stderr: captureWritable().stream,
+      stdout: output.stream,
+      tokens: ["TST-1", "TST-2"],
+    });
+
+    // The unblocked ticket still launches — one blocked ticket does not sink
+    // the whole fan-out.
+    const blockedLog = await readFile(blocked.log, "utf-8");
+    expect(blockedLog).toContain("new-workspace --name tst-1");
+    expect(blockedLog).not.toContain("new-workspace --name tst-2");
+    expect(output.value()).toContain("spawned 1 workspaces");
+    // Only the open blocker is named; the completed one is not a reason.
+    expect(output.value()).toContain("skipped TST-2 — blocked by TST-9");
+    expect(output.value()).not.toContain("TST-8");
+
+    // --force is the escape hatch: a stale or wrong edge can never wedge a run.
+    const forced = await setup();
+    const forcedOutput = captureWritable();
+    await runLinearWorktree({
+      cwd: forced.repo,
+      env: forced.env,
+      force: true,
+      repoOverride: forced.repo,
+      stderr: captureWritable().stream,
+      stdout: forcedOutput.stream,
+      tokens: ["TST-1", "TST-2"],
+    });
+
+    const forcedLog = await readFile(forced.log, "utf-8");
+    expect(forcedLog).toContain("new-workspace --name tst-2");
+    expect(forcedOutput.value()).toContain("spawned 2 workspaces");
+    expect(forcedOutput.value()).not.toContain("skipped");
+  });
+
   it("skips source and git preparation for an all-reused batch", async () => {
     const { repo, root } = await createGitRepo("src");
     const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
@@ -1050,6 +1156,51 @@ describe("runStart routing", () => {
     );
     expect(rubric).toContain("# Definition of done — db-35a2097c");
     expect(rubric).toContain("implements donebear issue db-35a2097c");
+  });
+
+  it("never routes a donebear task's images through the Linear download path", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const uuid = "35a2097c-a5c9-477f-b50c-d39b942567a9";
+
+    // A donebear task whose body carries an image. The download path authorizes
+    // with LINEAR_API_KEY, so it must not run for a non-Linear source — even
+    // though the key is present in the environment.
+    const donebearFetch = vi.fn((input: unknown) =>
+      Promise.resolve({
+        json: () =>
+          Promise.resolve({
+            data: String(input).includes("donebear")
+              ? {
+                  task: {
+                    description: "![shot](https://uploads.linear.app/a/b.png)",
+                    id: uuid,
+                    title: "Task with an image",
+                  },
+                  taskChecklistItems: { nodes: [] },
+                }
+              : {},
+          }),
+        ok: true,
+      } as Response)
+    );
+    vi.stubGlobal("fetch", donebearFetch);
+
+    const output = captureWritable();
+    await runStart({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      stdout: output.stream,
+      tokens: [uuid],
+    });
+
+    expect(output.value()).toContain("Work on donebear issue db-35a2097c");
+    expect(output.value()).not.toContain("Screenshots for this ticket");
+    // The only request made is the donebear task fetch itself.
+    for (const [input] of donebearFetch.mock.calls) {
+      expect(String(input)).not.toContain("uploads.linear.app");
+    }
   });
 
   it("routes free-form text to a current-dir dispatch", async () => {

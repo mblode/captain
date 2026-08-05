@@ -1,5 +1,5 @@
 import { CliError } from "./errors";
-import type { ParsedIssue } from "./types";
+import type { Issue, ParsedIssue } from "./types";
 
 export const issueIdPattern = "[A-Za-z][A-Za-z0-9_]*-[0-9]+";
 export const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");
@@ -11,6 +11,15 @@ export const isIssueId = (value: string): boolean => issueIdRegex.test(value);
 // CLI's bare-invocation guard (route.ts).
 export const isLinearToken = (token: string): boolean =>
   isIssueId(token) || /^https?:\/\/linear\.app\//iu.test(token);
+
+// The blockers still standing between this issue and work starting on it.
+// Fail-safe like the rest of captain: an absent, empty, or unfetchable relation
+// set reads as unblocked, so a source without a dependency concept and a Linear
+// hiccup both launch rather than silently refusing to.
+export const openBlockers = (issue: Issue): string[] =>
+  (issue.blockedBy ?? [])
+    .filter((blocker) => !blocker.done)
+    .map((blocker) => blocker.identifier);
 
 export const slugify = (value: string): string => {
   let slug = value.toLowerCase().replaceAll(/['`]/gu, "");

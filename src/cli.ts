@@ -103,6 +103,10 @@ program
     "--agent <name>",
     "which agent to launch: claude (default) or codex (best-effort: no plan gate)"
   )
+  .option(
+    "--force",
+    "fan-out only: launch issues whose blockers are still open (default: skip them)"
+  )
   .action(
     async (
       input: string[],
@@ -114,11 +118,13 @@ program
         name?: string;
         base?: string;
         agent?: string;
+        force?: boolean;
       }
     ) => {
       process.exitCode = await runStart({
         agent: options.agent,
         base: options.base,
+        force: Boolean(options.force),
         json: Boolean(options.json),
         name: options.name,
         print: Boolean(options.print),

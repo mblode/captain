@@ -18,7 +18,7 @@ import {
   worktreePathFor,
 } from "./git";
 import { downloadIssueImages, worktreeTmpDir } from "./images";
-import { slugify } from "./issue";
+import { openBlockers, slugify } from "./issue";
 import { copyCommand, launchPlanMode } from "./launch";
 import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
 import { createProgress, withPrefix } from "./progress";
@@ -497,7 +497,9 @@ const prepareIssueData = async (
   const slug = seed.parsedSlug || (issue.title ? slugify(issue.title) : "");
 
   let prompt = renderPrompt(issue, seed.displayId, seed.source);
-  if (issue.description && env.LINEAR_API_KEY) {
+  // Linear-hosted images only: downloadIssueImages sends LINEAR_API_KEY to
+  // uploads.linear.app, so a non-Linear issue must never route through it.
+  if (issue.description && seed.source === "Linear" && env.LINEAR_API_KEY) {
     progress.step("downloading screenshots");
     const screenshots = await downloadIssueImages(
       issue.description,
@@ -579,6 +581,8 @@ const reusableIssue = (
 
 interface LaunchFleetArgs extends DispatchArgs {
   agent: string;
+  // index -> the still-open blockers that keep this token out of the frontier
+  blocked: Map<number, string[]>;
   dataByIndex: Map<number, PreparedIssueData>;
   repoRoot: string;
   reusable: (ReusableIssue | undefined)[];
@@ -588,6 +592,7 @@ interface LaunchFleetArgs extends DispatchArgs {
 
 const launchPreparedFleet = async ({
   agent,
+  blocked,
   dataByIndex,
   env,
   options,
@@ -621,6 +626,13 @@ const launchPreparedFleet = async ({
       });
       scoped.progress.done(
         `reusing ${existing.worktree.branch} (${index + 1}/${tokens.length})`
+      );
+      continue;
+    }
+    const openBlockerIds = blocked.get(index);
+    if (openBlockerIds) {
+      scoped.progress.done(
+        `skipping ${seeds[index].displayId} — blocked by ${openBlockerIds.join(", ")}`
       );
       continue;
     }
@@ -665,11 +677,18 @@ const launchPreparedFleet = async ({
     stdout.write(`${JSON.stringify({ started })}\n`);
     return 0;
   }
+  // Counts come from what actually launched: with nothing blocked this equals
+  // tokens.length, so the usual output is unchanged.
   stdout.write(
     reused === 0
-      ? `spawned ${tokens.length} workspaces — each agent drives its own pipeline to PR-ready\n`
-      : `ready ${tokens.length} workspaces — ${tokens.length - reused} launched, ${reused} reused\n`
+      ? `spawned ${launched.length} workspaces — each agent drives its own pipeline to PR-ready\n`
+      : `ready ${launched.length} workspaces — ${launched.length - reused} launched, ${reused} reused\n`
   );
+  for (const [index, openBlockerIds] of blocked) {
+    stdout.write(
+      `  skipped ${seeds[index].displayId} — blocked by ${openBlockerIds.join(", ")} (--force to launch anyway)\n`
+    );
+  }
   // All tokens in one invocation share a repo, so one worktree speaks for all.
   const jestNote = worktreePaths[0] && uncappedJestNote(worktreePaths[0]);
   if (jestNote) {
@@ -749,9 +768,23 @@ const dispatch = async ({
         pendingData[index],
       ])
     );
+    // The frontier rule, applied at launch time only: a ticket whose blockers
+    // are still open is skipped, the rest of the fan-out proceeds. Deliberately
+    // not surfaced in `status` — that read derives with no network, and holding
+    // the graph long enough to render it would mean persisting fleet state.
+    const blocked = new Map<number, string[]>();
+    if (!options.force) {
+      for (const [index, data] of dataByIndex) {
+        const open = openBlockers(data.issue);
+        if (open.length > 0) {
+          blocked.set(index, open);
+        }
+      }
+    }
 
     return launchPreparedFleet({
       agent,
+      blocked,
       context,
       dataByIndex,
       env,

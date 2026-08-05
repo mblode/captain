@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseIssueInput, slugify } from "./issue";
+import { openBlockers, parseIssueInput, slugify } from "./issue";
 
 describe("issue parsing", () => {
   it("parses bare issue IDs", () => {
@@ -37,5 +37,29 @@ describe("issue parsing", () => {
         "this is a very long issue title that should be cut at a stable word boundary"
       )
     ).toBe("this-is-a-very-long-issue-title-that-should-be-cut-at-a");
+  });
+});
+
+describe("openBlockers", () => {
+  it("lists only the blockers that are not done", () => {
+    expect(
+      openBlockers({
+        blockedBy: [
+          { done: true, identifier: "ENG-1" },
+          { done: false, identifier: "ENG-2" },
+          { done: false, identifier: "ENG-3" },
+        ],
+        identifier: "ENG-4",
+      })
+    ).toEqual(["ENG-2", "ENG-3"]);
+  });
+
+  // Fail-safe: a source with no dependency concept (donebear), an issue with no
+  // relations, and a fetch that dropped them all read as unblocked. Refusing to
+  // launch on missing data would be the dangerous default.
+  it("reads absent, null, and empty relations as unblocked", () => {
+    expect(openBlockers({ identifier: "ENG-5" })).toEqual([]);
+    expect(openBlockers({ blockedBy: null, identifier: "ENG-6" })).toEqual([]);
+    expect(openBlockers({ blockedBy: [], identifier: "ENG-7" })).toEqual([]);
   });
 });
