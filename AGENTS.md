@@ -273,6 +273,21 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   violation: it is a foreground, stateless re-render loop the human starts and Ctrl-Cs — it holds
   no state, listens to nothing, and coordinates no writers. The forbidden class is a _persistent
   background listener_, not a polling loop.)
+- **A poll-only remote launch port is in the safe class** (not built — this is the boundary that
+  governs it when it is). The cloud-runner decision gives captain a port that starts a session on
+  a hosted runner and reads it back with an **outbound** `getTurn`. That passes the same four
+  tests as `status --watch` — foreground, human-started, holds no state, listens to nothing,
+  coordinates no writers — so it is a polling loop that happens to cross a socket instead of a
+  filesystem. The forbidden half is a **receiver**: the runner's signed settled-turn callback
+  lands on tiger-agent, never on a captain endpoint, and Slack ingestion and two-way
+  conversational control stay non-goals because they **belong to tiger-agent**, not merely
+  because nothing else owns them. Until it is settled by an explicit amendment the port is
+  **launch-only** — a remote session has no cmux workspace and no local `.captain/`, so putting
+  one in `status` means either a network call in the offline read path or persisting fleet state,
+  and both breach a stated invariant. The reasoning, the measured harness facts behind it (both
+  CLIs resume after workspace reconstruction; codex usage totals are thread-cumulative; codex's
+  legacy `experimental_resume` starts a fresh conversation at exit 0), and three places where this
+  genuinely strains the thesis are written up in `research/banksia-runner-audit.md`.
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
   donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch,
   an explicit `--repo-path`, the bare-token form (`captain tig-123` == `captain start tig-123`, via
