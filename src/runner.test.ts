@@ -101,6 +101,49 @@ const captureWritable = (): {
   return { stream, value: () => output };
 };
 
+// A cmux log that may not exist yet: a refused launch writes nothing to it.
+const readCmuxLog = (path: string): Promise<string> =>
+  readFile(path, "utf-8").catch(() => "");
+
+// The Linear stub both frontier-rule tests drive: TST-2 is blocked by an open
+// TST-9 and a completed TST-8, every other issue comes back clear.
+const blockedRelationsFetch = (
+  _input: unknown,
+  init?: RequestInit
+): Promise<Response> => {
+  const body = JSON.parse(String(init?.body ?? "{}")) as {
+    variables?: { id?: string };
+  };
+  const id = body.variables?.id ?? "TST-1";
+  const relations =
+    id === "TST-2"
+      ? [
+          {
+            issue: { identifier: "TST-8", state: { type: "completed" } },
+            type: "blocks",
+          },
+          {
+            issue: { identifier: "TST-9", state: { type: "started" } },
+            type: "blocks",
+          },
+        ]
+      : [];
+  return Promise.resolve({
+    json: () =>
+      Promise.resolve({
+        data: {
+          issue: {
+            description: null,
+            identifier: id,
+            inverseRelations: { nodes: relations },
+            title: null,
+          },
+        },
+      }),
+    ok: true,
+  } as Response);
+};
+
 const writeExecutable = async (
   path: string,
   contents: string
@@ -418,41 +461,6 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
   });
 
   it("skips an issue whose blockers are still open, and launches it under --force", async () => {
-    // TST-2 is blocked by an open TST-9 and a completed TST-8; TST-1 is clear.
-    const blockedFetch = vi.fn((_input: unknown, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        variables?: { id?: string };
-      };
-      const id = body.variables?.id ?? "TST-1";
-      const relations =
-        id === "TST-2"
-          ? [
-              {
-                issue: { identifier: "TST-8", state: { type: "completed" } },
-                type: "blocks",
-              },
-              {
-                issue: { identifier: "TST-9", state: { type: "started" } },
-                type: "blocks",
-              },
-            ]
-          : [];
-      return Promise.resolve({
-        json: () =>
-          Promise.resolve({
-            data: {
-              issue: {
-                description: null,
-                identifier: id,
-                inverseRelations: { nodes: relations },
-                title: null,
-              },
-            },
-          }),
-        ok: true,
-      } as Response);
-    });
-
     const setup = async (): Promise<{
       env: NodeJS.ProcessEnv;
       log: string;
@@ -481,7 +489,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
       };
     };
 
-    vi.stubGlobal("fetch", blockedFetch);
+    vi.stubGlobal("fetch", vi.fn(blockedRelationsFetch));
 
     const blocked = await setup();
     const output = captureWritable();
@@ -521,6 +529,107 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     expect(forcedLog).toContain("new-workspace --name tst-2");
     expect(forcedOutput.value()).toContain("spawned 2 workspaces");
     expect(forcedOutput.value()).not.toContain("skipped");
+  });
+
+  it("errors on a single blocked issue, but not under --force or --print", async () => {
+    const setup = async (): Promise<{
+      env: NodeJS.ProcessEnv;
+      log: string;
+      repo: string;
+      root: string;
+    }> => {
+      const { repo, root } = await createGitRepo("src");
+      const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
+      cleanup.push(root, binDir);
+      const log = join(root, "cmux.log");
+      await writeExecutable(
+        join(binDir, "cmux"),
+        `#!/bin/sh
+if [ "$1" = "ping" ]; then exit 0; fi
+printf '%s\\n' "$*" >> "$CMUX_LOG"
+`
+      );
+      await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+      return {
+        env: {
+          ...safeEnv(),
+          CMUX_LOG: log,
+          PATH: `${binDir}:${safeEnv().PATH}`,
+        },
+        log,
+        repo,
+        root,
+      };
+    };
+    vi.stubGlobal("fetch", vi.fn(blockedRelationsFetch));
+
+    // One blocked ticket alone: there is no rest of the fan-out to carry on
+    // with, so this is an error, not a silent zero-exit skip.
+    const blocked = await setup();
+    const blockedError = await runLinearWorktree({
+      cwd: blocked.repo,
+      env: blocked.env,
+      repoOverride: blocked.repo,
+      stderr: captureWritable().stream,
+      stdout: captureWritable().stream,
+      tokens: ["TST-2"],
+    }).catch((error: unknown) => error as Error);
+    expect(blockedError).toMatchObject({
+      errorType: "ISSUE_BLOCKED",
+      exitCode: 1,
+    });
+    // Only the open blocker is a reason; the completed TST-8 is not. And the
+    // message has to name the escape hatch or it is a dead end.
+    expect(blockedError.message).toContain("TST-2 is blocked by TST-9");
+    expect(blockedError.message).not.toContain("TST-8");
+    expect(blockedError.message).toContain("--force");
+    // It refuses before mutating anything: no worktree, no workspace.
+    expect(await readCmuxLog(blocked.log)).not.toContain("new-workspace");
+    await expect(access(join(blocked.root, "src-tst-2"))).rejects.toThrow();
+
+    // --force is the same escape hatch fan-out has.
+    const forced = await setup();
+    await runLinearWorktree({
+      cwd: forced.repo,
+      env: forced.env,
+      force: true,
+      repoOverride: forced.repo,
+      stderr: captureWritable().stream,
+      stdout: captureWritable().stream,
+      tokens: ["TST-2"],
+    });
+    expect(await readCmuxLog(forced.log)).toContain(
+      "new-workspace --name tst-2"
+    );
+
+    // --print prepares and prints a brief; it launches nothing, so the frontier
+    // rule has no launch to refuse.
+    const printed = await setup();
+    const printOutput = captureWritable();
+    await runLinearWorktree({
+      cwd: printed.repo,
+      env: printed.env,
+      print: true,
+      repoOverride: printed.repo,
+      stderr: captureWritable().stream,
+      stdout: printOutput.stream,
+      tokens: ["TST-2"],
+    });
+    expect(printOutput.value()).toContain("agent prompt:");
+
+    // An unblocked single issue is untouched by any of this.
+    const clear = await setup();
+    await runLinearWorktree({
+      cwd: clear.repo,
+      env: clear.env,
+      repoOverride: clear.repo,
+      stderr: captureWritable().stream,
+      stdout: captureWritable().stream,
+      tokens: ["TST-1"],
+    });
+    expect(await readCmuxLog(clear.log)).toContain(
+      "new-workspace --name tst-1"
+    );
   });
 
   it("skips source and git preparation for an all-reused batch", async () => {

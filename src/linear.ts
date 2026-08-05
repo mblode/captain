@@ -11,8 +11,11 @@ const issueQuery =
   "query($id:String!){issue(id:$id){identifier title description team{name} labels{nodes{name}} project{name} parent{identifier title description} children(first:50){nodes{identifier title description}} inverseRelations(first:50){nodes{type issue{identifier state{type}} relatedIssue{identifier state{type}}}}}}";
 
 // Linear workflow-state types that mean a blocker is out of the way. Anything
-// else (backlog/unstarted/started/triage) still blocks.
-const DONE_STATE_TYPES = new Set(["canceled", "completed"]);
+// else (backlog/unstarted/started/triage) still blocks. `duplicate` is a real
+// state type, not just a relation type — Linear stamps `canceledAt` on issues
+// in a Duplicate state, so they are closed and can never clear on their own;
+// omitting it here would strand the blocked issue behind a permanent gate.
+const DONE_STATE_TYPES = new Set(["canceled", "completed", "duplicate"]);
 
 const toCriterion = (related: LinearApiRelated): IssueCriterion => ({
   description: related.description ?? null,

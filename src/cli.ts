@@ -105,7 +105,7 @@ program
   )
   .option(
     "--force",
-    "fan-out only: launch issues whose blockers are still open (default: skip them)"
+    "launch issues whose blockers are still open (default: fan-out skips them, a single issue errors)"
   )
   .action(
     async (

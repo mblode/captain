@@ -133,7 +133,8 @@ export interface CliOptions {
   repoOverride?: string;
   // branch new worktrees off this ref instead of origin's default branch
   base?: string;
-  // fan-out only: launch even when an issue's blockers are still open
+  // launch even when an issue's blockers are still open (without it, fan-out
+  // skips the blocked ticket and a single-issue start errors)
   force?: boolean;
   // machine output: emit a single {started:[...]} JSON value, suppress hints
   json?: boolean;

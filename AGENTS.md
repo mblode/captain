@@ -120,9 +120,9 @@ the `/captain` skill). worktree/rubric/memory key off the resolved `repoRoot`. (
 per-repo by basename, now disambiguated by a path hash on collision while keeping any existing
 legacy dir.)
 
-**The frontier rule** (fan-out only): an issue whose blockers are still open is **skipped**,
-and the rest of the fan-out proceeds — `captain start tig-1 tig-2` no longer starts dependent
-work against a prerequisite that hasn't landed. `Issue.blockedBy` (`types.ts`) is optional and
+**The frontier rule**: an issue whose blockers are still open does not launch — `captain start
+tig-1 tig-2` no longer starts dependent work against a prerequisite that hasn't landed.
+`Issue.blockedBy` (`types.ts`) is optional and
 populated per source (Linear `inverseRelations` of type `blocks` → `mapLinearIssue`; donebear
 has no dependency concept and leaves it unset); `openBlockers` (`issue.ts`) is the pure rule.
 Three properties are load-bearing. It is **read-only** — captain still writes to no tracker.
@@ -130,9 +130,17 @@ It is **launch-time only, never in `status`**: that read derives with no network
 row would mean either a network call in the offline read path or persisting the graph into
 `.captain/` (the no-persisted-fleet-state boundary). And it is **fail-safe** — absent, null,
 or unfetchable relations read as *unblocked*, because refusing to launch on missing data is
-the dangerous default. `--force` launches anyway. Single-issue `start` is deliberately not
-checked: it would need error semantics rather than skip semantics, for a case the driver
-(which fans out) doesn't hit. See `research/wayfinder-browser-harness-audit.md`.
+the dangerous default. `--force` launches anyway, on both paths.
+
+The two paths differ in **semantics, not in rule**, because they differ in what "the rest"
+means. Fan-out **skips** the blocked ticket and launches the others (`blocked` map →
+`launchPreparedFleet`) — one stale edge must never sink a batch. Single-issue `start`
+**throws** (`requireFrontier` in `runner.ts`: `CliError` `ISSUE_BLOCKED`, exit 1, naming the
+open blockers): there is no rest to proceed with, so skipping would be a silent zero-exit
+no-op that looks like a successful launch to a driver. Two things keep that error narrow —
+it never fires under `--print` (printing a brief is not launching; `--print` is a pinned mode),
+and it sits *after* the live-retry short-circuit, so reattaching to an already-running
+worktree never has to pass the check. See `research/wayfinder-browser-harness-audit.md`.
 
 **Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
 
@@ -271,7 +279,9 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   `withImplicitStart`), and `--print` for each. Repo selection is `--repo-path` else cwd; spanning
   repos in one session is the driver's job (per-ticket `--repo-path`), not config. A fan-out may
   now skip a blocked issue (the frontier rule), so its summary line and `--json` `started` count
-  what actually launched — with nothing blocked, both are byte-identical to before.
+  what actually launched — with nothing blocked, both are byte-identical to before. A single
+  blocked issue now *errors* instead of launching; `--print` and `--force` are unaffected on
+  every mode.
 - **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
   gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
   wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.

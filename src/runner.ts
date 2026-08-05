@@ -701,6 +701,30 @@ const launchPreparedFleet = async ({
   return 0;
 };
 
+// The frontier rule's single-issue half. Fan-out skips a blocked ticket and
+// carries on with the rest; here there is no rest, so a skip would be a silent
+// zero-exit no-op — this throws instead, naming the open blockers. Same pure
+// rule and same fail-safe (absent or unfetchable relations read as unblocked),
+// same `--force` escape hatch. `--print` is exempt: printing a brief is not
+// launching. Called after the live-retry short-circuit has already returned, so
+// reattaching to a running worktree never reaches it.
+const requireFrontier = (
+  data: PreparedIssueData,
+  options: CliOptions
+): void => {
+  if (options.print || options.force) {
+    return;
+  }
+  const open = openBlockers(data.issue);
+  if (open.length > 0) {
+    throw new CliError(
+      `${data.displayId} is blocked by ${open.join(", ")} — land those first, or pass --force to launch anyway`,
+      EXIT.GENERIC,
+      "ISSUE_BLOCKED"
+    );
+  }
+};
+
 const dispatch = async ({
   context,
   env,
@@ -844,11 +868,9 @@ const dispatch = async ({
   requireIssueCredential(seed, env);
   progress.step("git fetch origin");
   fetchOrigin(repo.repoRoot, env);
-  const prepared = await materializeIssue(
-    await prepareIssueData(seed, context),
-    context,
-    repo.repoRoot
-  );
+  const data = await prepareIssueData(seed, context);
+  requireFrontier(data, options);
+  const prepared = await materializeIssue(data, context, repo.repoRoot);
 
   if (options.print) {
     const cdCommand = `cd ${prepared.worktree.worktreePath}`;

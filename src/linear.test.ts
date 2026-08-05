@@ -91,13 +91,19 @@ describe("mapLinearIssue", () => {
     ]);
   });
 
-  it("treats canceled blockers as done and unknown states as still blocking", () => {
+  it("treats canceled and duplicate blockers as done and unknown states as still blocking", () => {
     const issue = mapLinearIssue({
       identifier: "ENG-600",
       inverseRelations: {
         nodes: [
           {
             issue: { identifier: "ENG-601", state: { type: "canceled" } },
+            type: "blocks",
+          },
+          // `duplicate` is a real state.type, not only a relation type: Linear
+          // stamps canceledAt on it, so it is closed and never clears
+          {
+            issue: { identifier: "ENG-603", state: { type: "duplicate" } },
             type: "blocks",
           },
           // a state Linear did not return at all must not read as done
@@ -108,7 +114,61 @@ describe("mapLinearIssue", () => {
 
     expect(issue.blockedBy).toEqual([
       { done: true, identifier: "ENG-601" },
+      { done: true, identifier: "ENG-603" },
       { done: false, identifier: "ENG-602" },
+    ]);
+  });
+
+  // Pinned to a real api.linear.app payload (EARN-9601, verified Aug 2026):
+  // inverseRelations holds the records where THIS issue is `relatedIssue`, so
+  // for type "blocks" the other end (`issue`) is the blocker. Linear's own API
+  // reports blockedBy for EARN-9601 as exactly these three.
+  it("matches Linear's own blockedBy for a real inverseRelations payload", () => {
+    const issue = mapLinearIssue({
+      identifier: "EARN-9601",
+      inverseRelations: {
+        nodes: [
+          {
+            issue: { identifier: "EARN-9728", state: { type: "backlog" } },
+            relatedIssue: {
+              identifier: "EARN-9601",
+              state: { type: "unstarted" },
+            },
+            type: "blocks",
+          },
+          {
+            issue: { identifier: "EARN-9600", state: { type: "unstarted" } },
+            relatedIssue: {
+              identifier: "EARN-9601",
+              state: { type: "unstarted" },
+            },
+            type: "blocks",
+          },
+          {
+            issue: { identifier: "EARN-9729", state: { type: "backlog" } },
+            relatedIssue: {
+              identifier: "EARN-9601",
+              state: { type: "unstarted" },
+            },
+            type: "blocks",
+          },
+          {
+            issue: { identifier: "EARN-9722", state: { type: "backlog" } },
+            relatedIssue: {
+              identifier: "EARN-9601",
+              state: { type: "unstarted" },
+            },
+            type: "related",
+          },
+        ],
+      },
+      title: "Perform upgrade in Production",
+    });
+
+    expect(issue.blockedBy).toEqual([
+      { done: false, identifier: "EARN-9728" },
+      { done: false, identifier: "EARN-9600" },
+      { done: false, identifier: "EARN-9729" },
     ]);
   });
 });
