@@ -19,8 +19,8 @@ export const copyCommand = (command: string, env: NodeJS.ProcessEnv): void => {
 // The inline (non-cmux) launch. Agent-aware: claude launches in plan mode;
 // codex is best-effort with full autonomy (no plan mode). The argv mirrors the
 // cmux command builders (claudeCommand / codexCommand) so the two launch paths
-// can't drift. `name` pins Claude's session name for cross-session messaging
-// (same slug as cmux workspace / branch); ignored for codex.
+// can't drift. `name` pins Claude's session name to the ticket/branch slug
+// (same as the cmux workspace name); ignored for codex.
 const inlineArgs = (
   agent: string,
   prompt: string,

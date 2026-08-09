@@ -10,7 +10,7 @@ describe("claudeCommand", () => {
     );
   });
 
-  it("pins --name so cross-session messaging's ListAgents roster shows the ticket", () => {
+  it("pins --name so the Claude session matches the ticket slug", () => {
     const command = claudeCommand(
       "/tmp/p/prompt.txt",
       "default",

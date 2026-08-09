@@ -33,9 +33,9 @@ const envPrefix = (agentEnv: Record<string, string>): string => {
 // config.ts) so the agent never inherits the driver's ambient tier; both are
 // shell-quoted because a full model id can carry glob metacharacters (e.g. the
 // `[1m]` in `claude-opus-4-8[1m]`) that an unquoted arg would try to expand.
-// `name` pins Claude Code's session name (`claude --name`) so cross-session
-// messaging's ListAgents roster shows the ticket slug — distinct from cmux's
-// own `--name` on new-workspace. Omitted when unset (tests / callers without a
+// `name` pins Claude Code's session name (`claude --name`) to the ticket slug
+// so multi-session Claude UX matches the fleet — distinct from cmux's own
+// `--name` on new-workspace. Omitted when unset (tests / callers without a
 // slug); production always passes the branch.
 export const claudeCommand = (
   promptPath: string,
@@ -66,8 +66,8 @@ export const codexCommand = (
 
 // Build the launch command for the selected agent. `claude` (the default) is the
 // only one wired into the plan-gate flow; `codex` is best-effort. `name` is the
-// ticket/branch slug pinned as Claude's session name for peer messaging (claude
-// only — codex has no cross-session messaging / `--name` equivalent).
+// ticket/branch slug pinned as Claude's session name (claude only — codex has
+// no `--name` equivalent here).
 export const agentCommand = (
   agent: string,
   promptPath: string,

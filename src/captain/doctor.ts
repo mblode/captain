@@ -23,9 +23,6 @@ export interface Check {
 // Everything `buildChecks` needs to read the world, injected so the check list
 // stays pure (and testable) — mirrors the surface.ts/CmuxPort seam.
 export interface DoctorDeps {
-  // Raw `claude --version` stdout/stderr (null when absent/unreadable). Used for
-  // the recommended ≥2.1.224 check — cross-session messaging / peer-warn needs it.
-  claudeVersion: string | null;
   cmuxReachable: () => boolean;
   // The pipeline skills the configured brief actually runs (loadSkills), stripped
   // of the leading `/`. Injected so buildChecks stays pure; realDeps resolves it.
@@ -39,51 +36,6 @@ export interface DoctorDeps {
   nodeVersion: string;
   skillInstalled: (skill: string) => boolean;
 }
-
-// Floor for Claude Code cross-session messaging (ListAgents / SendMessage).
-// Soft/recommended only — older Claude still runs the fleet; peer-warn is inert.
-export const MIN_MESSAGING_CLAUDE = "2.1.224";
-
-// Pull the first x.y.z from a version blob; fail-soft (null) on garbage.
-export const parseClaudeSemver = (
-  raw: string | null | undefined
-): [number, number, number] | null => {
-  if (!raw) {
-    return null;
-  }
-  const match = raw.match(/(\d+)\.(\d+)\.(\d+)/u);
-  if (!match) {
-    return null;
-  }
-  return [
-    Number.parseInt(match[1], 10),
-    Number.parseInt(match[2], 10),
-    Number.parseInt(match[3], 10),
-  ];
-};
-
-const gteSemver = (
-  version: [number, number, number],
-  floor: [number, number, number]
-): boolean => {
-  for (const [index, part] of version.entries()) {
-    if (part > floor[index]) {
-      return true;
-    }
-    if (part < floor[index]) {
-      return false;
-    }
-  }
-  return true;
-};
-
-// True when `raw` parses as a semver ≥ MIN_MESSAGING_CLAUDE. Unreadable → false
-// (recommended check fails soft; fan-out still runs).
-export const claudeMessagingVersionOk = (raw: string | null): boolean => {
-  const version = parseClaudeSemver(raw);
-  const floor = parseClaudeSemver(MIN_MESSAGING_CLAUDE);
-  return version !== null && floor !== null && gteSemver(version, floor);
-};
 
 // The skills `captain install` can fetch from mblode/agent-skills. The doctor
 // only nags about the ones the configured brief actually runs, so a custom
@@ -116,22 +68,6 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
       label: command,
       level: "required",
       ok: found,
-    });
-  }
-
-  // Only when claude is present — the required PATH check already covers missing.
-  // Recommended: peer-warn / ListAgents need ≥2.1.224; older Claude still fans out.
-  if (deps.hasCommand("claude")) {
-    const versionOk = claudeMessagingVersionOk(deps.claudeVersion);
-    const detail = deps.claudeVersion?.trim()
-      ? deps.claudeVersion.trim().split("\n")[0]
-      : "unknown";
-    checks.push({
-      detail,
-      hint: `upgrade Claude Code to >= ${MIN_MESSAGING_CLAUDE} (cross-session messaging; captain pins --name for the peer roster)`,
-      label: `Claude >= ${MIN_MESSAGING_CLAUDE}`,
-      level: "recommended",
-      ok: versionOk,
     });
   }
 
@@ -208,17 +144,7 @@ const skillProbe = (env: NodeJS.ProcessEnv): ((skill: string) => boolean) => {
   return (skill) => dirs.some((dir) => existsSync(join(dir, skill)));
 };
 
-const probeClaudeVersion = (env: NodeJS.ProcessEnv): string | null => {
-  if (!commandExists("claude", env)) {
-    return null;
-  }
-  const result = run("claude", ["--version"], { env });
-  const blob = `${result.stdout}\n${result.stderr}`.trim();
-  return blob || null;
-};
-
 export const realDeps = (env: NodeJS.ProcessEnv): DoctorDeps => ({
-  claudeVersion: probeClaudeVersion(env),
   cmuxReachable: () => cmuxReachable(env),
   configuredSkills: loadSkills(env).map((s) => s.replace(/^\//u, "")),
   env,

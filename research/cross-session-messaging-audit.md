@@ -25,22 +25,22 @@ daemon, no persisted fleet state, self-drive agents, human plan/merge gates, iso
 per worktree). Findings are grounded in the actual code (file:line) and in the docs'
 delivery / inbound rules.
 
-The intended outcome: a decision doc that (a) names the one cheap ADOPT (pin Claude
-session `--name` so the peer roster is addressable), (b) records a light prompt ADAPT for
-optional breakage warnings, and (c) writes down why messaging must not become the fleet
-control plane or replace fleet memory — so the next proposal to "let the agents talk" has
-a written defence.
+The intended outcome: a decision doc that (a) names the one cheap ADOPT that improves
+captain DX (pin Claude session `--name` so multi-session Claude matches fleet tickets),
+and (b) writes down why messaging must not become the fleet control plane, a prompt
+ceremony, or a substitute for fleet memory — so the next proposal to "let the agents
+talk" or "simplify captain with SendMessage" has a written defence.
 
 ## TL;DR verdict table
 
 | # | Capability | Verdict | One-line reason |
 |---|---|---|---|
-| 1 | **Pin Claude session `--name` to the ticket/branch** | **ADOPT — now** | cmux workspace `--name` ≠ Claude peer name; without `claude --name`, `ListAgents` is opaque |
-| 2 | **Brief: may `SendMessage` peers on shared-surface breakage** | **ADAPT — light prompt only** | Optional warn; never wait on peers; never use messaging for approval/steering |
+| 1 | **Pin Claude session `--name` to the ticket/branch** | **ADOPT — now** | cmux workspace `--name` ≠ Claude session name; without `claude --name`, multi-session Claude UX is opaque |
+| 2 | **Brief / doctor / skill ceremony around `SendMessage`** | **REJECT** | Does not improve captain's surface; adds prompt noise and install nags for a side-channel captain does not depend on |
 | 3 | **Replace / extend fleet memory with messaging** | **REJECT** | Memory is durable cross-run; messaging is ephemeral mid-turn text — different loop |
 | 4 | **Messaging as fleet control plane / driver steering** | **REJECT — non-goal** | Two-way conversational control + mid-run puppeteering; keep `cmux send` / approve/reject |
 | 5 | **Depend on messaging for ticket coordination** | **REJECT** | Isolation bet: human merge gate is the coordination point; Claude-only; holds strand unattended agents |
-| 6 | **Force `crossSessionInbound: accept` on launch** | **N/A for now** | Post-approve fleet is bypass↔bypass → default delivers; driver→agent already uses `cmux send` |
+| 6 | **Force `crossSessionInbound: accept` on launch** | **N/A** | Driver→agent already uses `cmux send`; no captain consumer for the peer inbox |
 | 7 | **Claude Agent Teams as alternative architecture** | **REJECT — non-goal** | Supervised team ≠ independent worktree-per-ticket fan-out |
 
 ---
@@ -57,31 +57,26 @@ Captain's launch command today is:
 claude --model … --effort … --permission-mode plan --allow-dangerously-skip-permissions "$(cat …)"
 ```
 
-So a fleet of `tig-424` / `tig-430` worktrees shows up to `ListAgents` as opaque
-directory names — the feature is on, but unusable for a driver or peer that wants to
-address `tig-424`.
+So a fleet of `tig-424` / `tig-430` worktrees shows up in Claude as opaque directory
+names. Pinning `--name` makes the session match the ticket the operator already uses
+in `status` / `approve` — a small multi-session DX win whether or not anyone messages.
 
 **The fix.** Thread the same slug (`options.branch` / `target.label`) into
 `claudeCommand` / `agentCommand` as `claude --name <slug>`, and into the inline
 `launchPlanMode` argv so the two launch paths cannot drift. Codex is unchanged (no
-`SendMessage` / no `--name` equivalent in this feature).
+`--name` equivalent here).
 
-This ADOPT enables the feature without adopting a coordination protocol. It does not
-add a CLI, a daemon, a settings write, or a `CmuxPort` change.
+This is the only code change that improves captain. It does not add a CLI, a daemon,
+a settings write, or a `CmuxPort` change.
 
-## ADAPT — one prompt sentence for optional peer warnings (S effort)
+## REJECT — prompt / install / skill ceremony around messaging
 
-Claude's own guidance for the feature: hand over a finding when one session breaks what
-another is building. That can happen in a captain fleet (shared types, migrated schema,
-renamed export) without making messaging the control plane.
-
-Add **one** claude-only sentence inside `<workflow>` (`src/prompt.ts`): if you land a
-change that breaks another in-flight worktree on this machine, you may `SendMessage` that
-session a short warning — **do not wait on peers, do not use messaging for approval or
-steering, and do not block your own pipeline on a reply**. Codex briefs omit it (no tool).
-
-This preserves *"nobody will tell you to continue"* while naming the one legitimate use
-of the new channel.
+Teaching every brief about `SendMessage`, nagging `captain install` for Claude ≥2.1.224,
+or documenting peer-warn in the driver skill does **not** improve captain's surface
+(`status` / `approve` / `reject` unchanged) and adds recurring noise for a channel
+captain does not depend on. Agents that have the tool can still use it on their own;
+captain should not advertise or require it. Messaging also cannot simplify captain's
+control plane (see below) — leaning on it would add a second channel, not remove one.
 
 ## REJECT — messaging is not fleet memory
 
@@ -148,11 +143,7 @@ would re-litigate the fan-out architecture, not add a feature.
 
 1. `claude --name <ticket>` on both launch paths (`src/cmux.ts`, `src/launch.ts`),
    including free-form dispatch (asserted in the dispatch launch regression).
-2. Claude-only optional peer-warn sentence in `<workflow>` (`src/prompt.ts`).
-3. Gotcha in `AGENTS.md` recording the ADOPT/REJECT boundary.
-4. Driver skill boundary (`skills/captain/SKILL.md`): never steer with
-   `SendMessage` / `ListAgents` — keep `cmux send` / `approve`/`reject`.
-5. Soft `captain install` check for Claude ≥2.1.224 (`src/captain/doctor.ts`).
-6. README note: messaging enables optional peer warnings; not a control plane.
+2. Gotcha in `AGENTS.md` + this decision doc: messaging is not a control plane.
 
+No prompt ceremony. No doctor version nag. No skill/README feature marketing.
 No new CLI. No daemon. No settings file writes. No `CmuxPort` changes.

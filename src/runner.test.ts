@@ -703,7 +703,7 @@ fi
     // A no-ticket dispatch identity falls back to the workspace name, so a
     // cmux dedupe/rename would break the launch→decision join unless the
     // launch record uses the name cmux actually assigned. Also pins
-    // claude --name to the requested slug (ListAgents roster ≠ cmux name).
+    // claude --name to the requested slug (Claude session name ≠ cmux name).
     const { repo, root } = await createGitRepo("src");
     const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
     cleanup.push(root, binDir);

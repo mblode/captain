@@ -64,7 +64,6 @@ Everything between those gates is fixed: plan, implement, the review skills you 
 ## Notes
 
 - Node 22 or newer, with `git`, `claude`, and cmux on your PATH. `captain install` checks all of it and tells you what is missing.
-- Claude Code ≥2.1.224 enables optional peer breakage warnings between worktrees (`SendMessage`); captain pins each session's `--name` to the ticket slug. Messaging is not a control plane — steering stays `cmux send` / `approve` / `reject`.
 - Set `LINEAR_API_KEY` to pull ticket details into each brief, or `DONEBEAR_TOKEN` to drive [Done Bear](https://donebear.com) tasks the same way.
 - Pick the agent per run with `--agent claude` or `--agent codex`, or set a default with `CAPTAIN_AGENT`. Codex runs without a plan gate.
 - Configure the review skills that run before the PR in `~/.config/captain/config.json` or with `CAPTAIN_SKILLS=/tidy,/pr-creator`.

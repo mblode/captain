@@ -122,19 +122,6 @@ describe("prompt extras", () => {
     }
   });
 
-  // Cross-session messaging (Claude Code ≥2.1.224) is optional breakage
-  // warnings only — never a wait/approval channel. Codex has no SendMessage.
-  it("allows claude (and default) a peer-warn SendMessage; omits it for codex", () => {
-    for (const agent of ["claude", undefined]) {
-      const out = renderPromptExtras({ agent, workflow: true });
-      expect(out).toContain("you may SendMessage that session");
-      expect(out).toContain("Do not wait on peers");
-    }
-    const codex = renderPromptExtras({ agent: "codex", workflow: true });
-    expect(codex).not.toContain("SendMessage");
-    expect(codex).not.toContain("Do not wait on peers");
-  });
-
   it("renders the finishing protocol around the rubric path", () => {
     const out = renderPromptExtras({ rubricPath: ".captain/rubric.md" });
     expect(out).toContain("<finishing-protocol>");
