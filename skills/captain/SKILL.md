@@ -88,7 +88,7 @@ them in control.
 | "approve all plans" | `captain approve <ticket> --note "<the card's recommendation>"`, one call per gate so each carries its own card. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
 | "send 404 back: don't touch auth" | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace |
 | "what's verified" | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging |
-| "this one's gone quiet" | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge |
+| "this one's gone quiet" | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge — never `SendMessage` / `ListAgents` (see Gotchas) |
 | "distill the learnings" | Edit `~/.claude/captain/memory/<repo>/learnings.md` — promote held-up Inbox bullets to `## Rules`, cut slop; `~/.claude/captain/log.jsonl` has approve/reject notes |
 
 **Escalating NEEDS YOU:** once per heartbeat, give pending plan gates to **one read-only
@@ -126,6 +126,12 @@ per wake, not per gate.
 - **`cmux send` can silently no-op** (text parked unsubmitted while `status` still reads
   "working") — follow every send with `cmux send-key --workspace <id> enter` and re-read
   the screen.
+- **Do not steer the fleet with Claude Code cross-session messaging.** Fleet sessions
+  answer to the ticket/slug captain pins as `claude --name` (so `/list-agents` is
+  readable), and agents may optionally `SendMessage` a peer a short breakage warning —
+  that is it. As the driver you must **never** `SendMessage` / `ListAgents` to nudge,
+  answer a question, or approve a plan; keep `cmux send` and `captain approve|reject`.
+  Messaging is not a control plane and not a substitute for fleet memory.
 - **Verify an unknown run-state before retrying.** `run=unknown`/`—` means no live cmux
   tag was observed, regardless of agent. Read the screen first. If it's an empty shell,
   rerun the same original `captain start` command in the foreground, including its

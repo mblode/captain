@@ -7,8 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildChecks,
+  claudeMessagingVersionOk,
   install,
+  MIN_MESSAGING_CLAUDE,
   missingBundles,
+  parseClaudeSemver,
   realDeps,
   renderDoctor,
 } from "./doctor";
@@ -16,6 +19,7 @@ import type { DoctorDeps } from "./doctor";
 import { style } from "./format";
 
 const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
+  claudeVersion: `Claude Code ${MIN_MESSAGING_CLAUDE}`,
   cmuxReachable: () => true,
   configuredSkills: ["pr-reviewer", "pr-creator", "pr-babysitter"],
   env: { LINEAR_API_KEY: "k" },
@@ -69,6 +73,35 @@ describe("buildChecks", () => {
     expect(key).toMatchObject({ level: "recommended", ok: false });
   });
 
+  it(`Claude < ${MIN_MESSAGING_CLAUDE} is only recommended (fan-out still runs)`, () => {
+    const check = buildChecks(deps({ claudeVersion: "2.1.100" })).find(
+      (c) => c.label === `Claude >= ${MIN_MESSAGING_CLAUDE}`
+    );
+    expect(check).toMatchObject({ level: "recommended", ok: false });
+    expect(check?.hint).toContain(MIN_MESSAGING_CLAUDE);
+  });
+
+  it(`Claude >= ${MIN_MESSAGING_CLAUDE} passes the messaging version check`, () => {
+    const check = buildChecks(
+      deps({ claudeVersion: `${MIN_MESSAGING_CLAUDE} (Claude Code)` })
+    ).find((c) => c.label === `Claude >= ${MIN_MESSAGING_CLAUDE}`);
+    expect(check?.ok).toBe(true);
+  });
+
+  it("skips the Claude version check when claude is not on PATH", () => {
+    const checks = buildChecks(deps({ hasCommand: () => false }));
+    expect(checks.map((c) => c.label)).not.toContain(
+      `Claude >= ${MIN_MESSAGING_CLAUDE}`
+    );
+  });
+
+  it("unreadable Claude version fails the recommended check soft", () => {
+    const check = buildChecks(deps({ claudeVersion: null })).find(
+      (c) => c.label === `Claude >= ${MIN_MESSAGING_CLAUDE}`
+    );
+    expect(check).toMatchObject({ detail: "unknown", ok: false });
+  });
+
   it("names the specific pipeline skills that are missing", () => {
     const skills = buildChecks(
       deps({ skillInstalled: (s) => s !== "pr-creator" })
@@ -92,6 +125,23 @@ describe("buildChecks", () => {
     // has no installable skills to probe — the check is dropped, not shown as ok.
     const checks = buildChecks(deps({ configuredSkills: ["tidy"] }));
     expect(checks.map((c) => c.label)).not.toContain("pipeline skills");
+  });
+});
+
+describe("parseClaudeSemver / claudeMessagingVersionOk", () => {
+  it("pulls the first x.y.z from noisy version blobs", () => {
+    expect(parseClaudeSemver("2.1.224 (Claude Code)")).toEqual([2, 1, 224]);
+    expect(parseClaudeSemver("claude 1.0.0\n2.1.300")).toEqual([1, 0, 0]);
+    expect(parseClaudeSemver("no version here")).toBeNull();
+    expect(parseClaudeSemver(null)).toBeNull();
+  });
+
+  it("compares against the messaging floor", () => {
+    expect(claudeMessagingVersionOk("2.1.224")).toBe(true);
+    expect(claudeMessagingVersionOk("2.1.225")).toBe(true);
+    expect(claudeMessagingVersionOk("2.2.0")).toBe(true);
+    expect(claudeMessagingVersionOk("2.1.223")).toBe(false);
+    expect(claudeMessagingVersionOk(null)).toBe(false);
   });
 });
 

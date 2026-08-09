@@ -702,15 +702,18 @@ fi
   it("ledgers the launch under cmux's actual workspace name when it differs", async () => {
     // A no-ticket dispatch identity falls back to the workspace name, so a
     // cmux dedupe/rename would break the launch→decision join unless the
-    // launch record uses the name cmux actually assigned.
+    // launch record uses the name cmux actually assigned. Also pins
+    // claude --name to the requested slug (ListAgents roster ≠ cmux name).
     const { repo, root } = await createGitRepo("src");
     const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
     cleanup.push(root, binDir);
+    const log = join(root, "cmux.log");
 
     await writeExecutable(
       join(binDir, "cmux"),
       `#!/bin/sh
 if [ "$1" = "ping" ]; then exit 0; fi
+printf '%s\\n' "$*" >> "$CMUX_LOG"
 if [ "$1" = "rpc" ] && [ "$2" = "workspace.list" ]; then
   printf '{"workspaces":[{"id":"WS-1","ref":"r","description":"tidy-the-readme-copy","current_directory":"%s"}]}' "$REPO"
   exit 0
@@ -725,6 +728,7 @@ exit 0
       cwd: repo,
       env: {
         ...safeEnv(),
+        CMUX_LOG: log,
         PATH: `${binDir}:${safeEnv().PATH}`,
         REPO: repo,
       },
@@ -734,6 +738,11 @@ exit 0
 
     const launches = readLog(safeEnv()).filter((r) => r.kind === "launch");
     expect(launches.map((r) => r.name)).toEqual(["tidy-the-readme-copy"]);
+    // Free-form dispatch pins Claude's session name to the slug it asked cmux
+    // for — even when cmux later renames the workspace for the ledger.
+    const cmuxLog = await readFile(log, "utf-8");
+    expect(cmuxLog).toContain("new-workspace --name tidy-the-readme");
+    expect(cmuxLog).toContain("claude --name 'tidy-the-readme'");
   });
 
   it("still launches when the ledger is unwritable (launch logging is fail-soft)", async () => {

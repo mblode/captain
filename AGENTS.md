@@ -44,7 +44,7 @@ src/
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
     commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
     gain.ts         # 100% PURE: computeGain (decisions + launch ledger + live fleet snapshot + verdict tallies → metrics incl. launch→detection latency); the gain command's fs/cmux edge lives in commands.ts
-    doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
+    doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude≥2.1.224 soft/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
     format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
     log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/launch); `note` carries the reasoning on BOTH decisions; readLog feeds gain
 ```

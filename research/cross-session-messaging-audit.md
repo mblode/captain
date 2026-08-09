@@ -146,8 +146,13 @@ would re-litigate the fan-out architecture, not add a feature.
 
 ## What shipped with this audit
 
-1. `claude --name <ticket>` on both launch paths (`src/cmux.ts`, `src/launch.ts`).
+1. `claude --name <ticket>` on both launch paths (`src/cmux.ts`, `src/launch.ts`),
+   including free-form dispatch (asserted in the dispatch launch regression).
 2. Claude-only optional peer-warn sentence in `<workflow>` (`src/prompt.ts`).
 3. Gotcha in `AGENTS.md` recording the ADOPT/REJECT boundary.
+4. Driver skill boundary (`skills/captain/SKILL.md`): never steer with
+   `SendMessage` / `ListAgents` — keep `cmux send` / `approve`/`reject`.
+5. Soft `captain install` check for Claude ≥2.1.224 (`src/captain/doctor.ts`).
+6. README note: messaging enables optional peer warnings; not a control plane.
 
 No new CLI. No daemon. No settings file writes. No `CmuxPort` changes.
