@@ -362,7 +362,15 @@ const launchOrFallback = async (
   progress.done();
   // Inline launch blocks for the whole interactive session — ledger it first.
   logLaunch(target.cwd, target.label, env);
-  const status = launchPlanMode(target.cwd, target.prompt, env, target.agent);
+  // Same ticket/branch slug as the cmux path pins as Claude's --name so
+  // cross-session messaging's peer roster stays addressable on both launch paths.
+  const status = launchPlanMode(
+    target.cwd,
+    target.prompt,
+    env,
+    target.agent,
+    target.label
+  );
   // Inline launch: no cmux workspace to address, so workspaceId is omitted.
   emitStarted();
   return status;

@@ -33,13 +33,20 @@ const envPrefix = (agentEnv: Record<string, string>): string => {
 // config.ts) so the agent never inherits the driver's ambient tier; both are
 // shell-quoted because a full model id can carry glob metacharacters (e.g. the
 // `[1m]` in `claude-opus-4-8[1m]`) that an unquoted arg would try to expand.
+// `name` pins Claude Code's session name (`claude --name`) so cross-session
+// messaging's ListAgents roster shows the ticket slug — distinct from cmux's
+// own `--name` on new-workspace. Omitted when unset (tests / callers without a
+// slug); production always passes the branch.
 export const claudeCommand = (
   promptPath: string,
   model: string,
   effort: string,
-  agentEnv: Record<string, string> = {}
-): string =>
-  `${envPrefix(agentEnv)}claude --model ${shellQuote(model)} --effort ${shellQuote(effort)} --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
+  agentEnv: Record<string, string> = {},
+  name?: string
+): string => {
+  const nameFlag = name ? `--name ${shellQuote(name)} ` : "";
+  return `${envPrefix(agentEnv)}claude ${nameFlag}--model ${shellQuote(model)} --effort ${shellQuote(effort)} --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
+};
 
 // The codex counterpart of claudeCommand — best-effort: codex has no plan mode,
 // so it launches with full autonomy (--dangerously-bypass-approvals-and-sandbox,
@@ -58,17 +65,20 @@ export const codexCommand = (
 };
 
 // Build the launch command for the selected agent. `claude` (the default) is the
-// only one wired into the plan-gate flow; `codex` is best-effort.
+// only one wired into the plan-gate flow; `codex` is best-effort. `name` is the
+// ticket/branch slug pinned as Claude's session name for peer messaging (claude
+// only — codex has no cross-session messaging / `--name` equivalent).
 export const agentCommand = (
   agent: string,
   promptPath: string,
   model: string,
   effort: string,
-  agentEnv: Record<string, string> = {}
+  agentEnv: Record<string, string> = {},
+  name?: string
 ): string =>
   agent === "codex"
     ? codexCommand(promptPath, model, effort, agentEnv)
-    : claudeCommand(promptPath, model, effort, agentEnv);
+    : claudeCommand(promptPath, model, effort, agentEnv, name);
 
 export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
   runRequired(
@@ -85,7 +95,8 @@ export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
         options.promptPath,
         loadModel(options.env),
         loadEffort(options.env),
-        loadAgentEnv(options.env)
+        loadAgentEnv(options.env),
+        options.branch
       ),
       "--focus",
       options.focus ? "true" : "false",

@@ -93,6 +93,19 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
             `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
             "2. Once the plan is approved, implement it.",
           ];
+    // Claude Code ≥2.1.224 can SendMessage other local sessions (roster answers
+    // to the --name captain pins at launch). Optional breakage warnings only —
+    // never a coordination/approval channel; codex has no equivalent tool.
+    const peerWarnSteps =
+      extras.agent === "codex"
+        ? []
+        : [
+            "",
+            "If you land a change that breaks another in-flight captain worktree on this",
+            "machine, you may SendMessage that session (address it by its ticket slug) a",
+            "short warning. Do not wait on peers, do not use messaging for approval or",
+            "steering, and do not block your own pipeline on a reply.",
+          ];
     out += "\n<workflow>\n";
     out += [
       "You own this ticket end to end: drive every step yourself, in order. The only",
@@ -107,6 +120,7 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       "suites, and never launch more than one full test suite or typecheck at a time —",
       "uncapped worker pools across concurrent agents have exhausted system memory and",
       "gotten the whole fleet killed.",
+      ...peerWarnSteps,
       "",
       ...blockedSteps,
     ].join("\n");

@@ -19,8 +19,14 @@ export const copyCommand = (command: string, env: NodeJS.ProcessEnv): void => {
 // The inline (non-cmux) launch. Agent-aware: claude launches in plan mode;
 // codex is best-effort with full autonomy (no plan mode). The argv mirrors the
 // cmux command builders (claudeCommand / codexCommand) so the two launch paths
-// can't drift.
-const inlineArgs = (agent: string, prompt: string, env: NodeJS.ProcessEnv) => {
+// can't drift. `name` pins Claude's session name for cross-session messaging
+// (same slug as cmux workspace / branch); ignored for codex.
+const inlineArgs = (
+  agent: string,
+  prompt: string,
+  env: NodeJS.ProcessEnv,
+  name?: string
+) => {
   if (agent === "codex") {
     const model = loadModel(env);
     return [
@@ -32,6 +38,7 @@ const inlineArgs = (agent: string, prompt: string, env: NodeJS.ProcessEnv) => {
     ];
   }
   return [
+    ...(name ? ["--name", name] : []),
     "--model",
     loadModel(env),
     "--effort",
@@ -47,7 +54,8 @@ export const launchPlanMode = (
   worktreePath: string,
   prompt: string,
   env: NodeJS.ProcessEnv,
-  agent = "claude"
+  agent = "claude",
+  name?: string
 ): number => {
   if (!commandExists(agent, env)) {
     throw new CliError(
@@ -57,7 +65,7 @@ export const launchPlanMode = (
 
   const previousCwd = process.cwd();
   process.chdir(worktreePath);
-  const result = run(agent, inlineArgs(agent, prompt, env), {
+  const result = run(agent, inlineArgs(agent, prompt, env, name), {
     // Same resource caps as the cmux launch path (see claudeCommand) — the
     // inline fallback must not be the one door the fleet env misses.
     env: { ...env, ...loadAgentEnv(env) },
