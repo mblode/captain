@@ -10,6 +10,19 @@ describe("claudeCommand", () => {
     );
   });
 
+  it("pins --name so the Claude session matches the ticket slug", () => {
+    const command = claudeCommand(
+      "/tmp/p/prompt.txt",
+      "default",
+      "high",
+      {},
+      "tst-1"
+    );
+    expect(command).toBe(
+      `claude --name 'tst-1' --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
+    );
+  });
+
   it("prefixes the agent env so every tool the agent runs inherits it", () => {
     const command = claudeCommand("/tmp/p/prompt.txt", "default", "high", {
       NODE_OPTIONS: "--max-old-space-size=3072",
@@ -67,5 +80,21 @@ describe("agentCommand", () => {
     expect(agentCommand("claude", "/tmp/p/prompt.txt", "default", "high")).toBe(
       claudeCommand("/tmp/p/prompt.txt", "default", "high")
     );
+  });
+
+  it("forwards the session name to claude and leaves codex unchanged", () => {
+    expect(
+      agentCommand(
+        "claude",
+        "/tmp/p/prompt.txt",
+        "default",
+        "high",
+        {},
+        "tig-1"
+      )
+    ).toBe(claudeCommand("/tmp/p/prompt.txt", "default", "high", {}, "tig-1"));
+    expect(
+      agentCommand("codex", "/tmp/p/prompt.txt", "default", "high", {}, "tig-1")
+    ).toBe(codexCommand("/tmp/p/prompt.txt", "default", "high"));
   });
 });

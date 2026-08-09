@@ -285,6 +285,13 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
 - **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
   gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
   wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
+- **Claude session `--name` is the ticket slug; messaging is not a control plane.**
+  Audited Aug 2026 — see `research/cross-session-messaging-audit.md`. Captain pins
+  `claude --name <ticket>` on both launch paths so multi-session Claude UX matches the
+  fleet (cmux workspace `--name` is a different name). Do **not** build coordination,
+  approval, or driver steering on Claude Code `SendMessage`/`ListAgents` — keep
+  `cmux send` / `approve`/`reject`, and keep fleet memory as the durable cross-session
+  channel. Agent Teams stay a non-goal.
 - **The security controls captain deliberately does NOT adopt.** Anthropic's AI-native SDLC
   writeup (Jul 2026) is the reference; captain already has its core loops under other names
   (fresh-context verifier = independent reviewers with separate context windows, per-criterion
