@@ -38,15 +38,22 @@ after a stop reads no queue, dispatches nothing, and never re-arms.
 - **Eligibility — every check before starting anything.** Per candidate:
   - (a) lowercase the identifier, skip if any status row's `ticket` matches (NEEDS YOU,
     IN FLIGHT, _or_ READY);
-  - (b) read the full description — require `<!-- tiger-agent:contract -->` plus exactly
-    one `**Repo & area:**` field carrying exactly one `blstrco/<repo>` token (missing,
-    duplicate, or multi-repo is ambiguous, never guessed);
-  - (c) require `**Blast radius:** low` exactly (trimmed, case-normalized) — `elevated`
+  - (b) read the full description — require a `## Contract` heading and exactly one
+    `**Repo & area:**` field, and take the **first** `blstrco/<repo>` token on that
+    line as the target. A later token on the same line is a contrast ("blstrco/daintree
+    (not blstrco/chat)"), not a second target; (d) is what proves the parse. No
+    `**Repo & area:**` field at all is invalid, never guessed;
+  - (c) require the `**Blast radius:**` value to begin with `low` (trimmed,
+    case-normalized, reading up to the first `:` or `,`) — the rest of the line is the
+    stated reason and is not part of the verdict. `elevated`
     (money/tax/PII/auth/permissions) is never auto-started; missing/unknown is invalid,
     **not** low;
   - (d) resolve `blstrco/<repo>` to `/Users/mblode/Code/linktree/<repo>` and confirm it's
-    a git checkout whose `origin` names that exact GitHub repo — a missing checkout or an
-    origin mismatch is a routing failure, never a fallback to cwd.
+    a git checkout whose `origin` names that GitHub repo, comparing **case-insensitively**
+    — GitHub preserves the case it was created with but resolves without it, so a ticket
+    saying `blstrco/daintree` and an origin saying `blstrco/Daintree` are the same
+    repository. A missing checkout or a genuinely different repo is a routing failure,
+    never a fallback to cwd.
 - **Dispatch to capacity.** Group selected ids by verified checkout; one **foreground**
   `captain start <ids…> --repo-path <checkout> --json` per repo — never backgrounded.
   Validate every returned `started[].cwd` against the expected checkout. After each repo
