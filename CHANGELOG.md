@@ -1,5 +1,95 @@
 # linear-worktree
 
+## 2.0.0
+
+### Major Changes
+
+- 08dc6ee: Drop the unused library entry point: `cmux-captain` is a CLI.
+
+  `package.json` declared `main`, `types` and `exports` pointing at a 31-name
+  `src/index.ts`. Nothing in the repo, the README, the docs site or the `/captain`
+  skill ever imported it, and no usage was documented anywhere — so it was 31 public
+  names under semver with no stated contract. The package now ships `bin` only, and
+  `dist/` is `cli.js` alone.
+
+  **Breaking:** `import { … } from "cmux-captain"` no longer resolves. The `captain`
+  command is unaffected. If you were importing it, open an issue — the surface can
+  come back documented and deliberate rather than incidental.
+
+### Minor Changes
+
+- 1990b04: Add `gain.roster`: the per-ticket detail behind the tallies.
+
+  `captain gain --json` now carries a `roster` — one entry per launch, newest first, with
+  `launchedAt` and the approve/reject decision from the ledger, and `title`, `group`,
+  `verdict`, `summary` and `prUrl` from the live fleet. It answers "what got done and what's
+  left", which neither command could before: `status` is live-only, so a merged worktree
+  leaves the view entirely, and `gain` reported only aggregates.
+
+  It is driven off launch records rather than live rows, so a worktree that has been merged
+  and removed still appears — degraded to name, launch time and decision, with `live: false`.
+  A caveat names that ledger-vs-snapshot split. The roster is windowed by `--since` and capped,
+  with the remainder reported in `dropped`.
+
+  `status --json` rows now also carry `title`, read from the worktree's rubric in the same file
+  read that already recomputed its hash (`readRubricFacts` replaces `expectedRubricHash`). No
+  new I/O, no network — `status` and `gain` stay offline.
+
+- 2c09a6d: Fix the fanned-out pipeline order, and let a step be plain English.
+
+  `DEFAULT_SKILLS` ran `/tidy` before `/pr-reviewer`. Both skills document the opposite: the
+  reviewer is read-only and writes a report whose `Fix:` lines are committable, and `tidy`'s
+  Phase 2 looks for a review that already ran and applies its confirmed findings. In the old
+  order the report was produced with nothing downstream to apply it, so every fleet PR opened
+  still carrying the review's own "Must fix before push" findings. The default is now
+  `/pr-reviewer` → `/tidy` → two conditional UI steps → `/pr-creator` → `/pr-babysitter`, and
+  the order is pinned by a test.
+
+  **This changes behaviour on every launch.** A setup that pinned its own `.skills` or
+  `CAPTAIN_SKILLS` is unaffected.
+
+  A pipeline entry may now be a plain-English instruction instead of a `/skill` token; it
+  renders verbatim as its own numbered step. That is how a step becomes conditional — the two
+  new UI steps run only when the diff touches user-facing UI or a rendered page — with no
+  `when` schema and no condition evaluator.
+
+  `"$defaults"` in `.skills` (or `CAPTAIN_SKILLS`) now expands in place to the built-in
+  pipeline, so you can extend it instead of silently replacing it. Without the token a
+  non-empty list still replaces, as before.
+
+### Patch Changes
+
+- 08dc6ee: Fix three CLI defects found by a developer-experience audit.
+
+  **`captain install` told new users to run a command that does not exist.** Its
+  success line, the degraded-setup line, the empty-fleet hint in `status`, and a
+  worktree-recovery note all said `captain fanout …`. There is no `fanout`
+  subcommand — and typing it did not error. `withImplicitStart` only guarded a
+  single bare word, so `captain fanout TIG-430` was treated as a free-form task and
+  launched an agent in the user's current directory, overwriting that checkout's
+  `.captain/rubric.md`. The same hole made `captain aprove tig-430` start an agent
+  instead of suggesting `approve`. A bare word followed by issue tokens is now left
+  for commander, which errors and names the near miss.
+
+  **`--json` did not always emit JSON.** Commander's own parse failures (unknown
+  command, unknown option, missing argument) never reach an action handler, so they
+  bypassed the documented error envelope: `captain approve --json` wrote prose to
+  stderr and left a driver's `JSON.parse` with empty stdout. Those failures now emit
+  `{"error":{"message","type"}}` on stdout with the human hint still on stderr.
+
+  **`--interval` accepted anything.** `captain status --watch --interval abc`
+  silently fell back to 5 seconds. It now fails at the boundary and names the value.
+
+  **Usage errors all exit 2 now.** `errors.ts` documents `EXIT.USAGE = 2` so a
+  driver can branch on the number, but only some paths used it: a bad flag
+  combination exited 2 while a missing argument or unknown command exited 1.
+  Commander's parse failures now map to the same code as every other usage error.
+
+  Also: the doctor checked `Node >= 22` while `engines.node` required `>=24`, so a
+  Node 22 machine passed setup and then failed to install. One constant now, pinned
+  to `engines` by a test. `reject --json` no longer emits `undelivered`, which was
+  hardcoded `[]` and unreachable since rejection became fail-closed.
+
 ## 1.0.0
 
 ### Major Changes
