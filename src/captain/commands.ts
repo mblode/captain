@@ -219,6 +219,26 @@ const badRef = (message: string): CliError =>
 const badOptions = (message: string): CliError =>
   new CliError(message, EXIT.USAGE, "BAD_OPTIONS");
 
+// argv-shape validation for --interval, next to the combination checks below so
+// status options have ONE validator. Exported for cli.ts, which holds the raw
+// string; naming that string is the whole point, since silently falling back to
+// the default on `--interval 3O` leaves the user watching at 5s forever with
+// nothing to notice.
+export const parseInterval = (raw: string | undefined): number | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+  // Number, not parseFloat: parseFloat("3O") is 3, so a typo'd letter silently
+  // became a different interval instead of an error.
+  const seconds = Number(raw);
+  if (!(Number.isFinite(seconds) && seconds > 0)) {
+    throw badOptions(
+      `--interval must be a positive number of seconds (got "${raw}")`
+    );
+  }
+  return seconds;
+};
+
 const validateStatusOptions = (options: StatusOptions): void => {
   if (options.needs && options.ready) {
     throw badOptions("--needs and --ready cannot be used together");

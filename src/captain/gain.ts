@@ -247,21 +247,36 @@ const launchBefore = (
 // context. What it leaves out is reported, never silently dropped.
 const ROSTER_MAX = 50;
 
-// The newest decision at or after a launch — the mirror of launchBefore, used to
-// attach "what did the human decide about this run" to the launch it followed.
-// A decision before the launch belongs to an earlier run of the same ticket.
-const decisionAfter = (
+// Attach each decision to the launch it followed, keyed by name+launch time.
+//
+// Built by walking DECISIONS and asking launchBefore which launch owns each one
+// — the same rule the latency metrics use, so the two can never disagree. The
+// obvious inverse (per launch, take the newest decision at or after it) is
+// wrong: it has no upper bound, so on the reject→relaunch cycle `reject` exists
+// to drive (launch, reject, launch, approve) the FIRST launch also matches the
+// second launch's approval, and the rejection disappears from the roster.
+// One launch's identity in that map. NUL joins the parts: it cannot occur in a
+// ticket name, so no name can forge another launch's key. Defined once — the
+// builder and the reader must agree.
+const launchKey = (name: string, ts: number): string => `${name}\u0000${ts}`;
+
+const decisionsByLaunch = (
   decisions: LogRecord[],
-  name: string,
-  launchedAt: number
-): LogRecord | undefined => {
-  let best: LogRecord | undefined;
+  launches: LogRecord[]
+): Map<string, LogRecord> => {
+  const byLaunch = new Map<string, LogRecord>();
   for (const d of decisions) {
-    if (d.name === name && d.ts >= launchedAt && (!best || d.ts > best.ts)) {
-      best = d;
+    const launched = launchBefore(launches, d.name, d.ts);
+    if (launched === undefined) {
+      continue;
+    }
+    const key = launchKey(d.name, launched);
+    const prev = byLaunch.get(key);
+    if (!prev || d.ts > prev.ts) {
+      byLaunch.set(key, d);
     }
   }
-  return best;
+  return byLaunch;
 };
 
 // PURE: the per-ticket roster — the detail the tallies are computed from, kept
@@ -276,12 +291,13 @@ const rosterOf = (
   inWindow: (ts: number) => boolean
 ): { entries: RosterEntry[]; dropped: number } => {
   const byName = new Map(rows.map((r) => [r.name, r]));
+  const byLaunch = decisionsByLaunch(decisions, launches);
   const windowed = launches
     .filter((l) => inWindow(l.ts))
     .toSorted((a, b) => b.ts - a.ts);
   const entries = windowed.slice(0, ROSTER_MAX).map((l) => {
     const row = byName.get(l.name);
-    const decision = decisionAfter(decisions, l.name, l.ts);
+    const decision = byLaunch.get(launchKey(l.name, l.ts));
     const entry: RosterEntry = {
       launchedAt: l.ts,
       live: row !== undefined,

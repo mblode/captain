@@ -3,10 +3,16 @@ import { readFileSync } from "node:fs";
 
 import { Command, CommanderError, Option } from "commander";
 
-import { approve, gain, reject, status } from "./captain/commands";
+import {
+  approve,
+  gain,
+  parseInterval,
+  reject,
+  status,
+} from "./captain/commands";
 import { install } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
-import { CliError } from "./errors";
+import { CliError, EXIT } from "./errors";
 import { withImplicitStart } from "./route";
 import { runStart } from "./runner";
 
@@ -154,26 +160,6 @@ program
     process.exitCode = install(process.stdout);
   });
 
-// argv-shape validation lives here, at the boundary where the raw string still
-// exists to name in the error; commands.ts owns the semantic checks (which flag
-// combinations make sense). Silently falling back to the default on a typo —
-// `--interval 3O` with a letter O — leaves the user watching at 5s forever with
-// nothing to notice.
-const parseInterval = (raw: string | undefined): number | undefined => {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const seconds = Number.parseFloat(raw);
-  if (!(Number.isFinite(seconds) && seconds > 0)) {
-    throw new CliError(
-      `--interval must be a positive number of seconds (got "${raw}")`,
-      1,
-      "USAGE"
-    );
-  }
-  return seconds;
-};
-
 program
   .command("status")
   .description(
@@ -313,7 +299,9 @@ const main = async (): Promise<void> => {
             `${JSON.stringify({ error: { message: error.message, type: error.code } })}\n`
           );
         }
-        process.exitCode = error.exitCode || 1;
+        // a parse failure IS a usage error; commander defaults to 1, which
+        // would give a driver two different codes for one class.
+        process.exitCode = EXIT.USAGE;
         return;
       }
       process.exitCode = error.exitCode;

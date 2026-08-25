@@ -547,6 +547,29 @@ describe("computeGain roster", () => {
     expect(m.roster.entries).toEqual([]);
   });
 
+  // The reject->relaunch cycle `captain reject` exists to drive. Attributing by
+  // "newest decision after this launch" gave the FIRST launch the SECOND
+  // launch's approval, so the rejection vanished and the driver reported a run
+  // as approved that had been sent back.
+  it("gives a relaunched ticket's earlier run its own decision", () => {
+    const m = computeGain(
+      input({
+        log: [
+          { kind: "launch", name: "frontyard-tig-1", ts: NOW - 400 },
+          decision({ kind: "reject", note: "wrong scope", ts: NOW - 300 }),
+          { kind: "launch", name: "frontyard-tig-1", ts: NOW - 200 },
+          decision({ kind: "approve", note: "looks good", ts: NOW - 100 }),
+        ],
+      })
+    );
+    expect(
+      m.roster.entries.map((e) => [e.launchedAt, e.decision, e.note])
+    ).toEqual([
+      [NOW - 200, "approve", "looks good"],
+      [NOW - 400, "reject", "wrong scope"],
+    ]);
+  });
+
   it("attaches only a decision at or after the launch", () => {
     const m = computeGain(
       input({

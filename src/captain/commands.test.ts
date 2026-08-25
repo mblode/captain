@@ -6,10 +6,17 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CliError } from "../errors";
+import { CliError, EXIT } from "../errors";
 import { renderRubric } from "../rubric";
 import { runRequired } from "../shell";
-import { approve, gain, reject, resolveTargets, status } from "./commands";
+import {
+  approve,
+  gain,
+  parseInterval,
+  reject,
+  resolveTargets,
+  status,
+} from "./commands";
 import type {
   CmuxFeedItem,
   CmuxPort,
@@ -1204,5 +1211,38 @@ describe("stateless approve/reject/status over the real surface", () => {
     expect(rendered).toContain("Captain — gain");
     expect(rendered).toContain("LIVE SNAPSHOT");
     expect(rendered).toContain("ledger");
+  });
+});
+
+// Was unreachable from a test while it lived in cli.ts, which runs main() on
+// import. `--interval abc` used to fall back to 5s in silence.
+describe("parseInterval", () => {
+  it("passes a positive number through", () => {
+    expect(parseInterval("2.5")).toBe(2.5);
+  });
+
+  it("returns undefined when the flag is absent", () => {
+    // eslint-disable-next-line unicorn/no-useless-undefined -- the absent-flag case IS the argument under test
+    expect(parseInterval(undefined)).toBeUndefined();
+  });
+
+  it.each(["abc", "3O", "0", "-1", "NaN", ""])(
+    "rejects %o and names the value",
+    (raw) => {
+      expect(() => parseInterval(raw)).toThrow(
+        /--interval must be a positive/u
+      );
+      expect(() => parseInterval(raw)).toThrow(new RegExp(`got "${raw}"`, "u"));
+    }
+  );
+
+  it("is a usage error, like every other bad status option", () => {
+    try {
+      parseInterval("abc");
+      expect.unreachable();
+    } catch (error) {
+      expect((error as CliError).exitCode).toBe(EXIT.USAGE);
+      expect((error as CliError).errorType).toBe("BAD_OPTIONS");
+    }
   });
 });

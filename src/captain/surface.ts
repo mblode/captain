@@ -50,16 +50,19 @@ const TITLE_LINE = /^- Title: (.+)$/mu;
 export const readRubricFacts = (
   cwd: string
 ): { hash?: string; title?: string } => {
-  let text: string;
   try {
-    text = readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8");
+    const text = readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8");
+    return {
+      hash: rubricHash(rubricBody(text)),
+      title: TITLE_LINE.exec(text)?.[1].trim() || undefined,
+    };
   } catch {
+    // Everything derived from the file stays inside the guard, not just the
+    // read: this is the one fs edge the whole fleet view runs through, so a
+    // throw here would take down status/gain/approve/reject for every worktree
+    // instead of degrading the one row that could not be read.
     return {};
   }
-  return {
-    hash: rubricHash(rubricBody(text)),
-    title: TITLE_LINE.exec(text)?.[1].trim() || undefined,
-  };
 };
 
 // A captain-managed worktree is exactly one with a `.captain/` dir (fanout
