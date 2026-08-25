@@ -477,3 +477,125 @@ describe("parseSince", () => {
     expect(parseSince("not-a-date", NOW)).toBeUndefined();
   });
 });
+
+describe("computeGain roster", () => {
+  it("joins a launch to its live row and its decision", () => {
+    const m = computeGain(
+      input({
+        log: [
+          { kind: "launch", name: "frontyard-tig-1", ts: NOW - 3600 },
+          decision({ note: "scoped tightly", ts: NOW - 1800 }),
+        ],
+        rows: [
+          row({
+            group: "ready",
+            prUrl: "https://gh/pr/1",
+            repo: "frontyard",
+            summary: "all criteria pass",
+            title: "Fix the Pulse recommendation copy",
+            verdict: "pass",
+          }),
+        ],
+      })
+    );
+    expect(m.roster.entries).toEqual([
+      {
+        decidedAt: NOW - 1800,
+        decision: "approve",
+        group: "ready",
+        launchedAt: NOW - 3600,
+        live: true,
+        name: "frontyard-tig-1",
+        note: "scoped tightly",
+        prUrl: "https://gh/pr/1",
+        repo: "frontyard",
+        summary: "all criteria pass",
+        title: "Fix the Pulse recommendation copy",
+        verdict: "pass",
+      },
+    ]);
+    expect(m.roster.dropped).toBe(0);
+  });
+
+  // The point of driving the roster off the ledger: "all the work that was done"
+  // is mostly work whose worktree is already merged and removed.
+  it("keeps a finished worktree, degraded to its ledger half", () => {
+    const m = computeGain(
+      input({
+        log: [
+          { kind: "launch", name: "frontyard-tig-9", ts: NOW - 7200 },
+          decision({ name: "frontyard-tig-9", ts: NOW - 7000 }),
+        ],
+        rows: [],
+      })
+    );
+    expect(m.roster.entries).toEqual([
+      {
+        decidedAt: NOW - 7000,
+        decision: "approve",
+        launchedAt: NOW - 7200,
+        live: false,
+        name: "frontyard-tig-9",
+      },
+    ]);
+  });
+
+  // A live worktree launched before launch-logging existed has no ledger entry.
+  // Inventing a roster row for it would fabricate a launch time.
+  it("never fabricates an entry for a row with no launch record", () => {
+    const m = computeGain(input({ log: [], rows: [row()] }));
+    expect(m.roster.entries).toEqual([]);
+  });
+
+  it("attaches only a decision at or after the launch", () => {
+    const m = computeGain(
+      input({
+        log: [
+          // a decision from an EARLIER run of the same ticket
+          decision({ ts: NOW - 9000 }),
+          { kind: "launch", name: "frontyard-tig-1", ts: NOW - 3600 },
+        ],
+      })
+    );
+    expect(m.roster.entries[0].decision).toBeUndefined();
+    expect(m.roster.entries[0].launchedAt).toBe(NOW - 3600);
+  });
+
+  it("orders newest first and windows with --since", () => {
+    const m = computeGain(
+      input({
+        log: [
+          { kind: "launch", name: "old", ts: NOW - 5 * DAY },
+          { kind: "launch", name: "mid", ts: NOW - 2 * DAY },
+          { kind: "launch", name: "new", ts: NOW - 60 },
+        ],
+        since: NOW - 3 * DAY,
+      })
+    );
+    expect(m.roster.entries.map((e) => e.name)).toEqual(["new", "mid"]);
+  });
+
+  // AGENTS.md: no silent caps — what the bound leaves out is reported.
+  it("caps the roster and reports what it dropped", () => {
+    const m = computeGain(
+      input({
+        log: Array.from({ length: 60 }, (_, i) => ({
+          kind: "launch" as const,
+          name: `t-${i}`,
+          ts: NOW - i * 60,
+        })),
+      })
+    );
+    expect(m.roster.entries).toHaveLength(50);
+    expect(m.roster.dropped).toBe(10);
+    // newest first, so the oldest ten are the ones left out
+    expect(m.roster.entries[0].name).toBe("t-0");
+  });
+
+  it("names the ledger-vs-snapshot split in the caveats", () => {
+    const m = computeGain(input());
+    expect(m.caveats.join("\n")).toContain(
+      "title, group, verdict and prUrl are a live snapshot"
+    );
+  });
+});

@@ -29,18 +29,37 @@ export const readVerdict = (cwd: string): Verdict | null => {
   }
 };
 
-// Thin fs edge: recompute the hash a legitimate verdict must cite, from the
-// rubric file as it exists NOW — so editing the criteria after the fact breaks
-// the match. Undefined when no rubric was written: nothing to check against,
-// so the verdict's hash is accepted as-is.
-export const expectedRubricHash = (cwd: string): string | undefined => {
+// The ticket title `rubric.ts` writes into the rubric's issue-context block.
+// Matched at LINE START (`m` flag), never with indexOf: the rubric embeds the
+// issue *description* verbatim below this, so an unanchored match can return a
+// line the issue's author wrote. Same lesson as `headingAt` in memory.ts.
+const TITLE_LINE = /^- Title: (.+)$/mu;
+
+// Thin fs edge: ONE read of the rubric, two facts derived from it.
+//
+//   hash  — what a legitimate verdict must cite, recomputed from the file as it
+//           exists NOW, so editing the criteria after the fact breaks the match.
+//           Undefined when no rubric was written: nothing to check against, so
+//           the verdict's hash is accepted as-is.
+//   title — the ticket's subject, so a row reads as more than `linkiq-tig-1229`.
+//           Undefined for a free-form dispatch (no issue, no title line).
+//
+// Both undefined when the file is missing or unreadable. Kept as one function
+// because two exported readers of the same file would drift and double the I/O
+// on every status/gain call, once per worktree.
+export const readRubricFacts = (
+  cwd: string
+): { hash?: string; title?: string } => {
+  let text: string;
   try {
-    return rubricHash(
-      rubricBody(readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8"))
-    );
+    text = readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8");
   } catch {
-    return undefined;
+    return {};
   }
+  return {
+    hash: rubricHash(rubricBody(text)),
+    title: TITLE_LINE.exec(text)?.[1].trim() || undefined,
+  };
 };
 
 // A captain-managed worktree is exactly one with a `.captain/` dir (fanout
@@ -65,17 +84,19 @@ export const fleetRows = (
     pickAgentWorkspaces(
       port.listWorkspaces().filter((w) => isManaged(w.cwd)),
       runs
-    ).map((w) =>
-      rowOf({
+    ).map((w) => {
+      const rubric = readRubricFacts(w.cwd);
+      return rowOf({
         cwd: w.cwd,
-        expectedHash: expectedRubricHash(w.cwd),
+        expectedHash: rubric.hash,
         fallbackName: w.name,
         feed,
         repo: repoLabel(w.cwd, env),
         run: runs[w.id.toLowerCase()] ?? "unknown",
+        title: rubric.title,
         verdict: readVerdict(w.cwd),
         workspaceId: w.id,
-      })
-    )
+      });
+    })
   );
 };

@@ -90,6 +90,7 @@ them in control.
 | "approve all plans" | `captain approve <ticket> --note "<the card's recommendation>"`, one call per gate so each carries its own card. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
 | "send 404 back: don't touch auth" | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace |
 | "what's verified" | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging |
+| "what's been done" / "what's left" / "what are these PRs" | `captain gain --json`, read `roster` — one entry per launch, newest first. `verdict: "pass"` + a `prUrl` is done; `group: "needs-you"` is on the human; `live: false` is a worktree already merged and removed (it keeps its launch and decision, loses title/verdict/PR). Then `/eli5` it. `roster.dropped > 0` means narrow with `--since 24h`. Do **not** reconstruct this from scrollback or `read-screen` |
 | "this one's gone quiet" | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge |
 | "distill the learnings" | Edit `~/.claude/captain/memory/<repo>/learnings.md` — promote held-up Inbox bullets to `## Rules`, cut slop; `~/.claude/captain/log.jsonl` has approve/reject notes |
 

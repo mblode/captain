@@ -40,7 +40,7 @@ src/
   captain/
     view.ts         # 100% PURE (lint-enforced): identity, pendingGate (feed → gate), rowOf (the grouping rule), mergeOrderHints. Start here.
     verdict.ts      # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
-    surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
+    surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts + readRubricFacts (hash + ticket title, ONE read)
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
     commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
     gain.ts         # 100% PURE: computeGain (decisions + launch ledger + live fleet snapshot + verdict tallies → metrics incl. launch→detection latency); the gain command's fs/cmux edge lives in commands.ts
@@ -179,6 +179,16 @@ at least one noted approval — a pre-`--note` history carries no rationale by c
 reporting all of it as unexplained would be a false alarm dressed as a metric (same "no sample ⇒
 omit" rule as `latency`). It measures whether the review step ran, never plan quality; the caveat
 says so.
+
+`gain.roster` is the per-ticket detail behind those tallies — the answer to "what got done and
+what's left", which nothing could answer before: `status` is live-only (a merged worktree leaves
+the view) and `gain` reported only aggregates. It reuses the join `computeGain` already performs
+for latency, keeping the rows instead of collapsing them. Driven off **launches**, not off live
+rows: the ledger is the only gap-free history, so a removed worktree still appears — degraded to
+name + `launchedAt` + decision, with `live: false` and no title/verdict/PR. That split is stated
+in its own caveat, because the entry mixes ledger truth with a live snapshot. Newest first,
+windowed by `--since`, capped at `ROSTER_MAX` with the remainder in `dropped` (no silent caps).
+The prose belongs to `/eli5`, not to captain — the roster ships material, not sentences.
 
 ## The verdict gate & fleet memory (the agent-side loops)
 

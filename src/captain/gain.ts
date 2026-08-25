@@ -8,7 +8,7 @@
 import type { LogRecord } from "./log";
 import type { Verdict } from "./verdict";
 import { groupCounts } from "./view";
-import type { FleetRow } from "./view";
+import type { FleetRow, Group } from "./view";
 
 // What commands.ts hands computeGain. `now`/`since` are epoch SECONDS to match
 // log.ts (LogRecord.ts and verdict.ts are both seconds). `since` is injected so
@@ -41,6 +41,30 @@ export interface LatencyStats {
   count: number;
   medianSec: number;
   maxSec: number;
+}
+
+// One launched ticket, joined across captain's two sources. `launchedAt` and the
+// decision come from log.jsonl (gap-free history, survives worktree removal);
+// `title`/`group`/`verdict`/`summary`/`prUrl` are a LIVE read and exist only
+// while the worktree does. A finished worktree therefore degrades to name +
+// launch + decision rather than disappearing — which is the whole point, since
+// "what was done" is mostly work whose worktree is already gone.
+export interface RosterEntry {
+  // ${repo}-${ticket} — the ledger's join key, and the row's display name
+  name: string;
+  launchedAt: number;
+  decision?: "approve" | "reject";
+  decidedAt?: number;
+  // the reasoning recorded with the decision, when --note was used
+  note?: string;
+  // still a live cmux workspace? false once the worktree is removed
+  live: boolean;
+  repo?: string;
+  title?: string;
+  group?: Group;
+  verdict?: "pass" | "fail";
+  summary?: string;
+  prUrl?: string;
 }
 
 export interface GainMetrics {
@@ -79,6 +103,10 @@ export interface GainMetrics {
   merged?: { repo: string; count: number }[];
   // launch→detection latency; omitted entirely when no sample joins
   latency?: { toDecision?: LatencyStats; toVerdict?: LatencyStats };
+  // per-ticket detail behind the tallies: what launched, what was decided, what
+  // the verifier said, which PRs exist. `dropped` is how many older launches the
+  // cap left out — never a silent truncation.
+  roster: { entries: RosterEntry[]; dropped: number };
   // ALWAYS present — the honesty contract. These caveats name exactly what each
   // metric is and is not, so a reader (human or skill) never over-reads a live
   // snapshot as a trend.
@@ -162,6 +190,7 @@ const caveatsFor = (input: GainInput): string[] => {
     "verdict pass/fail is a live read of each worktree's verdict.json — overwritten per worktree, so it is not a historical ledger",
     "operation-level throughput (e.g. 'ops/day') is NOT recorded by design — captain keeps no event stream",
     "latency joins launch→decision/verdict records by name — decisions predating launch logging (or a cleared ledger) carry no sample",
+    "roster launches and decisions are ledger history; title, group, verdict and prUrl are a live snapshot — a finished worktree keeps its launch and decision but loses the rest",
     "launch→verdict latency is a live read of current verdict files, not a ledger",
   ];
   if (approvalsAreNoted(input.log)) {
@@ -211,6 +240,71 @@ const launchBefore = (
     }
   }
   return best;
+};
+
+// How many launches the roster carries. Enough to cover a long fan-out session,
+// bounded so a months-old ledger cannot return thousands of entries to a driver's
+// context. What it leaves out is reported, never silently dropped.
+const ROSTER_MAX = 50;
+
+// The newest decision at or after a launch — the mirror of launchBefore, used to
+// attach "what did the human decide about this run" to the launch it followed.
+// A decision before the launch belongs to an earlier run of the same ticket.
+const decisionAfter = (
+  decisions: LogRecord[],
+  name: string,
+  launchedAt: number
+): LogRecord | undefined => {
+  let best: LogRecord | undefined;
+  for (const d of decisions) {
+    if (d.name === name && d.ts >= launchedAt && (!best || d.ts > best.ts)) {
+      best = d;
+    }
+  }
+  return best;
+};
+
+// PURE: the per-ticket roster — the detail the tallies are computed from, kept
+// instead of thrown away. Driven off LAUNCHES, not off live rows: the ledger is
+// the only gap-free history, so a worktree that has been merged and removed
+// still appears. Newest first, windowed like the decisions, capped with the
+// remainder reported.
+const rosterOf = (
+  launches: LogRecord[],
+  decisions: LogRecord[],
+  rows: FleetRow[],
+  inWindow: (ts: number) => boolean
+): { entries: RosterEntry[]; dropped: number } => {
+  const byName = new Map(rows.map((r) => [r.name, r]));
+  const windowed = launches
+    .filter((l) => inWindow(l.ts))
+    .toSorted((a, b) => b.ts - a.ts);
+  const entries = windowed.slice(0, ROSTER_MAX).map((l) => {
+    const row = byName.get(l.name);
+    const decision = decisionAfter(decisions, l.name, l.ts);
+    const entry: RosterEntry = {
+      launchedAt: l.ts,
+      live: row !== undefined,
+      name: l.name,
+    };
+    if (decision) {
+      entry.decision = decision.kind === "reject" ? "reject" : "approve";
+      entry.decidedAt = decision.ts;
+      if (noted(decision)) {
+        entry.note = decision.note;
+      }
+    }
+    if (row) {
+      entry.group = row.group;
+      entry.prUrl = row.prUrl;
+      entry.repo = row.repo;
+      entry.summary = row.summary;
+      entry.title = row.title;
+      entry.verdict = row.verdict;
+    }
+    return entry;
+  });
+  return { dropped: windowed.length - entries.length, entries };
 };
 
 // PURE: the whole decisions block over the already-windowed decisions. The
@@ -347,6 +441,7 @@ export const computeGain = (input: GainInput): GainMetrics => {
     },
     ...(latency ? { latency } : {}),
     ...(input.merged ? { merged: input.merged } : {}),
+    roster: rosterOf(launches, decisions, input.rows, inWindow),
     verdicts: { fail, failingCriteria, openPrs, pass },
   };
 };

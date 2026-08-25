@@ -6,8 +6,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { renderRubric } from "../rubric";
+import type { Issue } from "../types";
 // The fs readers live in surface.ts so verdict.ts stays pure.
-import { expectedRubricHash, readVerdict } from "./surface";
+import { readRubricFacts, readVerdict } from "./surface";
 import { parseVerdict, verdictCounts } from "./verdict";
 import type { Verdict } from "./verdict";
 
@@ -168,7 +169,7 @@ describe("the fs round trip (rubric on disk → verdict → hash check)", () => 
     );
     const v = readVerdict(cwd);
     expect(v).not.toBeNull();
-    expect(v && verdictCounts(v, expectedRubricHash(cwd))).toBe(true);
+    expect(v && verdictCounts(v, readRubricFacts(cwd).hash)).toBe(true);
   });
 
   it("editing the rubric after the verdict voids it", () => {
@@ -182,7 +183,7 @@ describe("the fs round trip (rubric on disk → verdict → hash check)", () => 
       "# Definition of done — TIG-430\n\nweakened criteria\n"
     );
     const v = readVerdict(cwd);
-    expect(v && verdictCounts(v, expectedRubricHash(cwd))).toBe(false);
+    expect(v && verdictCounts(v, readRubricFacts(cwd).hash)).toBe(false);
   });
 
   it("a missing verdict file reads as no verdict", () => {
@@ -193,6 +194,60 @@ describe("the fs round trip (rubric on disk → verdict → hash check)", () => 
   it("a missing rubric leaves the hash unchecked", () => {
     const cwd = mkdtempSync(join(tmpdir(), "captain-verdict-"));
     cleanup.push(cwd);
-    expect(expectedRubricHash(cwd)).toBeUndefined();
+    expect(readRubricFacts(cwd).hash).toBeUndefined();
+  });
+});
+
+// Driven through the REAL renderRubric, never hand-built text: memory.ts's
+// headingAt bug survived for months precisely because every fixture was
+// hand-written with no preamble around the thing being matched.
+describe("readRubricFacts title", () => {
+  const cleanup: string[] = [];
+  afterEach(async () => {
+    for (const path of cleanup.splice(0)) {
+      await rm(path, { force: true, recursive: true });
+    }
+  });
+
+  const worktreeFor = (issue?: Issue): string => {
+    const cwd = mkdtempSync(join(tmpdir(), "captain-rubric-"));
+    cleanup.push(cwd);
+    mkdirSync(join(cwd, ".captain"));
+    writeFileSync(
+      join(cwd, ".captain", "rubric.md"),
+      renderRubric(issue, "TIG-430").text
+    );
+    return cwd;
+  };
+
+  it("reads the ticket title a real rubric carries", () => {
+    const cwd = worktreeFor({
+      criteria: [],
+      description: "body",
+      identifier: "TIG-430",
+      title: "LinkCoach hedges the Pulse recommendation",
+    });
+    expect(readRubricFacts(cwd).title).toBe(
+      "LinkCoach hedges the Pulse recommendation"
+    );
+  });
+
+  // The rubric embeds the issue description VERBATIM below the context block, so
+  // a rubric can hold two "- Title:" lines. Today the context block comes first
+  // and first-match wins; this pins that, so reordering the rubric (or matching
+  // without the ^ anchor, which would also catch an indented or suffixed line)
+  // fails here instead of silently retitling every row.
+  it("ignores a '- Title:' line inside the issue description", () => {
+    const cwd = worktreeFor({
+      criteria: [],
+      description: "Repro steps:\n- Title: not the ticket title\n- open /app",
+      identifier: "TIG-430",
+      title: "The real one",
+    });
+    expect(readRubricFacts(cwd).title).toBe("The real one");
+  });
+
+  it("has no title for a free-form dispatch", () => {
+    expect(readRubricFacts(worktreeFor()).title).toBeUndefined();
   });
 });

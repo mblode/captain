@@ -40,6 +40,10 @@ export interface FleetRow {
   // the verifier's one-line summary, when a verdict exists
   summary?: string;
   prUrl?: string;
+  // the ticket's subject, read from the worktree's rubric — so a row reads as
+  // more than `linkiq-tig-1229`. Absent for a free-form dispatch (no issue) and
+  // for any worktree whose rubric is gone.
+  title?: string;
   group: Group;
   // the single executable next-action for this row (the same command the TTY
   // renderer leads with) — so a driver consuming --json acts without parsing
@@ -150,6 +154,8 @@ export interface RowInput {
   // the rubric's hash as it exists NOW — editing criteria after the verdict
   // voids it (undefined = no rubric on disk, accept the verdict as-is)
   expectedHash?: string;
+  // the ticket's subject, from the same rubric read as expectedHash
+  title?: string;
 }
 
 // PURE: the single executable next-action for a row, matching what the TTY
@@ -219,6 +225,7 @@ export const rowOf = (input: RowInput): FleetRow => {
     run: input.run,
     stateHash: "",
     summary: verdict?.summary,
+    title: input.title,
     verdict: verdict?.verdict,
     workspaceId: input.workspaceId,
     ...identityOf(input.cwd, input.fallbackName, input.repo),
