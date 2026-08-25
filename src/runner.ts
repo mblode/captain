@@ -158,7 +158,7 @@ export const collapsedWorktreeNotes = (
     .filter((p) => !owned(p))
     .map(
       (p) =>
-        `note: ${basename(p)} has no dedicated cmux workspace — its agent likely attached to an existing window. Close that window, then re-run: captain fanout ${ticketFrom(basename(p))?.toUpperCase() ?? basename(p)}`
+        `note: ${basename(p)} has no dedicated cmux workspace — its agent likely attached to an existing window. Close that window, then re-run: captain ${ticketFrom(basename(p))?.toUpperCase() ?? basename(p)}`
     );
 };
 
@@ -943,8 +943,10 @@ const dispatch = (args: DispatchArgs): Promise<number> =>
 
 // The worktree fan-out path: one worktree + cmux workspace per issue token. Each
 // token routes to its own source in prepareIssueData (Linear id/URL or donebear task
-// URL/UUID), so a single invocation can mix both.
-export const runLinearWorktree = async (
+// URL/UUID), so a single invocation can mix both. Named for the ISSUE, not for any
+// one source — source.ts exists precisely so nothing downstream knows which one
+// claimed the token, and this entry point used to be the one place that leaked it.
+export const runIssueWorktree = async (
   options: CliOptions
 ): Promise<number> => {
   const cwd = options.cwd ?? process.cwd();
@@ -1079,7 +1081,7 @@ export const runDispatch = async (
 
 // The single entry point behind `captain start`: route to the issue worktree
 // fan-out (Linear or donebear) or the free-form current-dir dispatch by
-// inspecting the first token. Empty tokens fall through to runLinearWorktree,
+// inspecting the first token. Empty tokens fall through to runIssueWorktree,
 // which reads stdin then errors.
 export const runStart = (
   options: CliOptions & { name?: string }
@@ -1099,5 +1101,5 @@ export const runStart = (
       task: options.tokens.join(" "),
     });
   }
-  return runLinearWorktree(options);
+  return runIssueWorktree(options);
 };

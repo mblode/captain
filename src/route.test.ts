@@ -70,3 +70,27 @@ describe("withImplicitStart", () => {
     expect(route()).toEqual(argv());
   });
 });
+
+// A wrong guess that mutates state is worse than the error: splicing `start`
+// here would launch an agent on a nonsense free-form task in the user's cwd.
+// This shape reached `captain install`'s own success hint ("captain fanout
+// TIG-430"), so the first thing a new user pasted started a bogus worktree.
+describe("typo'd subcommand followed by tickets", () => {
+  it.each([
+    ["aprove", "tig-430"],
+    ["fanout", "TIG-430"],
+    ["rejct", "tig-1"],
+  ])("leaves `captain %s %s` for commander to reject", (typo, ticket) => {
+    expect(route(typo, ticket)).toEqual(argv(typo, ticket));
+  });
+
+  it("still splices a multi-word task that names no tickets", () => {
+    expect(route("tidy", "the", "readme")).toEqual(
+      argv("start", "tidy", "the", "readme")
+    );
+  });
+
+  it("still splices real issue tokens", () => {
+    expect(route("tig-1", "tig-2")).toEqual(argv("start", "tig-1", "tig-2"));
+  });
+});

@@ -4,7 +4,7 @@ import type { Issue, ParsedIssue } from "./types";
 const issueIdPattern = "[A-Za-z][A-Za-z0-9_]*-[0-9]+";
 const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");
 
-export const isIssueId = (value: string): boolean => issueIdRegex.test(value);
+const isIssueId = (value: string): boolean => issueIdRegex.test(value);
 
 // A start token is Linear work if it's a bare issue id (TIG-430) or a Linear
 // URL; anything else is a free-form task. Shared by runStart's routing and the

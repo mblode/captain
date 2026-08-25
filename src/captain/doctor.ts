@@ -47,16 +47,21 @@ const PIPELINE_BUNDLE = "mblode/agent-skills";
 const CAPTAIN_BUNDLE = "mblode/captain";
 const addCmd = (bundle: string): string => `npx skills add ${bundle} -g`;
 
+// The floor npm enforces at install time. MUST equal package.json `engines.node`
+// — a doctor that passes a version npm will refuse gives the user two contradictory
+// answers about the same machine. Pinned by a test in doctor.test.ts.
+export const NODE_MAJOR_MIN = 24;
+
 // Pure over its deps: the whole environment verdict as plain data, so the
 // renderer and the tests both work off the same list.
 export const buildChecks = (deps: DoctorDeps): Check[] => {
   const checks: Check[] = [
     {
       detail: deps.nodeVersion,
-      hint: "install Node >= 22 (e.g. via nvm or fnm)",
-      label: "Node >= 22",
+      hint: `install Node >= ${NODE_MAJOR_MIN} (e.g. via nvm or fnm)`,
+      label: `Node >= ${NODE_MAJOR_MIN}`,
       level: "required",
-      ok: deps.nodeMajor >= 22,
+      ok: deps.nodeMajor >= NODE_MAJOR_MIN,
     },
   ];
 
@@ -186,10 +191,10 @@ export const renderDoctor = (
     );
   } else if (checks.some((c) => !c.ok)) {
     lines.push(
-      msg.warn(s, "ready, with optional gaps — captain fanout will still run.")
+      msg.warn(s, "ready, with optional gaps — captain will still run.")
     );
   } else {
-    lines.push(msg.ok(s, "all set — captain fanout TIG-430 to begin."));
+    lines.push(msg.ok(s, "all set — captain TIG-430 to begin."));
   }
   return {
     exitCode: requiredMissing > 0 ? 1 : 0,

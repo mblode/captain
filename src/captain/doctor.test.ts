@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -9,6 +9,7 @@ import {
   buildChecks,
   install,
   missingBundles,
+  NODE_MAJOR_MIN,
   realDeps,
   renderDoctor,
 } from "./doctor";
@@ -21,8 +22,8 @@ const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   env: { LINEAR_API_KEY: "k" },
   hasCommand: () => true,
   installBundle: () => true,
-  nodeMajor: 22,
-  nodeVersion: "v22.0.0",
+  nodeMajor: NODE_MAJOR_MIN,
+  nodeVersion: `v${NODE_MAJOR_MIN}.0.0`,
   skillInstalled: () => true,
   ...over,
 });
@@ -47,8 +48,8 @@ describe("buildChecks", () => {
   });
 
   it("old Node fails the required Node check", () => {
-    const node = buildChecks(deps({ nodeMajor: 20 })).find(
-      (c) => c.label === "Node >= 22"
+    const node = buildChecks(deps({ nodeMajor: NODE_MAJOR_MIN - 1 })).find(
+      (c) => c.label === `Node >= ${NODE_MAJOR_MIN}`
     );
     expect(node?.ok).toBe(false);
     expect(node?.level).toBe("required");
@@ -210,5 +211,18 @@ describe("realDeps skill detection", () => {
     const probe = realDeps({ HOME: home } as NodeJS.ProcessEnv).skillInstalled;
     expect(probe("captain")).toBe(true);
     expect(probe("pr-creator")).toBe(false);
+  });
+});
+
+// The doctor's floor and npm's floor are the same number or the user gets two
+// contradictory answers about one machine: `captain install` says the node is
+// fine, then `npm i -g cmux-captain` refuses it with EBADENGINE.
+describe("NODE_MAJOR_MIN", () => {
+  it("matches package.json engines.node", () => {
+    const pkg = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf-8")
+    ) as { engines?: { node?: string } };
+    const declared = pkg.engines?.node ?? "";
+    expect(declared).toBe(`>=${NODE_MAJOR_MIN}`);
   });
 });

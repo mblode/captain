@@ -19,7 +19,7 @@ import { memoryPath } from "./memory";
 import {
   collapsedWorktreeNotes,
   runDispatch,
-  runLinearWorktree,
+  runIssueWorktree,
   runStart,
   uncappedJestNote,
 } from "./runner";
@@ -193,7 +193,7 @@ describe("runner integration", () => {
     cleanup.push(root);
     const output = captureWritable();
 
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
@@ -223,7 +223,7 @@ describe("runner integration", () => {
     const output = captureWritable();
     const env = safeEnv();
 
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env,
       print: true,
@@ -257,7 +257,7 @@ describe("runner integration", () => {
     cleanup.push(dir);
 
     await expect(
-      runLinearWorktree({
+      runIssueWorktree({
         cwd: dir,
         env: safeEnv(),
         print: true,
@@ -273,7 +273,7 @@ describe("runner integration", () => {
     delete env.LINEAR_API_KEY;
 
     await expect(
-      runLinearWorktree({ cwd: repo, env, print: true, tokens: ["TST-404"] })
+      runIssueWorktree({ cwd: repo, env, print: true, tokens: ["TST-404"] })
     ).rejects.toMatchObject({
       errorType: "ISSUE_FETCH_FAILED",
       message:
@@ -286,7 +286,7 @@ describe("runner integration", () => {
       ok: false,
     } as Response);
     await expect(
-      runLinearWorktree({
+      runIssueWorktree({
         cwd: repo,
         env: safeEnv(),
         print: true,
@@ -312,7 +312,7 @@ describe("runner integration", () => {
     );
 
     await expect(
-      runLinearWorktree({
+      runIssueWorktree({
         cwd: repo,
         env,
         print: true,
@@ -329,7 +329,7 @@ describe("runner integration", () => {
     cleanup.push(root);
 
     await expect(
-      runLinearWorktree({
+      runIssueWorktree({
         cwd: repo,
         env: safeEnv(),
         print: true,
@@ -348,7 +348,7 @@ describe("runner integration", () => {
     const { repo, root } = await createGitRepo("src");
     cleanup.push(root);
 
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
@@ -356,7 +356,7 @@ describe("runner integration", () => {
     });
 
     const output = captureWritable();
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
@@ -373,7 +373,7 @@ describe("runner integration", () => {
     const { repo, root } = await createGitRepo("src");
     cleanup.push(root);
 
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
@@ -384,7 +384,7 @@ describe("runner integration", () => {
     const worktree = join(root, "src-tst-123");
     await rm(worktree, { force: true, recursive: true });
 
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
@@ -416,7 +416,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
 
     const output = captureWritable();
     const errput = captureWritable();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: {
         ...safeEnv(),
@@ -496,7 +496,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
 
     const blocked = await setup();
     const output = captureWritable();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: blocked.repo,
       env: blocked.env,
       repoOverride: blocked.repo,
@@ -518,7 +518,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     // --force is the escape hatch: a stale or wrong edge can never wedge a run.
     const forced = await setup();
     const forcedOutput = captureWritable();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: forced.repo,
       env: forced.env,
       force: true,
@@ -569,7 +569,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     // One blocked ticket alone: there is no rest of the fan-out to carry on
     // with, so this is an error, not a silent zero-exit skip.
     const blocked = await setup();
-    const blockedError = await runLinearWorktree({
+    const blockedError = await runIssueWorktree({
       cwd: blocked.repo,
       env: blocked.env,
       repoOverride: blocked.repo,
@@ -592,7 +592,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
 
     // --force is the same escape hatch fan-out has.
     const forced = await setup();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: forced.repo,
       env: forced.env,
       force: true,
@@ -609,7 +609,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     // rule has no launch to refuse.
     const printed = await setup();
     const printOutput = captureWritable();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: printed.repo,
       env: printed.env,
       print: true,
@@ -622,7 +622,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
 
     // An unblocked single issue is untouched by any of this.
     const clear = await setup();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: clear.repo,
       env: clear.env,
       repoOverride: clear.repo,
@@ -640,13 +640,13 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     const binDir = await mkdtemp(join(tmpdir(), "lw-bin-"));
     cleanup.push(root, binDir);
 
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
       tokens: ["TST-1"],
     });
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       print: true,
@@ -680,7 +680,7 @@ fi
     );
 
     const output = captureWritable();
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env,
       json: true,
@@ -764,7 +764,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     const brokenHome = join(root, "not-a-dir");
     await writeFile(brokenHome, "");
 
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env: {
         ...safeEnv(),
@@ -797,7 +797,7 @@ printf '%s\\n' "$*" >> "$CMUX_LOG"
     );
     await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
 
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env: {
         ...safeEnv(),
@@ -866,7 +866,7 @@ fi
       WORKTREE: worktree,
     };
 
-    await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
+    await runIssueWorktree({ cwd: repo, env, tokens: ["TST-790"] });
     const rubricPath = join(worktree, ".captain", "rubric.md");
     await writeFile(rubricPath, "retry sentinel\n");
     const sourceFetchesBeforeRetry = vi.mocked(fetch).mock.calls.length;
@@ -878,7 +878,7 @@ fi
       { env }
     );
     const retryOutput = captureWritable();
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env,
       stdout: retryOutput.stream,
@@ -905,7 +905,7 @@ fi
 
     // --agent selects the agent for a NEW launch; it does not force a duplicate
     // while an exact-cwd tagged agent is still active.
-    await runLinearWorktree({
+    await runIssueWorktree({
       agent: "codex",
       cwd: repo,
       env,
@@ -921,7 +921,7 @@ fi
     // normal preparation must restore fleet membership before rejoining it.
     await rm(rubricPath);
     const sourceFetchesBeforeRepair = vi.mocked(fetch).mock.calls.length;
-    await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
+    await runIssueWorktree({ cwd: repo, env, tokens: ["TST-790"] });
     expect(vi.mocked(fetch).mock.calls).toHaveLength(
       sourceFetchesBeforeRepair + 1
     );
@@ -933,7 +933,7 @@ fi
 
     // A same-cwd shell with no cmux-top agent tag is stale, not reusable.
     await rm(active);
-    await runLinearWorktree({ cwd: repo, env, tokens: ["TST-790"] });
+    await runIssueWorktree({ cwd: repo, env, tokens: ["TST-790"] });
     const relaunchedLog = await readFile(log, "utf-8");
     expect(relaunchedLog.match(/new-workspace/gu)).toHaveLength(2);
     expect(
@@ -992,7 +992,7 @@ printf '%s\\n' "$*" >> "$CLAUDE_LOG"
 `
     );
 
-    const status = await runLinearWorktree({
+    const status = await runIssueWorktree({
       cwd: repo,
       env: {
         ...safeEnv(),
@@ -1052,7 +1052,7 @@ describe("start --json", () => {
     cleanup.push(root);
     const output = captureWritable();
 
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: safeEnv(),
       json: true,
@@ -1094,7 +1094,7 @@ exit 0
     await writeExecutable(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
 
     const output = captureWritable();
-    await runLinearWorktree({
+    await runIssueWorktree({
       cwd: repo,
       env: {
         ...safeEnv(),
@@ -1365,7 +1365,7 @@ describe("collapsedWorktreeNotes", () => {
     );
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain("chat-tig-488");
-    expect(notes[0]).toContain("captain fanout TIG-488");
+    expect(notes[0]).toContain("captain TIG-488");
   });
 });
 

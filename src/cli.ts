@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 
-import { Command, Option } from "commander";
+import { Command, CommanderError, Option } from "commander";
 
 import { approve, gain, reject, status } from "./captain/commands";
 import { install } from "./captain/doctor";
@@ -32,6 +32,16 @@ const packageJson = JSON.parse(
 ) as { version: string };
 
 const program = new Command();
+
+// MUST be called before any .command(): subcommands copy inherited settings at
+// creation time, so one registered earlier never gets the callback and keeps
+// calling process.exit() itself.
+//
+// Without this, commander's own parse failures (unknown command, unknown
+// option, missing argument) never reach an action handler and bypassed the JSON
+// contract below entirely: `captain approve --json` wrote prose to stderr and
+// left a driver's JSON.parse with an empty stdout.
+program.exitOverride();
 
 program
   .name("captain")
@@ -144,6 +154,26 @@ program
     process.exitCode = install(process.stdout);
   });
 
+// argv-shape validation lives here, at the boundary where the raw string still
+// exists to name in the error; commands.ts owns the semantic checks (which flag
+// combinations make sense). Silently falling back to the default on a typo —
+// `--interval 3O` with a letter O — leaves the user watching at 5s forever with
+// nothing to notice.
+const parseInterval = (raw: string | undefined): number | undefined => {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const seconds = Number.parseFloat(raw);
+  if (!(Number.isFinite(seconds) && seconds > 0)) {
+    throw new CliError(
+      `--interval must be a positive number of seconds (got "${raw}")`,
+      1,
+      "USAGE"
+    );
+  }
+  return seconds;
+};
+
 program
   .command("status")
   .description(
@@ -194,9 +224,7 @@ program
       status(
         {
           ...options,
-          interval: options.interval
-            ? Number.parseFloat(options.interval)
-            : undefined,
+          interval: parseInterval(options.interval),
           refs: refs.length > 0 ? refs.join(",") : undefined,
         },
         process.stdout
@@ -241,10 +269,7 @@ program
   .description("send a plan back to planning with feedback")
   .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
   .requiredOption("--note <text>", "what to change")
-  .option(
-    "--json",
-    "emit JSON: { rejected, undelivered, note } or { ambiguous, unknown }"
-  )
+  .option("--json", "emit JSON: { rejected, note } or { ambiguous, unknown }")
   .action((ref: string, options: { note: string; json?: boolean }) => {
     reject(ref, options.note, process.stdout, undefined, {
       json: options.json,
@@ -266,12 +291,34 @@ const knownCommands = (): ReadonlySet<string> =>
     ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
   ]);
 
+// Commander already printed help/version to stdout, or its error to stderr;
+// these carry no failure for us to report.
+const isCommanderOutput = (code: string): boolean =>
+  code === "commander.helpDisplayed" ||
+  code === "commander.help" ||
+  code === "commander.version";
+
 const main = async (): Promise<void> => {
   try {
     await program.parseAsync(withImplicitStart(process.argv, knownCommands()));
   } catch (error) {
     const json = wantsJson();
     const s = style(useColor(process.stderr));
+    if (error instanceof CommanderError) {
+      if (!isCommanderOutput(error.code)) {
+        // the human hint is already on stderr; --json still owes stdout one
+        // parseable value, so a driver never gets an empty parse.
+        if (json) {
+          process.stdout.write(
+            `${JSON.stringify({ error: { message: error.message, type: error.code } })}\n`
+          );
+        }
+        process.exitCode = error.exitCode || 1;
+        return;
+      }
+      process.exitCode = error.exitCode;
+      return;
+    }
     if (error instanceof CliError) {
       if (json) {
         process.stdout.write(

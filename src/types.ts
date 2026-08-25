@@ -70,7 +70,7 @@ export interface LinearApiRelated {
   description?: string | null;
 }
 
-export interface LinearApiRelationEnd {
+interface LinearApiRelationEnd {
   identifier: string;
   state?: { type?: string | null } | null;
 }

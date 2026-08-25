@@ -640,7 +640,6 @@ export const reject = (
         ambiguous,
         note: trimmedNote,
         rejected,
-        undelivered: [],
         unknown,
         ...(unlogged.length === 0 ? {} : { unlogged }),
       })}\n`

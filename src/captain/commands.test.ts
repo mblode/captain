@@ -776,7 +776,6 @@ describe("stateless approve/reject/status over the real surface", () => {
       ambiguous: [],
       note: "split it",
       rejected: ["tig-430"],
-      undelivered: [],
       unknown: [],
     });
     try {

@@ -61,7 +61,11 @@ describe("renderStatus", () => {
   it("guides the user when the fleet is empty", () => {
     const out = renderStatus([], plain);
     expect(out).toContain("no captain worktrees found");
-    expect(out).toContain("captain fanout");
+    // the suggested command has to be one that exists: `captain fanout …` was
+    // suggested here for months and is not a subcommand — typing it started a
+    // free-form agent run instead of erroring.
+    expect(out).toContain("start one: captain <ISSUE-ID>");
+    expect(out).not.toContain("captain fanout");
   });
 
   it("leads with NEEDS YOU and inlines the resolve command", () => {

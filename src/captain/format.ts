@@ -161,7 +161,7 @@ export const renderStatus = (
     return [
       head,
       s.dim("  no captain worktrees found in cmux."),
-      s.dim("  start one: captain fanout <ISSUE-ID> …"),
+      s.dim("  start one: captain <ISSUE-ID> …"),
       "",
     ].join("\n");
   }

@@ -10,7 +10,7 @@ deleted June 2026 — see `research/` for the history.)
 ## Commands
 
 ```bash
-npm install                 # setup (requires Node >= 22)
+npm install                 # setup (requires Node >= 24, per package.json engines)
 npm run build               # tsdown -> dist/
 npm run dev                 # tsdown --watch
 npm run test                # vitest run
@@ -27,7 +27,7 @@ npm link                    # install `captain` globally from this checkout
 src/
   cli.ts            # Commander entry: install | start | status | approve [--note] | reject --note; bare-token routing via withImplicitStart
   route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-issue word = likely typo, untouched); routes via source.ts isIssueToken
-  runner.ts         # runStart routes on the first token: runLinearWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
+  runner.ts         # runStart routes on the first token: runIssueWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
   source.ts         # THE ISSUE-SOURCE SEAM: IssueSource registry (name/claims/prepare) — the one owner of "which source claims this token + how to parse/fetch it". sourceFor + isIssueToken. Adding a source touches only this file.
   cmux.ts git.ts linear.ts donebear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
   # types.ts    : Issue (the source-neutral contract: identifier/title/description/criteria + optional Linear context) — every source maps INTO it, nothing downstream knows the source
@@ -53,7 +53,7 @@ src/
 
 **Start** (`captain start`, `runStart`): routes on its first token — an **issue token** (any source
 in the `source.ts` registry claims it: a Linear id/URL or a donebear task URL/UUID) →
-`runLinearWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
+`runIssueWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
 free-form task in the **current checkout**, no issue, no worktree). The routing sites all ask one
 predicate — `isIssueToken` (`source.ts`) — instead of enumerating sources, so a new source is one
 registry entry, not edits across `runStart`/`withImplicitStart`/`isFanOutInput`/`prepareIssue`.
