@@ -77,7 +77,8 @@ same brief: the `<workflow>` pipeline (plan → implement → the configured ski
 finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
 `loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
 config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
-`.skills` > the default `/tidy` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter`); plan,
+`.skills` > the default `/pr-reviewer` → `/tidy` → two conditional UI steps → `/pr-creator` →
+`/pr-babysitter`); plan,
 implement, and the verdict finish stay fixed because `status` derives from them. The agent
 self-drives; nothing external types commands into it.
 
@@ -258,9 +259,29 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   `CAPTAIN_MEMORY_DIR`), and `config.ts` honours `CAPTAIN_CONFIG` (point it at a temp file) —
   runner/commands/config tests set these to temp dirs and drive the real modules through a fake
   `CmuxPort` (no mocking library).
+- **The pipeline order is a correctness property, not a preference.** `/pr-reviewer` runs
+  BEFORE `/tidy`. The reviewer is read-only and writes a report whose `Fix:` lines are
+  committable; `tidy`'s Phase 2 looks for a review that already ran and routes its confirmed
+  findings straight into its apply phase. Reversed — as `DEFAULT_SKILLS` shipped until Aug 2026
+  — the report is produced with nothing downstream to apply it and `/pr-creator` opens the PR
+  still carrying the review's own "Must fix before push" findings. Pinned by a test in
+  `config.test.ts`; the skills' own docs are the source (`pr-reviewer/SKILL.md`: "The usual
+  sequence is this skill, then that one").
+- **A pipeline step is a `/skill` token OR plain English.** An entry that doesn't start with `/`
+  renders verbatim as its own numbered step (`prompt.ts`), which is how a step becomes
+  conditional — "If the diff touches user-facing UI, run /product-design then /ui-design" — with
+  no `when` schema and no condition evaluator. Deliberate: a step the agent can honestly answer
+  "not applicable" to is the shape that survives, where unconditional ceremony on a diff with no
+  such surface teaches it to argue exemptions instead (the same reasoning behind the rubric's
+  `na` state and the `/security-review` reversal). Don't add a condition DSL.
 - **Skills config is fail-safe**: `loadSkills` (`config.ts`) never throws — a missing/garbage
   config file or empty array degrades to `DEFAULT_SKILLS`; only a non-empty string array (or a
-  non-empty `CAPTAIN_SKILLS`) overrides. The config lives at `~/.config/captain/config.json`
+  non-empty `CAPTAIN_SKILLS`) overrides. `"$defaults"` inside that array expands IN PLACE to
+  `DEFAULT_SKILLS`, so a user can extend the pipeline instead of silently replacing it (without
+  the token, a non-empty list still replaces — that is the trap it exists to remove). Any other
+  `$token` is dropped rather than passed through, and a list that expands to nothing degrades to
+  the defaults. `CAPTAIN_SKILLS` splits on commas, so a prose step containing a comma can only be
+  expressed in the config file's JSON array. The config lives at `~/.config/captain/config.json`
   (XDG, **not** under `~/.claude`), `CAPTAIN_CONFIG` redirects the path.
 - **No daemon, ever**: there is no watcher process, no pidfile, no state.json. If you find
   yourself adding persisted fleet state, stop — derive it from cmux + the filesystem instead.
@@ -347,11 +368,13 @@ download path) · `DONEBEAR_TOKEN` (donebear task fetch — a
 `db_` API key from `donebear api-key create`; read scope is enough, captain never writes back) ·
 `CAPTAIN_MEMORY_DIR` (fleet memory override) ·
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
-skills, overrides the config file) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
+pipeline steps, `$defaults` to keep the built-in ones; overrides the config file — prose steps
+with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
 `CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default
 `high`) · `CAPTAIN_AGENT` (which agent to launch, `claude` | `codex`, default `claude`) ·
 `CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
-`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string),
+`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[] — each entry a
+`/skill` token, a plain-English instruction, or `"$defaults"`), `.dataScope` (string),
 `.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`).

@@ -59,7 +59,12 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     // status derives from the plan gate and verdict, so only the middle steps
     // are data-driven. The plan step's wording is agent-aware: telling codex to
     // wait for a plan approval would stall it forever (no gate exists).
-    const skillSteps = skills.map((skill, i) => `${i + 3}. Run ${skill}.`);
+    // A step is either a `/skill` token or a plain-English instruction. Prose
+    // renders verbatim — wrapping "If the diff touches UI, run /ui-design" in
+    // "Run …." would produce an unreadable step and bury the condition.
+    const skillSteps = skills.map((skill, i) =>
+      skill.startsWith("/") ? `${i + 3}. Run ${skill}.` : `${i + 3}. ${skill}`
+    );
     // The plan is the human's one cheap chance to redirect the run, so both
     // variants ask for the unknowns first: an ambiguity resolved at the gate
     // costs a sentence, the same ambiguity guessed wrong costs the whole run.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_SKILLS } from "./config";
 import { renderPrompt, renderPromptExtras } from "./prompt";
 import type { Issue } from "./types";
 
@@ -63,9 +64,11 @@ describe("prompt extras", () => {
   it("renders the self-drive workflow with the full pipeline in order", () => {
     const out = renderPromptExtras({ workflow: true });
     expect(out).toContain("<workflow>");
-    const steps = ["/tidy", "/pr-reviewer", "/pr-creator", "/pr-babysitter"];
+    // Driven off DEFAULT_SKILLS rather than a hand-written copy: this asserts the
+    // renderer preserves list order (including the prose steps). The ORDER
+    // itself is pinned where it is decided — config.test.ts.
     let last = -1;
-    for (const step of steps) {
+    for (const step of DEFAULT_SKILLS) {
       const at = out.indexOf(step);
       expect(at).toBeGreaterThan(last);
       last = at;
@@ -101,6 +104,29 @@ describe("prompt extras", () => {
     expect(out).not.toContain("/pr-babysitter");
   });
 
+  // A step is either a `/skill` token or a plain-English instruction. Prose is
+  // what makes a step conditional, so it must survive verbatim — wrapped in
+  // "Run …." the condition would be unreadable.
+  it("renders a prose step verbatim and a skill token as Run", () => {
+    const out = renderPromptExtras({
+      skills: [
+        "/pr-reviewer",
+        "If the diff touches user-facing UI, run /ui-design.",
+        "/pr-creator",
+      ],
+      workflow: true,
+    });
+    expect(out).toContain("3. Run /pr-reviewer.");
+    expect(out).toContain(
+      "4. If the diff touches user-facing UI, run /ui-design."
+    );
+    expect(out).not.toContain("Run If the diff");
+    expect(out).toContain("5. Run /pr-creator.");
+    expect(out).toContain(
+      "6. Finish with the finishing protocol below (verifier + verdict)."
+    );
+  });
+
   // Codex has no plan mode or plan-approval gate — a brief telling it to wait
   // for approval would stall the run at step 1 forever.
   it("swaps the plan-gate steps for codex (no approval wait)", () => {
@@ -109,7 +135,7 @@ describe("prompt extras", () => {
     expect(out).not.toContain("Once the plan is approved");
     expect(out).toContain("no plan-approval gate");
     // the rest of the pipeline is unchanged
-    expect(out).toContain("3. Run /tidy.");
+    expect(out).toContain("3. Run /pr-reviewer.");
   });
 
   it("keeps the plan-gate steps for claude (and by default)", () => {

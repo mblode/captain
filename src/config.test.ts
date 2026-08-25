@@ -49,6 +49,75 @@ describe("parseSkills", () => {
   });
 });
 
+const stepAt = (step: string): number => DEFAULT_SKILLS.indexOf(step);
+
+describe("DEFAULT_SKILLS order", () => {
+  // The pipeline order is a correctness property, not a preference. pr-reviewer
+  // is read-only and writes a report whose `Fix:` lines are committable; tidy's
+  // Phase 2 picks that report up and applies its confirmed findings. Reversed,
+  // the report is produced with nothing downstream to apply it and pr-creator
+  // opens the PR carrying the review's own "Must fix before push" findings.
+  it("runs /pr-reviewer before /tidy, and both before /pr-creator", () => {
+    expect(stepAt("/pr-reviewer")).toBeGreaterThanOrEqual(0);
+    expect(stepAt("/pr-reviewer")).toBeLessThan(stepAt("/tidy"));
+    expect(stepAt("/tidy")).toBeLessThan(stepAt("/pr-creator"));
+    expect(stepAt("/pr-creator")).toBeLessThan(stepAt("/pr-babysitter"));
+  });
+
+  // A step the agent can honestly answer "not applicable" to; unconditional
+  // ceremony on a diff with no such surface teaches it to argue exemptions.
+  it("expresses the UI steps as conditional prose, not bare skill tokens", () => {
+    const prose = DEFAULT_SKILLS.filter((s) => !s.startsWith("/"));
+    expect(prose.length).toBeGreaterThan(0);
+    for (const step of prose) {
+      expect(step.toLowerCase()).toContain("if the diff");
+    }
+  });
+});
+
+describe("loadSkills $defaults expansion", () => {
+  it("expands $defaults in place, preserving position", () => {
+    const path = writeConfig('{"skills":["/first","$defaults","/last"]}');
+    expect(loadSkills({ CAPTAIN_CONFIG: path })).toEqual([
+      "/first",
+      ...DEFAULT_SKILLS,
+      "/last",
+    ]);
+  });
+
+  it("treats a lone $defaults as the built-in pipeline", () => {
+    const path = writeConfig('{"skills":["$defaults"]}');
+    expect(loadSkills({ CAPTAIN_CONFIG: path })).toEqual(DEFAULT_SKILLS);
+  });
+
+  it("expands $defaults from CAPTAIN_SKILLS too", () => {
+    expect(loadSkills({ CAPTAIN_SKILLS: "$defaults,/extra" })).toEqual([
+      ...DEFAULT_SKILLS,
+      "/extra",
+    ]);
+  });
+
+  // A typo'd or future token must not reach the brief as a literal step: the
+  // agent would read "$defualts" as an instruction to follow.
+  it("drops unknown $tokens rather than passing them through", () => {
+    expect(loadSkills({ CAPTAIN_SKILLS: "/a,$nope,/b" })).toEqual(["/a", "/b"]);
+  });
+
+  it("falls back to defaults when a list expands to nothing", () => {
+    expect(loadSkills({ CAPTAIN_SKILLS: "$nope,$alsonope" })).toEqual(
+      DEFAULT_SKILLS
+    );
+  });
+
+  // Without the token, a non-empty list still REPLACES the pipeline — the
+  // long-standing behaviour $defaults exists to give users a way out of.
+  it("still replaces the pipeline when the token is absent", () => {
+    expect(loadSkills({ CAPTAIN_SKILLS: "/only-this" })).toEqual([
+      "/only-this",
+    ]);
+  });
+});
+
 describe("loadSkills precedence", () => {
   it("prefers CAPTAIN_SKILLS over the config file", () => {
     const path = writeConfig('{"skills":["/from-file"]}');

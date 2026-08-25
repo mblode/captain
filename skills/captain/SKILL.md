@@ -9,12 +9,14 @@ description: Conduct a fleet of cmux worktrees — fan out Linear/donebear ticke
 batch plan approvals and off-script questions into human decisions, nudge stalled agents,
 distill fleet memory. **IS NOT:** typing low-level cmux verbs by hand (use
 [`cmux`](../cmux/SKILL.md)) or running any pipeline step yourself — the agent self-drives
-plan → implement → `/tidy` → `/pr-reviewer` → `/pr-creator` → `/pr-babysitter` → verdict.
+plan → implement → `/pr-reviewer` → `/tidy` → the conditional UI steps → `/pr-creator` →
+`/pr-babysitter` → verdict.
 The driver is a long-lived Claude Code session, not a human at a keyboard; Captain keeps
 **no state** (`status` derives live from cmux + each worktree's `.captain/`).
 
-`/tidy` and `/pr-reviewer` are separate configured stages; never treat one as a
-replacement for the other.
+`/pr-reviewer` and `/tidy` are separate configured stages in that order, and never a
+replacement for one another: the reviewer is read-only and writes committable `Fix:`
+lines, and `/tidy` applies that report's confirmed findings alongside its own sweep.
 
 ## References
 

@@ -2,15 +2,37 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-// The post-implementation skills the self-drive brief runs between *implement*
+// The post-implementation steps the self-drive brief runs between *implement*
 // and the *verifier/verdict finish*. Configurable so a setup can run its own
-// review/ship skills; this is the fallback when no config is present.
+// review/ship pipeline; this is the fallback when no config is present.
+//
+// ORDER IS LOAD-BEARING: /pr-reviewer runs BEFORE /tidy. Both skills document
+// the handoff — pr-reviewer is read-only and writes a report whose `Fix:` lines
+// are committable, and tidy's Phase 2 looks for a review that already ran and
+// routes its confirmed findings straight into its own apply phase. Running the
+// fixer first strands the report: nothing downstream applies it, and the PR
+// /pr-creator opens carries the review's "Must fix before push" findings.
+//
+// An entry is either a `/skill` token (rendered as "Run /skill.") or a plain
+// English instruction rendered verbatim as its own step. Prose is what makes a
+// step conditional — the agent reads the sentence and can honestly answer "not
+// applicable" — without a `when` schema or a condition evaluator. Ceremony that
+// cannot be skipped teaches agents to argue exemptions instead (the same reason
+// the rubric has an `na` state and /security-review was reverted).
 export const DEFAULT_SKILLS = [
-  "/tidy",
   "/pr-reviewer",
+  "/tidy",
+  "If the diff touches user-facing UI, run /product-design then /ui-design, and iterate between them until both the states and the visual are right.",
+  "If the diff changes a rendered page or component, run /visual-qa before finishing.",
   "/pr-creator",
   "/pr-babysitter",
 ];
+
+// The token a user's `.skills` (or CAPTAIN_SKILLS) includes to KEEP the built-in
+// pipeline while adding steps of their own. Without it a non-empty list replaces
+// the defaults wholesale — the trap this exists to remove. Modelled on Claude
+// Code's own autoMode config, where "$defaults" keeps the built-in rules.
+export const DEFAULTS_TOKEN = "$defaults";
 
 // The data-scope guardrail injected into every brief by default — the agent may
 // touch the repo's own source/config/tests/docs, but not customer data, secrets,
@@ -94,18 +116,38 @@ export const parseSkills = (raw: unknown): string[] | null => {
   return cleaned.length > 0 ? cleaned : null;
 };
 
-// Resolve the configured skills, fail-safe like the rest of captain: env override
-// (CAPTAIN_SKILLS, comma-separated) > config file `.skills` > DEFAULT_SKILLS. Any
-// read/parse error degrades to the default — never throws.
+// Expand `$defaults` IN PLACE, so position is preserved: a step listed before the
+// token runs before the built-in pipeline, one after it runs after. Any OTHER
+// `$token` is dropped — it is a typo or a future feature, and passing it through
+// would land a literal "$whatever" in the agent's brief as an instruction to
+// follow. Pure; DEFAULT_SKILLS contains no token, so this cannot recurse.
+const expandDefaults = (items: string[]): string[] =>
+  items.flatMap((item) => {
+    if (item === DEFAULTS_TOKEN) {
+      return DEFAULT_SKILLS;
+    }
+    return item.startsWith("$") ? [] : [item];
+  });
+
+// Resolve the configured pipeline, fail-safe like the rest of captain: env
+// override (CAPTAIN_SKILLS, comma-separated) > config file `.skills` >
+// DEFAULT_SKILLS. Any read/parse error degrades to the default — never throws,
+// and a list that expands to nothing (only unknown `$tokens`) degrades too.
+//
+// CAPTAIN_SKILLS splits on commas, so a plain-English step containing a comma
+// cannot be expressed there — put prose entries in the config file, whose
+// `.skills` is a JSON array and needs no delimiter.
 export const loadSkills = (env: NodeJS.ProcessEnv = process.env): string[] => {
   const fromEnv = env.CAPTAIN_SKILLS
     ? cleanList(env.CAPTAIN_SKILLS.split(","))
     : [];
-  if (fromEnv.length > 0) {
-    return fromEnv;
+  const configured =
+    fromEnv.length > 0 ? fromEnv : parseSkills(readConfig(env));
+  if (!configured) {
+    return DEFAULT_SKILLS;
   }
-
-  return parseSkills(readConfig(env)) ?? DEFAULT_SKILLS;
+  const expanded = expandDefaults(configured);
+  return expanded.length > 0 ? expanded : DEFAULT_SKILLS;
 };
 
 // Pure: pull a trimmed non-empty string field out of a parsed config value, else
