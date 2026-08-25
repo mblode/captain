@@ -19,7 +19,7 @@ export const renderPrompt = (
   );
 };
 
-export interface PromptExtras {
+interface PromptExtras {
   // include the self-drive workflow section (fan-out briefs set this; Captain
   // has no watcher — the agent drives its own pipeline end to end)
   workflow?: boolean;

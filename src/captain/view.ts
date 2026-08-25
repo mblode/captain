@@ -52,7 +52,8 @@ export interface FleetRow {
   nextCommand?: string;
   // a deterministic fingerprint of this row's *actionable* state — a polling
   // driver diffs snapshots and acts only on transitions. A pure string join
-  // (no crypto: the pure core may not import node:crypto). Always set by rowOf.
+  // (a plain join, not a digest: this is compared for equality, never stored or
+  // transmitted, so hashing would only make it unreadable). Always set by rowOf.
   stateHash?: string;
   // the unambiguous handle to pass to approve/reject: the bare ticket when it's
   // unique in the fleet, else the full `${repo}-${ticket}` name (the cross-repo
@@ -180,10 +181,13 @@ export const nextCommand = (row: FleetRow): string => {
   return `cmux read-screen --workspace ${row.workspaceId}`;
 };
 
-// PURE: a deterministic fingerprint of the row's *actionable* state — the
-// fields that decide whether a driver must act. A plain string join (the pure
-// core may not import node:crypto); equal joins ⇒ same actionable state, so a
-// poller can diff two snapshots and skip rows that haven't transitioned.
+// PURE: a deterministic fingerprint of the row's *actionable* state — the fields
+// that decide whether a driver must act. A plain string join rather than a
+// digest: nothing stores or transmits this, it is only compared to the previous
+// tick, and a readable join is debuggable where a hash is not. (Purity does not
+// forbid node:crypto — rubric.ts hashes; see oxlint.config.ts for the one
+// definition.) Equal joins ⇒ same actionable state, so a poller can diff two
+// snapshots and skip rows that haven't transitioned.
 export const stateHash = (
   row: Pick<FleetRow, "group" | "gate" | "verdict" | "run">
 ): string =>

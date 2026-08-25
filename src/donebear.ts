@@ -41,7 +41,7 @@ export const isDonebearToken = (token: string): boolean => {
 const shortIdFromUuid = (uuid: string): string =>
   `db-${uuid.replaceAll("-", "").slice(0, 8).toLowerCase()}`;
 
-export interface ParsedDonebearTask extends ParsedIssue {
+interface ParsedDonebearTask extends ParsedIssue {
   // the full task UUID the GraphQL `task(id:)` query needs (URL/bare form both
   // resolve to this); displayId/issueId are the short `db-<8hex>` handle
   uuid: string;

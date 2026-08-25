@@ -733,7 +733,10 @@ const requireFrontier = (
   }
 };
 
-const dispatch = async ({
+// The fan-out path: N issue tokens, one worktree + cmux workspace each. Reuses
+// any worktree already running, fetches once, prepares the rest in parallel,
+// and SKIPS a blocked issue so one stale edge cannot sink the batch.
+const dispatchFanOut = async ({
   context,
   env,
   options,
@@ -742,95 +745,107 @@ const dispatch = async ({
   tokens,
 }: DispatchArgs): Promise<number> => {
   const { agent } = context;
-  if (isFanOutInput(tokens, Boolean(options.print))) {
-    if (!cmuxReachable(env)) {
-      throw new CliError(
-        "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain install`",
-        EXIT.CMUX_UNREACHABLE,
-        "CMUX_UNREACHABLE"
-      );
-    }
-    progress.step("resolving repo");
-    const repo = resolveRepo({
-      cwd: context.cwd,
-      env,
-      repoOverride: context.repoOverride,
-    });
-    const scopedContexts = tokens.map((token, index) => ({
-      ...context,
-      progress: withPrefix(
-        progress,
-        `[${index + 1}/${tokens.length}] ${token.toUpperCase()} · `
-      ),
-    }));
-    const seeds = tokens.map(issueSeed);
-    const activeByCwd = activeWorkspacesByCwd(realCmux(env));
-    const reusable = seeds.map((seed) =>
-      reusableIssue(seed, repo.repoRoot, activeByCwd, env)
+  if (!cmuxReachable(env)) {
+    throw new CliError(
+      "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain install`",
+      EXIT.CMUX_UNREACHABLE,
+      "CMUX_UNREACHABLE"
     );
-    const pendingIndexes = reusable.flatMap((item, index) =>
-      item ? [] : [index]
+  }
+  progress.step("resolving repo");
+  const repo = resolveRepo({
+    cwd: context.cwd,
+    env,
+    repoOverride: context.repoOverride,
+  });
+  const scopedContexts = tokens.map((token, index) => ({
+    ...context,
+    progress: withPrefix(
+      progress,
+      `[${index + 1}/${tokens.length}] ${token.toUpperCase()} · `
+    ),
+  }));
+  const seeds = tokens.map(issueSeed);
+  const activeByCwd = activeWorkspacesByCwd(realCmux(env));
+  const reusable = seeds.map((seed) =>
+    reusableIssue(seed, repo.repoRoot, activeByCwd, env)
+  );
+  const pendingIndexes = reusable.flatMap((item, index) =>
+    item ? [] : [index]
+  );
+  if (pendingIndexes.length > 0 && !commandExists(agent, env)) {
+    throw new CliError(
+      `${agent} is not on PATH — install it, then \`captain install\``,
+      EXIT.USAGE,
+      "MISSING_DEPENDENCY"
     );
-    if (pendingIndexes.length > 0 && !commandExists(agent, env)) {
-      throw new CliError(
-        `${agent} is not on PATH — install it, then \`captain install\``,
-        EXIT.USAGE,
-        "MISSING_DEPENDENCY"
-      );
-    }
-    for (const index of pendingIndexes) {
-      requireIssueCredential(seeds[index], env);
-    }
-    // Validate repository freshness before source requests. This is slightly
-    // less overlapped than starting both together, but a failed git precondition
-    // cannot strand an unobserved rejecting source promise. An all-reused batch
-    // still performs neither fetch.
-    if (pendingIndexes.length > 0) {
-      progress.step("git fetch origin");
-      fetchOrigin(repo.repoRoot, env);
-    }
-    const pendingData = await Promise.all(
-      pendingIndexes.map((index) =>
-        prepareIssueData(seeds[index], scopedContexts[index])
-      )
-    );
-    const dataByIndex = new Map(
-      pendingIndexes.map((pendingIndex, index) => [
-        pendingIndex,
-        pendingData[index],
-      ])
-    );
-    // The frontier rule, applied at launch time only: a ticket whose blockers
-    // are still open is skipped, the rest of the fan-out proceeds. Deliberately
-    // not surfaced in `status` — that read derives with no network, and holding
-    // the graph long enough to render it would mean persisting fleet state.
-    const blocked = new Map<number, string[]>();
-    if (!options.force) {
-      for (const [index, data] of dataByIndex) {
-        const open = openBlockers(data.issue);
-        if (open.length > 0) {
-          blocked.set(index, open);
-        }
+  }
+  for (const index of pendingIndexes) {
+    requireIssueCredential(seeds[index], env);
+  }
+  // Validate repository freshness before source requests. This is slightly
+  // less overlapped than starting both together, but a failed git precondition
+  // cannot strand an unobserved rejecting source promise. An all-reused batch
+  // still performs neither fetch.
+  if (pendingIndexes.length > 0) {
+    progress.step("git fetch origin");
+    fetchOrigin(repo.repoRoot, env);
+  }
+  const pendingData = await Promise.all(
+    pendingIndexes.map((index) =>
+      prepareIssueData(seeds[index], scopedContexts[index])
+    )
+  );
+  const dataByIndex = new Map(
+    pendingIndexes.map((pendingIndex, index) => [
+      pendingIndex,
+      pendingData[index],
+    ])
+  );
+  // The frontier rule, applied at launch time only: a ticket whose blockers
+  // are still open is skipped, the rest of the fan-out proceeds. Deliberately
+  // not surfaced in `status` — that read derives with no network, and holding
+  // the graph long enough to render it would mean persisting fleet state.
+  const blocked = new Map<number, string[]>();
+  if (!options.force) {
+    for (const [index, data] of dataByIndex) {
+      const open = openBlockers(data.issue);
+      if (open.length > 0) {
+        blocked.set(index, open);
       }
     }
-
-    return launchPreparedFleet({
-      agent,
-      blocked,
-      context,
-      dataByIndex,
-      env,
-      options,
-      progress,
-      repoRoot: repo.repoRoot,
-      reusable,
-      scopedContexts,
-      seeds,
-      stdout,
-      tokens,
-    });
   }
 
+  return launchPreparedFleet({
+    agent,
+    blocked,
+    context,
+    dataByIndex,
+    env,
+    options,
+    progress,
+    repoRoot: repo.repoRoot,
+    reusable,
+    scopedContexts,
+    seeds,
+    stdout,
+    tokens,
+  });
+};
+
+// The single-target path: one issue token, or a free-form task in the current
+// checkout. Differs from fan-out in three ways that are semantics, not style —
+// a live worktree short-circuits with an early return, a blocked issue THROWS
+// (there is no rest to proceed with), and --print is only valid here.
+const dispatchSingle = async ({
+  context,
+  env,
+  options,
+  progress,
+  stdout,
+  tokens,
+}: DispatchArgs): Promise<number> => {
+  const { agent } = context;
   progress.step("resolving repo");
   const repo = resolveRepo({
     cwd: context.cwd,
@@ -917,6 +932,14 @@ const dispatch = async ({
     name: prepared.worktree.branch,
   });
 };
+
+// The one routing decision: N issue tokens fan out, anything else is a single
+// target. Both halves are full pipelines with genuinely different semantics —
+// see AGENTS.md's behaviour-parity list, which enumerates the modes each owns.
+const dispatch = (args: DispatchArgs): Promise<number> =>
+  isFanOutInput(args.tokens, Boolean(args.options.print))
+    ? dispatchFanOut(args)
+    : dispatchSingle(args);
 
 // The worktree fan-out path: one worktree + cmux workspace per issue token. Each
 // token routes to its own source in prepareIssueData (Linear id/URL or donebear task

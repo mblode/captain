@@ -210,9 +210,14 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
 
 - **ESM, bundler resolution**: extensionless relative imports (`./view`, not `./view.js`);
   `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
-- **The pure core stays pure** (`view.ts`, `verdict.ts`, `rubric.ts`) — lint-enforced for
-  view/verdict (oxlint `no-restricted-imports` bans `node:fs`/`node:child_process` in
-  `oxlint.config.ts`). Decisions take plain input data; `surface.ts` is the one fs/cmux edge.
+- **The pure core stays pure**, and PURE has exactly ONE definition: **no filesystem, no
+  subprocess**. `node:crypto` is fine (`rubric.ts` hashes) — it is deterministic and needs no
+  I/O. Six modules are in the contract and all six are lint-enforced (`oxlint.config.ts`,
+  `no-restricted-imports`): `view.ts`, `verdict.ts`, `gain.ts` on the surface side, and
+  `rubric.ts`, `route.ts`, `issue.ts` on the launch side. **The list in `oxlint.config.ts` is
+  the contract** — adding a module here without adding it there writes a rule nobody enforces,
+  which is how `rubric.ts` sat documented-but-unenforced for months. Decisions take plain input
+  data; `surface.ts` and `commands.ts` are the fs/cmux edges that feed them.
 - **The verdict is fail-safe by construction**: a missing/garbage `.captain/verdict.json` is "no
   verdict yet" (`parseVerdict` returns null — a malformed verdict must never read as a pass), and
   the verdict gates the _label_ (`✓ verified`), never the merge — the human merge gate stays

@@ -11,7 +11,7 @@ import type { Issue, ParsedIssue } from "./types";
 // this token, and how do I parse + fetch it" — so routing files (route.ts,
 // runner.ts, cmux.ts) ask the registry instead of enumerating sources, and
 // adding a source touches only this file.
-export interface IssueSource {
+interface IssueSource {
   // the brief/rubric label ("Linear" | "donebear")
   name: string;
   // environment variable required to fetch this source; diagnostics stay at
@@ -50,7 +50,7 @@ const donebearSource: IssueSource = {
 
 // Registry order is match precedence; the predicates are mutually exclusive
 // (a Linear id/URL can't be a donebear UUID/URL), so order is not load-bearing.
-export const SOURCES: IssueSource[] = [linearSource, donebearSource];
+const SOURCES: IssueSource[] = [linearSource, donebearSource];
 
 // The source that claims a token, else undefined (a free-form task token).
 export const sourceFor = (token: string): IssueSource | undefined =>

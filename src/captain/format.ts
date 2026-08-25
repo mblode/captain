@@ -126,7 +126,7 @@ const SECTIONS: { group: Group; heading: string }[] = [
   { group: "ready", heading: "READY TO MERGE" },
 ];
 
-export interface StatusView {
+interface StatusView {
   // merge-order hints keyed by workspaceId (changed-file overlap between ready
   // worktrees of one repo) — computed by the caller, rendered here
   overlaps?: Record<string, string>;

@@ -25,12 +25,12 @@ const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
 // A token that loosely matched more than one worktree (the same ticket fanned
 // into two repos). We refuse to guess; `candidates` are the fully-qualified
 // `${repo}-${ticket}` names to retype.
-export interface Ambiguity {
+interface Ambiguity {
   token: string;
   candidates: string[];
 }
 
-export interface ResolvedTargets {
+interface ResolvedTargets {
   matched: FleetRow[];
   unknown: string[];
   ambiguous: Ambiguity[];
@@ -125,7 +125,7 @@ export const resolveTargets = (
   return { ambiguous, matched, unknown };
 };
 
-export interface StatusOptions {
+interface StatusOptions {
   json?: boolean;
   // friendly ticket/workspace refs, using the same resolution rules as
   // approve/reject. Applied after --repo so that filter can disambiguate a
@@ -514,6 +514,25 @@ const appendDecision = (
 // Approve plan(s): reply to the cmux exit-plan feed item directly — there is
 // no state to update and no watcher to hand off to, so the reply IS the
 // approval; the agent resumes and self-drives the rest of its brief.
+// Every ref the human typed that did not land on exactly one plan-ready
+// worktree: ambiguous (a ticket fanned into two repos — report the qualified
+// names to retype) and unknown. Both decisions report this identically, and
+// both report EVERY unresolved token rather than just the first.
+const reportUnresolved = (
+  out: NodeJS.WritableStream,
+  s: Style,
+  { ambiguous, unknown }: Pick<ResolvedTargets, "ambiguous" | "unknown">
+): void => {
+  for (const a of ambiguous) {
+    out.write(
+      `  ${msg.warn(s, `"${a.token}" matches ${a.candidates.length} worktrees — qualify it: ${a.candidates.join(", ")}`)}\n`
+    );
+  }
+  for (const u of unknown) {
+    out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
+  }
+};
+
 export const approve = (
   spec: string,
   out: NodeJS.WritableStream,
@@ -545,14 +564,7 @@ export const approve = (
     return;
   }
   const s = styleFor(out);
-  for (const a of ambiguous) {
-    out.write(
-      `  ${msg.warn(s, `"${a.token}" matches ${a.candidates.length} worktrees — qualify it: ${a.candidates.join(", ")}`)}\n`
-    );
-  }
-  for (const u of unknown) {
-    out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
-  }
+  reportUnresolved(out, s, { ambiguous, unknown });
   if (matched.length === 0) {
     out.write(s.dim("nothing to approve.\n"));
     return;
@@ -635,17 +647,7 @@ export const reject = (
     );
     return;
   }
-  // An ambiguous ref (a ticket shared across repos) gets the qualified names to
-  // retype; an unknown ref is reported too — every unresolved token, not just
-  // the first.
-  for (const a of ambiguous) {
-    out.write(
-      `  ${msg.warn(s, `"${a.token}" matches ${a.candidates.length} worktrees — qualify it: ${a.candidates.join(", ")}`)}\n`
-    );
-  }
-  for (const u of unknown) {
-    out.write(`  ${msg.warn(s, `no plan-ready worktree matches "${u}"`)}\n`);
-  }
+  reportUnresolved(out, s, { ambiguous, unknown });
   if (rejected.length === 0) {
     out.write(s.dim("nothing to reject.\n"));
     return;
@@ -663,7 +665,7 @@ export const reject = (
   out.write(`${msg.hint(s, "next: captain status")}\n`);
 };
 
-export interface GainOptions {
+interface GainOptions {
   json?: boolean;
   // a "since" window for the decision-based metrics: "7d" / "24h" / ISO date
   since?: string;

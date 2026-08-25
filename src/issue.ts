@@ -1,8 +1,8 @@
 import { CliError } from "./errors";
 import type { Issue, ParsedIssue } from "./types";
 
-export const issueIdPattern = "[A-Za-z][A-Za-z0-9_]*-[0-9]+";
-export const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");
+const issueIdPattern = "[A-Za-z][A-Za-z0-9_]*-[0-9]+";
+const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");
 
 export const isIssueId = (value: string): boolean => issueIdRegex.test(value);
 

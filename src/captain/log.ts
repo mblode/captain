@@ -22,7 +22,7 @@ export interface LogRecord {
 
 export const now = (): number => Math.floor(Date.now() / 1000);
 
-export const logPath = (env: NodeJS.ProcessEnv = process.env): string =>
+const logPath = (env: NodeJS.ProcessEnv = process.env): string =>
   join(captainHome(env), "log.jsonl");
 
 export const appendLog = (

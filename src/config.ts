@@ -32,7 +32,7 @@ export const DEFAULT_SKILLS = [
 // pipeline while adding steps of their own. Without it a non-empty list replaces
 // the defaults wholesale — the trap this exists to remove. Modelled on Claude
 // Code's own autoMode config, where "$defaults" keeps the built-in rules.
-export const DEFAULTS_TOKEN = "$defaults";
+const DEFAULTS_TOKEN = "$defaults";
 
 // The data-scope guardrail injected into every brief by default — the agent may
 // touch the repo's own source/config/tests/docs, but not customer data, secrets,

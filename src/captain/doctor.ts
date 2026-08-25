@@ -11,7 +11,7 @@ import type { Style } from "./format";
 // One preflight line: a label, whether it's a hard requirement, the live state,
 // a short detail, and the fix to run when it's missing. `skillBundle` names the
 // `skills add` bundle `captain install` fetches to satisfy this check.
-export interface Check {
+interface Check {
   detail: string;
   hint?: string;
   label: string;
