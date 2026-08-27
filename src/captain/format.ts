@@ -295,8 +295,10 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
     }
   }
 
-  // Rework at the plan gate: ledger history, like DECISIONS above. A cadence
-  // signal, not a failure count — dim prose, no red.
+  // Rework at the plan gate: ledger history, like DECISIONS above — and not a
+  // restatement of it. The approval rate there is per DECISION, so it cannot
+  // tell ten tickets rejected once from one ticket rejected ten times; this is
+  // per TICKET. A cadence signal, not a failure count — dim prose, no red.
   if (m.rework) {
     lines.push(
       "",

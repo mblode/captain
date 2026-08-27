@@ -95,15 +95,18 @@ describe("prompt extras", () => {
   // The approved plan is an artifact, not a throwaway: it lands beside the
   // rubric and one acceptance criterion grades the diff against it. Both agents
   // write it — only the timing differs (claude cannot write until the gate
-  // clears), so the deviation rule must survive on both branches.
-  it("makes both agents write the plan to .captain/plan.md and keep it current", () => {
+  // clears), so the deviation rule must survive on both branches. It must never
+  // frame that rule around a commit: `.captain/` is excluded, so the file is in
+  // no commit and appending is the only way the approved plan survives.
+  it("makes both agents write the plan to .captain/plan.md and append deviations", () => {
     for (const agent of ["claude", "codex"]) {
       const out = renderPromptExtras({ agent, workflow: true });
       expect(out).toContain("write the plan verbatim to `.captain/plan.md`");
       expect(out).toContain(
-        "update that file in the same commit that deviates"
+        'append what changed and why under a "## Deviations"'
       );
-      expect(out).toContain("grades the diff against it");
+      expect(out).toContain("rather than rewriting the plan");
+      expect(out).not.toContain("commit");
     }
   });
 

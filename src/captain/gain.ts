@@ -55,7 +55,7 @@ export interface ReworkStats {
   firstPass: number;
   // firstPass / tickets; tickets is never 0 (the block is omitted instead)
   firstPassRate: number;
-  // the tickets that came back, worst first (bounded)
+  // every ticket that came back, worst first
   topReworked: { name: string; rejections: number }[];
 }
 
@@ -207,7 +207,7 @@ const dayOf = (ts: number): string =>
 const caveatsFor = (input: GainInput): string[] => {
   const lines = [
     "decisions (approvals/rejections) are gap-free per-machine history from log.jsonl — a true ledger",
-    "rework counts PLAN-GATE rejections per ticket from the ledger: cycles at the gate, not post-merge rework — a relaunch that was never rejected is invisible to it",
+    "rework counts PLAN-GATE rejections per ticket from the ledger: cycles at the gate, not post-merge rework — a relaunch that was never rejected is invisible to it. A --since window selects which TICKETS are reported; the cycles counted against them span the whole ledger",
     "fleet composition is a LIVE SNAPSHOT of cmux right now, not a trend over time",
     "verdict pass/fail is a live read of each worktree's verdict.json — overwritten per worktree, so it is not a historical ledger",
     "operation-level throughput (e.g. 'ops/day') is NOT recorded by design — captain keeps no event stream",
@@ -247,19 +247,31 @@ const latencyStats = (samples: number[]): LatencyStats | undefined => {
   };
 };
 
-// PURE: rework per ticket NAME over the already-windowed decisions. Undefined
-// when no name carries a decision, so the caller omits the whole block rather
+// PURE: rework per ticket NAME. The window picks the TICKET SET — names with a
+// decision inside it — and the cycles are then counted over the WHOLE ledger.
+// That asymmetry is deliberate and mirrors the one `latency` uses for launches:
+// a ticket's rework is all of its rework, so windowing the rejections too would
+// report a ticket whose earlier rejections fell outside the window as a clean
+// first pass, inflating the rate in the flattering direction. Undefined when no
+// name carries an in-window decision, so the caller omits the whole block rather
 // than reporting 0 of 0 as a rate.
-const reworkStats = (decisions: LogRecord[]): ReworkStats | undefined => {
-  const rejectsByName = new Map<string, number>();
-  for (const d of decisions) {
-    rejectsByName.set(
-      d.name,
-      (rejectsByName.get(d.name) ?? 0) + (d.kind === "reject" ? 1 : 0)
-    );
-  }
+const reworkStats = (
+  allDecisions: LogRecord[],
+  inWindow: (ts: number) => boolean
+): ReworkStats | undefined => {
+  // Seeded at 0 from the in-window names, so an approve-only ticket still counts
+  // as a ticket, and a name decided only outside the window never enters at all.
+  const rejectsByName = new Map<string, number>(
+    allDecisions.filter((d) => inWindow(d.ts)).map((d) => [d.name, 0])
+  );
   if (rejectsByName.size === 0) {
     return undefined;
+  }
+  for (const d of allDecisions) {
+    const seen = rejectsByName.get(d.name);
+    if (d.kind === "reject" && seen !== undefined) {
+      rejectsByName.set(d.name, seen + 1);
+    }
   }
   const tickets = rejectsByName.size;
   const firstPass = [...rejectsByName.values()].filter((n) => n === 0).length;
@@ -267,13 +279,14 @@ const reworkStats = (decisions: LogRecord[]): ReworkStats | undefined => {
     firstPass,
     firstPassRate: firstPass / tickets,
     tickets,
+    // Uncapped, like failingCriteria: a name-keyed tally is small, and a silent
+    // truncation is exactly what roster's `dropped` field exists to avoid.
     topReworked: [...rejectsByName.entries()]
       .filter(([, rejections]) => rejections > 0)
       .map(([name, rejections]) => ({ name, rejections }))
       .toSorted(
         (a, b) => b.rejections - a.rejections || a.name.localeCompare(b.name)
-      )
-      .slice(0, RECENT_NOTES),
+      ),
   };
 };
 
@@ -428,12 +441,11 @@ export const computeGain = (input: GainInput): GainMetrics => {
   // Launches are searched over the FULL log (a launch just before the window
   // must still pair its in-window decision); decisions respect the window.
   const launches = input.log.filter((r) => r.kind === "launch");
-  const decisions = input.log.filter(
-    (r) => r.kind !== "launch" && inWindow(r.ts)
-  );
+  const allDecisions = input.log.filter((r) => r.kind !== "launch");
+  const decisions = allDecisions.filter((r) => inWindow(r.ts));
 
   const decisionsBlock = decisionsBlockOf(decisions, input);
-  const rework = reworkStats(decisions);
+  const rework = reworkStats(allDecisions, inWindow);
 
   const repoMap = new Map<string, number>();
   for (const r of input.rows) {

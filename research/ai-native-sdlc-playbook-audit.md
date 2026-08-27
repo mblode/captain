@@ -85,10 +85,18 @@ verdict — consistent with `gain`'s roster caveat, and stated there.
 
 **Graded, with a mechanical `na`.** One acceptance criterion (`criteriaFor`, `src/rubric.ts`):
 
-> The diff does what `.captain/plan.md` says, or that file was updated in the same commit
-> as the deviation. Evidence must be the plan's own steps set against the diff's files
-> (e.g. `git diff --stat <base>...HEAD`), not a summary. Mark `na` only when
-> `.captain/plan.md` does not exist.
+> The diff does what `.captain/plan.md` says, or every departure from it is named under
+> that file's "## Deviations" heading. Evidence must be the plan's own steps set against
+> the diff's files (e.g. `git diff --stat <base>...HEAD`), not a summary. Mark `na` only
+> when `.captain/plan.md` does not exist.
+
+Departures are **appended**, never merged into the plan. This is where captain's
+git-ignored artifact forces a real divergence from the playbook's second sentence
+("if the implementation diverges, update `plan.md` in the same commit"): `.captain/` is in
+the repo's exclude file, so this plan is in no commit and has no history at all. Rewriting
+it would erase the approved version and leave the criterion nothing to compare the diff
+against; a `## Deviations` section keeps both halves in the one artifact the verifier is
+already handed.
 
 Two properties keep this from becoming the `/security-review` mistake, which is the
 precedent it has to clear:
@@ -127,10 +135,16 @@ Three things make it honest rather than a vanity number:
 - **Omitted wholesale when no ticket carries a decision**, the same "no sample ⇒ omit" rule
   that already governs `latency` and the approval-notes block. An empty ledger reporting
   "0 of 0 first pass" would read as a measurement.
+- **A `--since` window picks the ticket set, not which cycles count.** Names decided inside
+  the window are the tickets; their rejections are then counted over the whole ledger — the
+  same asymmetry `latency` uses for launches. Windowing both would report a ticket whose
+  earlier rejections fell outside as a clean first pass, and a governance number that is
+  wrong upward is the worst kind.
 - **Its caveat says what it is not**: cycles at the *plan gate*, from the ledger — not
   post-merge rework, and a relaunch that was never rejected is invisible to it.
-- **`topReworked` is bounded** by the existing `RECENT_NOTES` cap, worst first, ties broken
-  by name.
+- **`topReworked` is uncapped**, worst first, ties broken by name — matching
+  `failingCriteria`, the nearest name-keyed tally. A silent truncation is what `roster`'s
+  `dropped` field exists to avoid.
 
 `renderGain` puts it directly under DECISIONS, above the live-snapshot sections, because it
 is ledger history like DECISIONS is. Dim prose and a `↩`, never red: it is a cadence signal,

@@ -62,13 +62,17 @@ const criteriaFor = (
     }
   }
   criteria.push(
-    // The `na` condition here is MECHANICAL — the file is absent — never a
-    // judgement the agent argues. That is what keeps this criterion from rotting
-    // the way the test criterion did, where every agent invented its own
-    // exemption. Phrased as a scan with output for the same reason the
-    // data-scope criterion is: "the diff matches the plan" asserted in prose is
-    // unevidencable, so it gets answered with conclusion-prose.
-    `The diff does what \`${PLAN_RELPATH}\` says, or that file was updated in the same commit as the deviation. Evidence must be the plan's own steps set against the diff's files (e.g. \`git diff --stat <base>...HEAD\`), not a summary. Mark \`na\` only when \`${PLAN_RELPATH}\` does not exist.`,
+    // Both halves are checkable from the two artifacts the verifier is handed —
+    // no git history is involved, and none exists: `.captain/` is in the repo's
+    // exclude file, so the plan is in no commit.
+    //
+    // The `na` condition is MECHANICAL — the file is absent — never a judgement
+    // the agent argues. That is what keeps this criterion from rotting the way
+    // the test criterion did, where every agent invented its own exemption.
+    // Phrased as a scan with output for the same reason the data-scope criterion
+    // is: "the diff matches the plan" asserted in prose is unevidencable, so it
+    // gets answered with conclusion-prose.
+    `The diff does what \`${PLAN_RELPATH}\` says, or every departure from it is named under that file's "## Deviations" heading. Evidence must be the plan's own steps set against the diff's files (e.g. \`git diff --stat <base>...HEAD\`), not a summary. Mark \`na\` only when \`${PLAN_RELPATH}\` does not exist.`,
     "The repo's test command passes. Add tests only where the change genuinely warrants coverage — do not add tests for trivial copy/label/config changes.",
     "The repo's typecheck and lint commands pass.",
     `A PR is open with "${displayId}" in the title and a description that matches the diff.`

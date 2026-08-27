@@ -183,7 +183,11 @@ says so.
 `gain.rework` is the plan-gate cycle count — the playbook's build-stage lagging indicator,
 derived from the same ledger and nothing new. Per ticket **name**, not per launch: the
 reject→relaunch cycle is what is being counted and it spans launches by construction, so a
-ticket is first-pass when every decision under its name is an approval. Omitted wholesale when
+ticket is first-pass when every decision under its name is an approval. A `--since` window
+picks the **ticket set** (names decided inside it) and the cycles counted against them span
+the whole ledger — the same asymmetry `latency` uses for launches, and for the same reason:
+windowing the rejections too would report a ticket whose earlier rejections fell outside as a
+clean first pass, inflating the rate in the flattering direction. Omitted wholesale when
 no ticket in the window carries a decision (the same "no sample ⇒ omit" rule as `latency`), and
 its caveat says what it is not — cycles at the *gate*, not post-merge rework, and a relaunch
 that was never rejected is invisible to it.
@@ -204,7 +208,8 @@ The prose belongs to `/eli5`, not to captain — the roster ships material, not 
 rendered by `rubric.ts` from the Linear issue — no LLM call) and the prompt's
 `<finishing-protocol>` requires a fresh-context verifier sub-agent to pass it before the agent
 writes `.captain/verdict.json`. The **agent** writes the third `.captain/` file,
-`.captain/plan.md` (`PLAN_RELPATH`): the approved plan, verbatim, before it touches code —
+`.captain/plan.md` (`PLAN_RELPATH`): the approved plan, verbatim, before it touches code,
+with any later departure appended under a `## Deviations` heading rather than merged in —
 captain can't write it (claude presents the plan from plan mode, where it cannot write files,
 and captain only replies to the feed item, never seeing the text). One acceptance criterion
 grades the diff against it, and the verifier is handed it alongside the rubric and the diff,
@@ -251,11 +256,19 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   `na` only when `.captain/plan.md` does not exist" is phrased that way on purpose: the
   failure mode recorded above for criterion 2 is agents each inventing a different
   exemption, some rewording the criterion itself. There is nothing to argue here — either
-  the file is on disk (free-form dispatch and an agent that skipped the step are the two
-  ways it isn't) or it is not. Don't soften it to "when a plan doesn't apply", which is the
-  arguable form. It also clears the `/security-review` bar it has to: every ticket has a
-  plan, and the verifier is already reading the worktree, so the marginal cost is one file
-  read rather than a recurring extra review pass.
+  the file is on disk or it is not. **Both** start paths write it: fan-out and free-form
+  dispatch share `withLoopExtras` (`runner.ts`), which passes `workflow: true`, so the only
+  ways it is absent are an agent that skipped the step or a worktree from before this
+  shipped. Don't soften it to "when a plan doesn't apply", which is the arguable form. It
+  also clears the `/security-review` bar it has to: every ticket has a plan, and the
+  verifier is already reading the worktree, so the marginal cost is one file read rather
+  than a recurring extra review pass.
+- **Plan deviations are APPENDED under `## Deviations`, never merged into the plan** — and
+  the rule must never be framed around a commit. `.captain/` is in the repo's
+  `.git/info/exclude`, so `plan.md` is in no commit and has no history: "update it in the
+  same commit that deviates" (how this shipped first) is uncheckable, and following it
+  literally erases what was approved, leaving the criterion nothing to compare against.
+  Appending keeps both halves in the one artifact the verifier is already handed.
 - **Changing `rubric.ts` voids no in-flight verdict.** `readRubricFacts`
   (`captain/surface.ts`) recomputes the hash from each worktree's rubric file *as it exists
   on disk*, and captain never rewrites an existing worktree's rubric — so shipping a new

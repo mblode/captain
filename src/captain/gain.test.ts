@@ -493,9 +493,9 @@ describe("computeGain — rework at the plan gate", () => {
     });
   });
 
-  it("orders topReworked worst first, ties by name, and caps the list", () => {
+  // Uncapped, like failingCriteria — six entries in, six entries out.
+  it("orders topReworked worst first and breaks ties by name", () => {
     const log: LogRecord[] = [];
-    // 6 reworked tickets — one over the cap — plus a tie to pin the ordering
     for (const [name, rejects] of [
       ["a", 1],
       ["b", 5],
@@ -518,7 +518,30 @@ describe("computeGain — rework at the plan gate", () => {
       { name: "c", rejections: 3 },
       { name: "e", rejections: 3 },
       { name: "f", rejections: 2 },
+      { name: "a", rejections: 1 },
     ]);
+  });
+
+  // The window picks the TICKET SET, not which cycles count: a ticket whose
+  // earlier rejections fell outside it is not a first pass, and reporting it as
+  // one inflates the headline rate in the flattering direction.
+  it("counts cycles from before the window against an in-window ticket", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "reject", name: "slow", ts: NOW - 10 * DAY }),
+          decision({ kind: "reject", name: "slow", ts: NOW - 9 * DAY }),
+          decision({ kind: "approve", name: "slow", ts: NOW }),
+        ],
+        since: NOW - DAY,
+      })
+    );
+    expect(m.rework).toEqual({
+      firstPass: 0,
+      firstPassRate: 0,
+      tickets: 1,
+      topReworked: [{ name: "slow", rejections: 2 }],
+    });
   });
 
   it("respects the --since window", () => {

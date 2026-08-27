@@ -62,7 +62,7 @@ describe("renderRubric", () => {
     const { text } = renderRubric(issue, "ENG-403");
     expect(text).toContain("The diff does what `.captain/plan.md` says");
     expect(text).toContain(
-      "or that file was updated in the same commit as the deviation"
+      'or every departure from it is named under that file\'s "## Deviations" heading'
     );
     expect(text).toContain(
       "Mark `na` only when `.captain/plan.md` does not exist."

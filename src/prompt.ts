@@ -78,10 +78,16 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     // rubric and the verdict, and one acceptance criterion grades the diff against
     // it. Both agents write it — the only difference is when they may (claude is in
     // plan mode until the gate clears, where it cannot write files at all).
-    const planFile =
-      `write the plan verbatim to \`${PLAN_RELPATH}\`, then implement it. If you have to ` +
-      "deviate from it, update that file in the same commit that deviates — a verifier " +
-      "grades the diff against it.";
+    //
+    // Deviations are APPENDED, never merged into the plan. `.captain/` is in the
+    // repo's exclude file, so this artifact is in no commit and has no history: a
+    // rewrite would silently erase what was approved, and there would be nothing
+    // left for the criterion to compare the diff against.
+    const planStep =
+      `write the plan verbatim to \`${PLAN_RELPATH}\`, then implement it. If you end up ` +
+      'deviating from it, append what changed and why under a "## Deviations" heading ' +
+      "in that same file rather than rewriting the plan — the plan above it is the " +
+      "record of what was approved, and a verifier grades the diff against both.";
     // Agent-aware, same as the plan steps: codex has no AskUserQuestion, and
     // naming a tool it cannot call while forbidding its only fallback leaves it
     // no legal move. A stopped codex agent is what captain reads as needing a
@@ -102,11 +108,11 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       extras.agent === "codex"
         ? [
             `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
-            `2. Before you touch code, ${planFile} (This session has no plan-approval gate — do not stop to wait for one.)`,
+            `2. Before you touch code, ${planStep} (This session has no plan-approval gate — do not stop to wait for one.)`,
           ]
         : [
             `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
-            `2. Once the plan is approved, ${planFile}`,
+            `2. Once the plan is approved, ${planStep}`,
           ];
     out += "\n<workflow>\n";
     out += [
