@@ -186,6 +186,29 @@ describe("renderGain", () => {
     expect(out.indexOf("VERDICTS")).toBeLessThan(out.indexOf("notes:"));
   });
 
+  it("renders the REWORK section only when a rework sample exists", () => {
+    expect(renderGain(metrics(), plain)).not.toContain("REWORK");
+    const out = renderGain(
+      metrics({
+        rework: {
+          firstPass: 3,
+          firstPassRate: 0.75,
+          tickets: 4,
+          topReworked: [{ name: "linkiq-tig-9", rejections: 2 }],
+        },
+      }),
+      plain
+    );
+    expect(out).toContain("REWORK (plan gate)");
+    expect(out).toContain("3 of 4 tickets cleared the gate on the first plan");
+    expect(out).toContain("75% first pass");
+    expect(out).toContain("linkiq-tig-9");
+    expect(out).toContain("(×2)");
+    // ledger history sits with DECISIONS, above the live-snapshot sections
+    expect(out.indexOf("DECISIONS")).toBeLessThan(out.indexOf("REWORK"));
+    expect(out.indexOf("REWORK")).toBeLessThan(out.indexOf("FLEET"));
+  });
+
   it("renders the LATENCY section only when latency samples exist", () => {
     expect(renderGain(metrics(), plain)).not.toContain("LATENCY");
     const out = renderGain(

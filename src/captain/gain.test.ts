@@ -458,6 +458,94 @@ describe("computeGain — latency to detection", () => {
   });
 });
 
+describe("computeGain — rework at the plan gate", () => {
+  // No decision at all ⇒ no sample. Reporting "0 of 0 first pass" would read as
+  // a measurement; the same rule already governs latency and approval notes.
+  it("omits the block entirely when no ticket carries a decision", () => {
+    expect(computeGain(input()).rework).toBeUndefined();
+    expect(
+      computeGain(input({ log: [decision({ kind: "launch" })] })).rework
+    ).toBeUndefined();
+  });
+
+  it("counts rejections per ticket NAME across the reject→relaunch cycle", () => {
+    const m = computeGain(
+      input({
+        log: [
+          // tig-1 came back twice before it was approved
+          decision({ kind: "launch", name: "frontyard-tig-1", ts: NOW - 500 }),
+          decision({ kind: "reject", name: "frontyard-tig-1", ts: NOW - 400 }),
+          decision({ kind: "launch", name: "frontyard-tig-1", ts: NOW - 300 }),
+          decision({ kind: "reject", name: "frontyard-tig-1", ts: NOW - 200 }),
+          decision({ kind: "launch", name: "frontyard-tig-1", ts: NOW - 100 }),
+          decision({ kind: "approve", name: "frontyard-tig-1", ts: NOW }),
+          // tig-2 cleared the gate on its first plan
+          decision({ kind: "launch", name: "frontyard-tig-2", ts: NOW - 500 }),
+          decision({ kind: "approve", name: "frontyard-tig-2", ts: NOW }),
+        ],
+      })
+    );
+    expect(m.rework).toEqual({
+      firstPass: 1,
+      firstPassRate: 0.5,
+      tickets: 2,
+      topReworked: [{ name: "frontyard-tig-1", rejections: 2 }],
+    });
+  });
+
+  it("orders topReworked worst first, ties by name, and caps the list", () => {
+    const log: LogRecord[] = [];
+    // 6 reworked tickets — one over the cap — plus a tie to pin the ordering
+    for (const [name, rejects] of [
+      ["a", 1],
+      ["b", 5],
+      ["c", 3],
+      ["d", 9],
+      ["e", 3],
+      ["f", 2],
+    ] as [string, number][]) {
+      for (let i = 0; i < rejects; i += 1) {
+        log.push(decision({ kind: "reject", name, ts: NOW - i }));
+      }
+    }
+    const m = computeGain(input({ log }));
+    expect(m.rework?.tickets).toBe(6);
+    expect(m.rework?.firstPass).toBe(0);
+    expect(m.rework?.topReworked).toEqual([
+      { name: "d", rejections: 9 },
+      { name: "b", rejections: 5 },
+      // 3 each: the tie breaks alphabetically
+      { name: "c", rejections: 3 },
+      { name: "e", rejections: 3 },
+      { name: "f", rejections: 2 },
+    ]);
+  });
+
+  it("respects the --since window", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "reject", name: "old", ts: NOW - 10 * DAY }),
+          decision({ kind: "approve", name: "new", ts: NOW }),
+        ],
+        since: NOW - DAY,
+      })
+    );
+    expect(m.rework).toEqual({
+      firstPass: 1,
+      firstPassRate: 1,
+      tickets: 1,
+      topReworked: [],
+    });
+  });
+
+  it("always states what rework is and is not", () => {
+    expect(computeGain(input()).caveats.join("\n")).toContain(
+      "cycles at the gate, not post-merge rework"
+    );
+  });
+});
+
 describe("parseSince", () => {
   it("parses relative days/hours/minutes against now", () => {
     expect(parseSince("7d", NOW)).toBe(NOW - 7 * DAY);

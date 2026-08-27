@@ -295,6 +295,21 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
     }
   }
 
+  // Rework at the plan gate: ledger history, like DECISIONS above. A cadence
+  // signal, not a failure count — dim prose, no red.
+  if (m.rework) {
+    lines.push(
+      "",
+      s.dim("REWORK (plan gate)"),
+      `  ${m.rework.firstPass} of ${m.rework.tickets} tickets cleared the gate on the first plan ${s.dim("·")} ${pct(m.rework.firstPassRate)} first pass`
+    );
+    for (const t of m.rework.topReworked) {
+      lines.push(
+        `  ${s.yellow("↩")} ${s.bold(t.name)} ${s.dim(`(×${t.rejections})`)}`
+      );
+    }
+  }
+
   // Fleet: a live snapshot.
   lines.push(
     "",

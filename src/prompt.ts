@@ -1,5 +1,5 @@
 import { DEFAULT_SKILLS } from "./config";
-import { RUBRIC_RELPATH } from "./rubric";
+import { PLAN_RELPATH, RUBRIC_RELPATH } from "./rubric";
 import type { Issue } from "./types";
 
 export const renderPrompt = (
@@ -71,7 +71,17 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     const planLead =
       "Lead it with what you are least sure of: any ambiguity in the ticket, the " +
       "assumptions you had to make, and the decisions a reviewer is most likely to " +
-      "want changed. Mechanical work goes last. Never resolve an ambiguity silently.";
+      "want changed. Mechanical work goes last. Never resolve an ambiguity silently. " +
+      "Then name the files you will change, the order you will do the work in, and the " +
+      "tests that will prove it.";
+    // The plan stops being a throwaway here: it lands in the worktree next to the
+    // rubric and the verdict, and one acceptance criterion grades the diff against
+    // it. Both agents write it — the only difference is when they may (claude is in
+    // plan mode until the gate clears, where it cannot write files at all).
+    const planFile =
+      `write the plan verbatim to \`${PLAN_RELPATH}\`, then implement it. If you have to ` +
+      "deviate from it, update that file in the same commit that deviates — a verifier " +
+      "grades the diff against it.";
     // Agent-aware, same as the plan steps: codex has no AskUserQuestion, and
     // naming a tool it cannot call while forbidding its only fallback leaves it
     // no legal move. A stopped codex agent is what captain reads as needing a
@@ -92,11 +102,11 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       extras.agent === "codex"
         ? [
             `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
-            "2. Implement the plan. (This session has no plan-approval gate — do not stop to wait for one.)",
+            `2. Before you touch code, ${planFile} (This session has no plan-approval gate — do not stop to wait for one.)`,
           ]
         : [
             `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
-            "2. Once the plan is approved, implement it.",
+            `2. Once the plan is approved, ${planFile}`,
           ];
     out += "\n<workflow>\n";
     out += [
