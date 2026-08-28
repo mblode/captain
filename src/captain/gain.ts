@@ -43,6 +43,22 @@ export interface LatencyStats {
   maxSec: number;
 }
 
+// Rework at the plan gate — the SDLC playbook's build-stage lagging indicator,
+// derived from the ledger captain already keeps. A ticket is "first pass" when
+// every decision recorded against its name is an approval; each rejection is one
+// cycle it cost. Per NAME, not per launch: the reject→relaunch cycle is exactly
+// what is being counted, and it spans launches by construction.
+export interface ReworkStats {
+  // distinct ticket names carrying at least one decision in the window
+  tickets: number;
+  // of those, how many were never rejected
+  firstPass: number;
+  // firstPass / tickets; tickets is never 0 (the block is omitted instead)
+  firstPassRate: number;
+  // every ticket that came back, worst first
+  topReworked: { name: string; rejections: number }[];
+}
+
 // One launched ticket, joined across captain's two sources. `launchedAt` and the
 // decision come from log.jsonl (gap-free history, survives worktree removal);
 // `title`/`group`/`verdict`/`summary`/`prUrl` are a LIVE read and exist only
@@ -103,6 +119,11 @@ export interface GainMetrics {
   merged?: { repo: string; count: number }[];
   // launch→detection latency; omitted entirely when no sample joins
   latency?: { toDecision?: LatencyStats; toVerdict?: LatencyStats };
+  // rework at the plan gate: how many tickets cleared it on the first plan, and
+  // which ones kept coming back. Omitted entirely when no ticket in the window
+  // carries a decision at all — an empty ledger must not report a 0% first-pass
+  // rate as if it were a measurement (the same rule as latency).
+  rework?: ReworkStats;
   // per-ticket detail behind the tallies: what launched, what was decided, what
   // the verifier said, which PRs exist. `dropped` is how many older launches the
   // cap left out — never a silent truncation.
@@ -186,6 +207,7 @@ const dayOf = (ts: number): string =>
 const caveatsFor = (input: GainInput): string[] => {
   const lines = [
     "decisions (approvals/rejections) are gap-free per-machine history from log.jsonl — a true ledger",
+    "rework counts PLAN-GATE rejections per ticket from the ledger: cycles at the gate, not post-merge rework — a relaunch that was never rejected is invisible to it. A --since window selects which TICKETS are reported; the cycles counted against them span the whole ledger",
     "fleet composition is a LIVE SNAPSHOT of cmux right now, not a trend over time",
     "verdict pass/fail is a live read of each worktree's verdict.json — overwritten per worktree, so it is not a historical ledger",
     "operation-level throughput (e.g. 'ops/day') is NOT recorded by design — captain keeps no event stream",
@@ -222,6 +244,49 @@ const latencyStats = (samples: number[]): LatencyStats | undefined => {
     count: sorted.length,
     maxSec: sorted.at(-1) ?? 0,
     medianSec: sorted[Math.floor((sorted.length - 1) / 2)],
+  };
+};
+
+// PURE: rework per ticket NAME. The window picks the TICKET SET — names with a
+// decision inside it — and the cycles are then counted over the WHOLE ledger.
+// That asymmetry is deliberate and mirrors the one `latency` uses for launches:
+// a ticket's rework is all of its rework, so windowing the rejections too would
+// report a ticket whose earlier rejections fell outside the window as a clean
+// first pass, inflating the rate in the flattering direction. Undefined when no
+// name carries an in-window decision, so the caller omits the whole block rather
+// than reporting 0 of 0 as a rate.
+const reworkStats = (
+  allDecisions: LogRecord[],
+  inWindow: (ts: number) => boolean
+): ReworkStats | undefined => {
+  // Seeded at 0 from the in-window names, so an approve-only ticket still counts
+  // as a ticket, and a name decided only outside the window never enters at all.
+  const rejectsByName = new Map<string, number>(
+    allDecisions.filter((d) => inWindow(d.ts)).map((d) => [d.name, 0])
+  );
+  if (rejectsByName.size === 0) {
+    return undefined;
+  }
+  for (const d of allDecisions) {
+    const seen = rejectsByName.get(d.name);
+    if (d.kind === "reject" && seen !== undefined) {
+      rejectsByName.set(d.name, seen + 1);
+    }
+  }
+  const tickets = rejectsByName.size;
+  const firstPass = [...rejectsByName.values()].filter((n) => n === 0).length;
+  return {
+    firstPass,
+    firstPassRate: firstPass / tickets,
+    tickets,
+    // Uncapped, like failingCriteria: a name-keyed tally is small, and a silent
+    // truncation is exactly what roster's `dropped` field exists to avoid.
+    topReworked: [...rejectsByName.entries()]
+      .filter(([, rejections]) => rejections > 0)
+      .map(([name, rejections]) => ({ name, rejections }))
+      .toSorted(
+        (a, b) => b.rejections - a.rejections || a.name.localeCompare(b.name)
+      ),
   };
 };
 
@@ -376,11 +441,11 @@ export const computeGain = (input: GainInput): GainMetrics => {
   // Launches are searched over the FULL log (a launch just before the window
   // must still pair its in-window decision); decisions respect the window.
   const launches = input.log.filter((r) => r.kind === "launch");
-  const decisions = input.log.filter(
-    (r) => r.kind !== "launch" && inWindow(r.ts)
-  );
+  const allDecisions = input.log.filter((r) => r.kind !== "launch");
+  const decisions = allDecisions.filter((r) => inWindow(r.ts));
 
   const decisionsBlock = decisionsBlockOf(decisions, input);
+  const rework = reworkStats(allDecisions, inWindow);
 
   const repoMap = new Map<string, number>();
   for (const r of input.rows) {
@@ -457,6 +522,7 @@ export const computeGain = (input: GainInput): GainMetrics => {
     },
     ...(latency ? { latency } : {}),
     ...(input.merged ? { merged: input.merged } : {}),
+    ...(rework ? { rework } : {}),
     roster: rosterOf(launches, decisions, input.rows, inWindow),
     verdicts: { fail, failingCriteria, openPrs, pass },
   };

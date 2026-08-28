@@ -85,6 +85,28 @@ describe("prompt extras", () => {
       expect(out).toContain("Lead it with what you are least sure of");
       expect(out).toContain("assumptions you had to make");
       expect(out).toContain("Never resolve an ambiguity silently.");
+      // the playbook's plan contract: what changes, in what order, proven how
+      expect(out).toContain("name the files you will change");
+      expect(out).toContain("the order you will do the work in");
+      expect(out).toContain("the tests that will prove it");
+    }
+  });
+
+  // The approved plan is an artifact, not a throwaway: it lands beside the
+  // rubric and one acceptance criterion grades the diff against it. Both agents
+  // write it — only the timing differs (claude cannot write until the gate
+  // clears), so the deviation rule must survive on both branches. It must never
+  // frame that rule around a commit: `.captain/` is excluded, so the file is in
+  // no commit and appending is the only way the approved plan survives.
+  it("makes both agents write the plan to .captain/plan.md and append deviations", () => {
+    for (const agent of ["claude", "codex"]) {
+      const out = renderPromptExtras({ agent, workflow: true });
+      expect(out).toContain("write the plan verbatim to `.captain/plan.md`");
+      expect(out).toContain(
+        'append what changed and why under a "## Deviations"'
+      );
+      expect(out).toContain("rather than rewriting the plan");
+      expect(out).not.toContain("commit");
     }
   });
 
@@ -93,7 +115,7 @@ describe("prompt extras", () => {
       skills: ["/tidy", "/pr-creator"],
       workflow: true,
     });
-    expect(out).toContain("2. Once the plan is approved, implement it.");
+    expect(out).toContain("2. Once the plan is approved,");
     expect(out).toContain("3. Run /tidy.");
     expect(out).toContain("4. Run /pr-creator.");
     expect(out).toContain(
@@ -144,7 +166,8 @@ describe("prompt extras", () => {
       expect(out).toContain(
         "1. Plan first (you are launched in plan mode) and present the plan for approval."
       );
-      expect(out).toContain("2. Once the plan is approved, implement it.");
+      expect(out).toContain("2. Once the plan is approved,");
+      expect(out).toContain("then implement it.");
     }
   });
 

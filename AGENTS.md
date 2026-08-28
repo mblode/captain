@@ -73,12 +73,12 @@ source claims and has no spaces (`captain statsu`) is left alone so commander er
 likely a typo'd subcommand than a one-word task, and splicing would launch an agent and clobber the
 checkout's `.captain/` rubric (voiding an in-flight dispatch's verdict hash). Either way the agent
 gets the
-same brief: the `<workflow>` pipeline (plan → implement → the configured skills → verifier
-finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
+same brief: the `<workflow>` pipeline (plan → write the approved plan to `.captain/plan.md`
+→ implement → the configured skills → verifier finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
 `loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
 config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
-`.skills` > the default `/pr-reviewer` → `/tidy` → two conditional UI steps → `/pr-creator` →
-`/pr-babysitter`); plan,
+`.skills` > the default `/pr-reviewer` → `/tidy` → two conditional UI steps (`/product-design`
++ `/ui-design`, then `/visual-qa`) → `/pr-creator` → `/pr-babysitter`); plan,
 implement, and the verdict finish stay fixed because `status` derives from them. The agent
 self-drives; nothing external types commands into it.
 
@@ -180,6 +180,18 @@ reporting all of it as unexplained would be a false alarm dressed as a metric (s
 omit" rule as `latency`). It measures whether the review step ran, never plan quality; the caveat
 says so.
 
+`gain.rework` is the plan-gate cycle count — the playbook's build-stage lagging indicator,
+derived from the same ledger and nothing new. Per ticket **name**, not per launch: the
+reject→relaunch cycle is what is being counted and it spans launches by construction, so a
+ticket is first-pass when every decision under its name is an approval. A `--since` window
+picks the **ticket set** (names decided inside it) and the cycles counted against them span
+the whole ledger — the same asymmetry `latency` uses for launches, and for the same reason:
+windowing the rejections too would report a ticket whose earlier rejections fell outside as a
+clean first pass, inflating the rate in the flattering direction. Omitted wholesale when
+no ticket in the window carries a decision (the same "no sample ⇒ omit" rule as `latency`), and
+its caveat says what it is not — cycles at the *gate*, not post-merge rework, and a relaunch
+that was never rejected is invisible to it.
+
 `gain.roster` is the per-ticket detail behind those tallies — the answer to "what got done and
 what's left", which nothing could answer before: `status` is live-only (a merged worktree leaves
 the view) and `gain` reported only aggregates. It reuses the join `computeGain` already performs
@@ -195,7 +207,18 @@ The prose belongs to `/eli5`, not to captain — the roster ships material, not 
 **Verifier loop**: fan-out writes a definition of done into each worktree (`.captain/rubric.md`,
 rendered by `rubric.ts` from the Linear issue — no LLM call) and the prompt's
 `<finishing-protocol>` requires a fresh-context verifier sub-agent to pass it before the agent
-writes `.captain/verdict.json`. `status` reads that file at render time: a valid pass shows
+writes `.captain/verdict.json`. The **agent** writes the third `.captain/` file,
+`.captain/plan.md` (`PLAN_RELPATH`): the approved plan, verbatim, before it touches code,
+with any later departure appended under a `## Deviations` heading rather than merged in —
+captain can't write it (claude presents the plan from plan mode, where it cannot write files,
+and captain only replies to the feed item, never seeing the text). One acceptance criterion
+grades the diff against it, and the verifier is handed it alongside the rubric and the diff,
+so an agent that got approval for one approach and shipped another is now visible. It is
+git-ignored with the rest of `.captain/` — deliberately unlike the SDLC playbook's *committed*
+`plan.md`, because captain's unit of work is a throwaway worktree and committing it would put
+agent scratch in every PR diff. Its job is to bind implement→verify inside the run; the durable
+record stays `approve --note` plus the PR description. See
+`research/ai-native-sdlc-playbook-audit.md`. `status` reads that file at render time: a valid pass shows
 READY TO MERGE + `✓ verified` (+ the PR's merge hint); a fail shows NEEDS YOU with the verifier's
 summary. The verdict must cite the sha256 of the rubric body _as it exists now_
 (`rubricBody`/`rubricHash`), so editing the criteria after the fact voids it. **Memory loop**:
@@ -229,6 +252,28 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   and some rewording the criterion itself. Hence the rubric pins `name` to the criterion verbatim:
   a softened bar must show up as a rename, never as a silent pass. Don't add a fourth state — the
   criteria array is evidence for the human, not a scoring system.
+- **The plan criterion's `na` is a FILE-EXISTENCE test, not an exemption argument.** "Mark
+  `na` only when `.captain/plan.md` does not exist" is phrased that way on purpose: the
+  failure mode recorded above for criterion 2 is agents each inventing a different
+  exemption, some rewording the criterion itself. There is nothing to argue here — either
+  the file is on disk or it is not. **Both** start paths write it: fan-out and free-form
+  dispatch share `withLoopExtras` (`runner.ts`), which passes `workflow: true`, so the only
+  ways it is absent are an agent that skipped the step or a worktree from before this
+  shipped. Don't soften it to "when a plan doesn't apply", which is the arguable form. It
+  also clears the `/security-review` bar it has to: every ticket has a plan, and the
+  verifier is already reading the worktree, so the marginal cost is one file read rather
+  than a recurring extra review pass.
+- **Plan deviations are APPENDED under `## Deviations`, never merged into the plan** — and
+  the rule must never be framed around a commit. `.captain/` is in the repo's
+  `.git/info/exclude`, so `plan.md` is in no commit and has no history: "update it in the
+  same commit that deviates" (how this shipped first) is uncheckable, and following it
+  literally erases what was approved, leaving the criterion nothing to compare against.
+  Appending keeps both halves in the one artifact the verifier is already handed.
+- **Changing `rubric.ts` voids no in-flight verdict.** `readRubricFacts`
+  (`captain/surface.ts`) recomputes the hash from each worktree's rubric file *as it exists
+  on disk*, and captain never rewrites an existing worktree's rubric — so shipping a new
+  criterion only affects rubrics rendered after it. (`research/wayfinder-browser-harness-audit.md`
+  §10 assumed the opposite; it was over-cautious.)
 - **`parseVerdict` accepts `ts` as a number OR a quoted integer.** The rubric's schema example
   modelled it as a string for months, so most verdicts on disk carry `"1784854700"`; scoring those
   0 silently dropped them from `gain`'s launch→verdict latency. Tolerate at the parser — don't
@@ -328,12 +373,16 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   approval, or driver steering on Claude Code `SendMessage`/`ListAgents` — keep
   `cmux send` / `approve`/`reject`, and keep fleet memory as the durable cross-session
   channel. Agent Teams stay a non-goal.
-- **The security controls captain deliberately does NOT adopt.** Anthropic's AI-native SDLC
-  writeup (Jul 2026) is the reference; captain already has its core loops under other names
+- **The AI-native SDLC playbook: what captain took, and what it deliberately does NOT adopt.**
+  Anthropic's playbook (`claude.com/blog/the-ai-native-sdlc-playbook`) is the reference, fully
+  sorted play-by-play in `research/ai-native-sdlc-playbook-audit.md` (Aug 2026) — read that
+  before re-proposing anything from it. Captain already has its core loops under other names
   (fresh-context verifier = independent reviewers with separate context windows, per-criterion
   evidence = "prove the finding", fleet memory = the discovery→instructions loop, `gain` = the
-  vitals dashboard, plan+merge = humans at the leverage points). Five of its controls are out of
-  scope, and re-proposing them is re-litigating a decided boundary:
+  vitals dashboard, plan+merge = humans at the leverage points). Three plays were real gaps and
+  are now built: the approved plan as `.captain/plan.md` graded by one criterion, a plan that
+  names files/work order/proof tests, and `gain.rework`. The rest are out of scope, and
+  re-proposing them is re-litigating a decided boundary:
   - **A `/security-review` pipeline step + a graded security criterion** — built and reverted
     Jul 2026. The step is the only control here with a **recurring** per-ticket cost (a full
     extra review pass on every diff, forever), and grading it in the rubric is *stricter than
@@ -355,6 +404,28 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   - **Risk-tiering in code** — blast radius lives in the ticket contract
     (`skills/captain/references/auto-pickup.md`) and the driver's decision card. A tier enum in
     `src/` would be a taxonomy with no consumer.
+  - **Hooks and managed settings as the deterministic governance layer** — they live in the
+    *target* repo's `.claude/settings.json` and the machine's managed settings. Captain
+    launches agents into worktrees and owns neither their settings nor their sandbox; same
+    line as egress/containment above. Captain's equivalent is the plan gate (a hard stop no
+    agent passes itself), the rubric hash, and the `.git/info/exclude` append.
+  - **Continuous evals in CI gating agent config** — the surface it would gate
+    (`prompt.ts`, `rubric.ts`, `DEFAULT_SKILLS` order) is already pinned by deterministic
+    unit tests in `prompt.test.ts` / `rubric.test.ts` / `config.test.ts`. An LLM eval suite
+    over the same files buys nondeterminism, API keys in CI and a per-PR cost for a weaker
+    signal. Revisit only on a regression the unit tests structurally cannot catch — a brief
+    that renders exactly as pinned and still drives agents badly.
+  - **Deployment: CI/CD tiers, MCP deploy/status/rollback tools, per-environment autonomy** —
+    past captain's boundary by definition. Its output is a PR-ready worktree; the human merge
+    gate is the last thing it participates in.
+  - **Control-band breach detection as a captain feature** — the *need* is fine and the
+    playbook's own version is stateless in CI, so it is a cron job shelling out to
+    `captain "<task>"` with zero captain code. A captain-owned trigger layer is the forbidden
+    daemon class, and the return leg ("findings re-enter as `intent.md`") is a tracker write,
+    which the agent does, not captain.
+  - **Hosted recurring codebase scans / Claude on call in Slack** — an external product and a
+    persistent chat listener respectively; the latter was already decided in
+    `research/builderbot-audit.md`.
 
 - **Captain reads trackers; it never writes them.** Audited Aug 2026 against Matt Pocock's
   `wayfinder` and rejected — see `research/wayfinder-browser-harness-audit.md`. The read side
@@ -392,4 +463,7 @@ with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (override
 
 `~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[] — each entry a
 `/skill` token, a plain-English instruction, or `"$defaults"`), `.dataScope` (string),
-`.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`).
+`.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`), `.agentEnv`
+(string→string map merged over `DEFAULT_AGENT_ENV` — `VITEST_MAX_FORKS`/`VITEST_MAX_THREADS`
+capped at 2, because N agents each spawning an uncapped worker pool has jetsam-killed a whole
+fleet; set a key to `""` to drop a default).

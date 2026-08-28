@@ -56,6 +56,21 @@ describe("renderRubric", () => {
     expect(text).toContain("The parent contract");
   });
 
+  // The plan artifact is graded, and its `na` is a FILE-EXISTENCE test — not an
+  // exemption the agent argues, which is how the test criterion rotted.
+  it("grades the diff against the approved plan, with a mechanical na rule", () => {
+    const { text } = renderRubric(issue, "ENG-403");
+    expect(text).toContain("The diff does what `.captain/plan.md` says");
+    expect(text).toContain(
+      'or every departure from it is named under that file\'s "## Deviations" heading'
+    );
+    expect(text).toContain(
+      "Mark `na` only when `.captain/plan.md` does not exist."
+    );
+    // the verifier is handed the plan alongside the rubric and the diff
+    expect(text).toContain("`.captain/plan.md` if it exists");
+  });
+
   it("always ships the verification procedure and verdict schema", () => {
     const { text } = renderRubric(undefined, "ENG-999");
     expect(text).toContain("## How to verify");

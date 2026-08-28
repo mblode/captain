@@ -6,6 +6,13 @@ import type { Issue } from "./types";
 // the worktree root. The watcher polls this exact path (see captain/verdict.ts).
 export const VERDICT_RELPATH = ".captain/verdict.json";
 export const RUBRIC_RELPATH = ".captain/rubric.md";
+// The approved plan, written by the AGENT once the plan gate clears (captain
+// never sees the plan text — claude presents it in plan mode, where it cannot
+// write files, and captain only replies to the feed item). Git-ignored with the
+// rest of `.captain/`, unlike the SDLC playbook's committed plan.md: captain's
+// unit of work is a throwaway worktree, so committing it would put agent scratch
+// in every PR diff. Its job is to bind implement→verify INSIDE the run.
+export const PLAN_RELPATH = ".captain/plan.md";
 
 // The rubric's integrity hash covers everything ABOVE this heading (the criteria
 // and the verification procedure). The `## Verdict` section can't be covered —
@@ -55,6 +62,17 @@ const criteriaFor = (
     }
   }
   criteria.push(
+    // Both halves are checkable from the two artifacts the verifier is handed —
+    // no git history is involved, and none exists: `.captain/` is in the repo's
+    // exclude file, so the plan is in no commit.
+    //
+    // The `na` condition is MECHANICAL — the file is absent — never a judgement
+    // the agent argues. That is what keeps this criterion from rotting the way
+    // the test criterion did, where every agent invented its own exemption.
+    // Phrased as a scan with output for the same reason the data-scope criterion
+    // is: "the diff matches the plan" asserted in prose is unevidencable, so it
+    // gets answered with conclusion-prose.
+    `The diff does what \`${PLAN_RELPATH}\` says, or every departure from it is named under that file's "## Deviations" heading. Evidence must be the plan's own steps set against the diff's files (e.g. \`git diff --stat <base>...HEAD\`), not a summary. Mark \`na\` only when \`${PLAN_RELPATH}\` does not exist.`,
     "The repo's test command passes. Add tests only where the change genuinely warrants coverage — do not add tests for trivial copy/label/config changes.",
     "The repo's typecheck and lint commands pass.",
     `A PR is open with "${displayId}" in the title and a description that matches the diff.`
@@ -143,7 +161,7 @@ export const renderRubric = (
   body += [
     "Before you may declare this ticket done:",
     "",
-    "1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file and the branch diff against the base branch (plus read access to the worktree). Do not share your own reasoning or summary of the work.",
+    `1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file, \`${PLAN_RELPATH}\` if it exists, and the branch diff against the base branch (plus read access to the worktree). Do not share your own reasoning or summary of the work.`,
     "2. The verifier grades every acceptance criterion above, in order, and must cite concrete evidence per criterion (file and line, or command output).",
     "3. Prefer a mechanical referee to your own reading. Where a criterion names a command, run the repo's own command — not a hand-picked subset of test files — and quote it with its exit code or summary line. CI status (`gh pr checks`) beats anything run locally; cite it once the PR is open.",
     "4. If a criterion genuinely cannot apply to this diff, mark it `na` with the reason as its evidence. Do NOT reword the criterion to something you can pass, and do not pass it on an exemption argument — `na` is the honest answer and captain surfaces it as one.",
