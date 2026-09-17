@@ -68,12 +68,16 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     // The plan is the human's one cheap chance to redirect the run, so both
     // variants ask for the unknowns first: an ambiguity resolved at the gate
     // costs a sentence, the same ambiguity guessed wrong costs the whole run.
+    // The lead is a NAMED section, not just an ordering: the driver's decision
+    // card quotes it verbatim, so the reviewer reads the three sentences that
+    // matter instead of the whole plan. An unnamed lead cannot be addressed.
     const planLead =
-      "Lead it with what you are least sure of: any ambiguity in the ticket, the " +
-      "assumptions you had to make, and the decisions a reviewer is most likely to " +
-      "want changed. Mechanical work goes last. Never resolve an ambiguity silently. " +
-      "Then name the files you will change, the order you will do the work in, and the " +
-      "tests that will prove it.";
+      'Open the plan with a "## Decisions for the reviewer" section, at most five ' +
+      "bullets: any ambiguity in the ticket and the reading you chose, the assumptions " +
+      "you had to make, and the decisions a reviewer is most likely to want changed. " +
+      "Lead it with what you are least sure of. Mechanical work goes last. Never " +
+      "resolve an ambiguity silently. Then name the files you will change, the order " +
+      "you will do the work in, and the tests that will prove it.";
     // The plan stops being a throwaway here: it lands in the worktree next to the
     // rubric and the verdict, and one acceptance criterion grades the diff against
     // it. Both agents write it — the only difference is when they may (claude is in

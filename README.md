@@ -44,6 +44,9 @@ captain install
 # One worktree, one cmux workspace, and one agent per Linear issue
 captain TIG-430 TIG-431
 
+# Or per free-form task, no tracker needed
+captain "fix the flaky auth test" "tighten the CSP header"
+
 # The one view: NEEDS YOU / IN FLIGHT / READY, with the command to resolve each row
 captain status
 

@@ -1,13 +1,16 @@
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { CliError, EXIT } from "../errors";
 import { realJudge } from "../judge";
 import type { JudgePort } from "../judge";
+import { listMemoryFiles, memoryStatsOf } from "../memory";
+import type { MemoryStats } from "../memory";
 import { run, shellQuote } from "../shell";
 import { realCmux } from "./control";
 import type { CmuxPort } from "./control";
 import {
   msg,
+  renderDigest,
   renderGain,
   renderStatus,
   renderSummary,
@@ -26,7 +29,15 @@ import {
 } from "./triage";
 import type { TriageCard } from "./triage";
 import type { Verdict } from "./verdict";
-import { groupCounts, mergeOrderHints, ticketFrom } from "./view";
+import {
+  decodeSnapshot,
+  encodeSnapshot,
+  fleetDigest,
+  groupCounts,
+  mergeOrderHints,
+  projectFleet,
+  ticketFrom,
+} from "./view";
 import type { FleetRow } from "./view";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
@@ -150,8 +161,10 @@ interface StatusOptions {
   // poll. Composes with refs/--repo. Honoured by both --json and the TTY render.
   summary?: boolean;
   // Compare the current aggregate fleet snapshot with a token returned by an
-  // earlier `--summary --json` call. This is deliberately caller-held state:
-  // Captain persists nothing and simply reports whether the live view changed.
+  // earlier `--summary` call. This is deliberately caller-held state: Captain
+  // persists nothing and simply reports whether the live view changed — and,
+  // since the token carries the projection, WHAT changed (`digest`), one line
+  // per worktree whose actionable state moved.
   since?: string;
   // --watch: a stateless foreground live view that re-renders on a timer. NOT a
   // daemon — it holds no state, every tick re-derives the fleet from scratch
@@ -255,12 +268,9 @@ const validateStatusOptions = (options: StatusOptions): void => {
   if (options.summary && (options.needs || options.ready)) {
     throw badOptions("--summary cannot be combined with --needs or --ready");
   }
-  if (
-    options.since !== undefined &&
-    (!options.summary || !options.json || options.watch)
-  ) {
+  if (options.since !== undefined && (!options.summary || options.watch)) {
     throw badOptions(
-      "--since requires --summary --json and cannot be used with --watch"
+      "--since requires --summary and cannot be used with --watch"
     );
   }
 };
@@ -286,33 +296,74 @@ const repoRows = (rows: FleetRow[], raw: string): FleetRow[] => {
   );
 };
 
-// Hash only the summary/action contract. Raw busy/idle/unknown churn inside the
-// IN FLIGHT group does not change counts and cannot create a new action, so it
-// must not wake a polling driver. Missing targeted refs are part of the token so
-// a disappearing worktree produces exactly one transition.
-const fleetSnapshot = (
-  counts: ReturnType<typeof groupCounts>,
-  needsYou: FleetRow[],
+// The snapshot token is the encoded actionable projection (view.ts): equal
+// fleets encode equal, so `since === snapshot` is still one string compare,
+// and a decodable previous token yields the digest. Raw busy/idle/unknown
+// churn inside IN FLIGHT is not projected, so it never wakes a polling driver;
+// missing targeted refs are, so a disappearing worktree is exactly one
+// transition.
+const fleetSnapshot = (rows: FleetRow[], missing: string[]): string =>
+  encodeSnapshot(projectFleet(rows, missing));
+
+// The digest against a caller's previous token — undefined when the token is
+// absent, legacy (the old 16-hex hash), or garbage, in which case the caller
+// reports `changed:true` with no digest, exactly as before.
+const digestSince = (
+  since: string | undefined,
+  rows: FleetRow[],
   missing: string[]
-): string => {
-  const projection = {
-    counts,
-    missing: missing.toSorted((a, b) => a.localeCompare(b)),
-    needsYou: needsYou
-      .map((row) => ({
-        gate: row.gate,
-        group: row.group,
-        identity: row.name,
-        nextCommand: row.nextCommand,
-        summary: row.summary,
-        verdict: row.verdict,
-      }))
-      .toSorted((a, b) => a.identity.localeCompare(b.identity)),
-  };
-  return createHash("sha256")
-    .update(JSON.stringify(projection))
-    .digest("hex")
-    .slice(0, 16);
+): string[] | undefined => {
+  if (since === undefined) {
+    return undefined;
+  }
+  const prev = decodeSnapshot(since);
+  return prev ? fleetDigest(prev, rows, missing) : undefined;
+};
+
+// --summary: counts for every group + full detail for NEEDS YOU only, plus the
+// snapshot token. With --since, the digest of what moved since that token:
+// `changed:false` when nothing did, `digest` lines when something did and the
+// token decodes, no digest (but still `changed:true`) on a legacy/garbage token.
+const writeSummary = (
+  options: StatusOptions,
+  rows: FleetRow[],
+  missing: string[],
+  out: NodeJS.WritableStream
+): void => {
+  const counts = groupCounts(rows);
+  const needsYou = rows.filter((r) => r.group === "needs-you");
+  const snapshot = fleetSnapshot(rows, missing);
+  const unchanged = options.since === snapshot;
+  const digest = unchanged
+    ? undefined
+    : digestSince(options.since, rows, missing);
+  if (options.json) {
+    if (unchanged) {
+      out.write(`${JSON.stringify({ changed: false, snapshot })}\n`);
+      return;
+    }
+    out.write(
+      `${JSON.stringify({
+        ...(options.since === undefined ? {} : { changed: true }),
+        counts,
+        ...(digest === undefined ? {} : { digest }),
+        ...(missing.length === 0 ? {} : { missing }),
+        needsYou,
+        snapshot,
+      })}\n`
+    );
+    return;
+  }
+  const s = styleFor(out);
+  if (options.since !== undefined) {
+    out.write(renderDigest(unchanged ? [] : digest, s));
+  }
+  out.write(renderSummary(rows, s));
+  if (options.since !== undefined) {
+    out.write(
+      `${msg.hint(s, `next: captain status --summary --since ${snapshot}`)}\n`
+    );
+  }
 };
 
 // The one read surface: the fleet view derived live from cmux + the worktrees,
@@ -359,26 +410,7 @@ const statusOnce = (
   // come off the (repo/ref-filtered) full set, so they stay honest regardless
   // of any group-narrowing flags.
   if (options.summary) {
-    const counts = groupCounts(rows);
-    const needsYou = rows.filter((r) => r.group === "needs-you");
-    if (options.json) {
-      const snapshot = fleetSnapshot(counts, needsYou, missing);
-      if (options.since === snapshot) {
-        out.write(`${JSON.stringify({ changed: false, snapshot })}\n`);
-        return;
-      }
-      out.write(
-        `${JSON.stringify({
-          ...(options.since === undefined ? {} : { changed: true }),
-          counts,
-          ...(missing.length === 0 ? {} : { missing }),
-          needsYou,
-          snapshot,
-        })}\n`
-      );
-      return;
-    }
-    out.write(renderSummary(rows, styleFor(out)));
+    writeSummary(options, rows, missing, out);
     return;
   }
   if (options.needs) {
@@ -849,6 +881,17 @@ const mergedCounts = (
 // log (the one gap-free ledger), the live cmux fleet, and the verdict files —
 // no daemon, no persisted counter, no event stream. The honesty caveats name
 // exactly what each number is so a snapshot is never read as a trend.
+// Thin fs edge: every repo's learnings.md → its stats, fail-soft per file (an
+// unreadable file drops that repo, never the block).
+const memoryStats = (env: NodeJS.ProcessEnv, at: number): MemoryStats[] =>
+  listMemoryFiles(env).flatMap(({ repo, path }) => {
+    try {
+      return [memoryStatsOf(repo, readFileSync(path, "utf-8"), at)];
+    } catch {
+      return [];
+    }
+  });
+
 export const gain = (
   options: GainOptions,
   out: NodeJS.WritableStream,
@@ -864,6 +907,7 @@ export const gain = (
   const at = now();
   const metrics = computeGain({
     log: readLog(env),
+    memories: memoryStats(env, at),
     merged: options.git ? mergedCounts(rows, env) : undefined,
     now: at,
     rows,

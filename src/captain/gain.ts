@@ -5,9 +5,10 @@
 // persisted counter and no event stream: every number is derived on demand from
 // reads, exactly like `status`.
 
+import type { MemoryStats } from "../memory";
 import type { LogRecord } from "./log";
 import type { Verdict } from "./verdict";
-import { groupCounts } from "./view";
+import { groupCounts, ticketFrom } from "./view";
 import type { FleetRow, Group } from "./view";
 
 // What commands.ts hands computeGain. `now`/`since` are epoch SECONDS to match
@@ -23,6 +24,9 @@ export interface GainInput {
   verdicts: { repo?: string; name?: string; verdict: Verdict }[];
   // opt-in `--git` approximation; omitted entirely when not requested
   merged?: { repo: string; count: number }[];
+  // per-repo fleet-memory stats, precomputed by memory.ts's pure memoryStatsOf
+  // over each learnings.md the caller found; omitted → no memory block
+  memories?: MemoryStats[];
   now: number;
   // epoch-seconds floor; when set, decision-based metrics count only ts >= since
   since?: number;
@@ -57,6 +61,18 @@ export interface ReworkStats {
   firstPassRate: number;
   // every ticket that came back, worst first
   topReworked: { name: string; rejections: number }[];
+  // per repo, how many of its most recently decided tickets in a row cleared
+  // the gate first pass — the graduated-trust signal. Whole-ledger, not
+  // windowed: a trust streak is the state now, and it ends at the newest
+  // ticket that was ever rejected. Repos with a zero streak are listed too, so
+  // "no streak" is never confused with "no data".
+  firstPassStreak: { repo: string; tickets: number }[];
+}
+
+// Fleet memory, as a live read of each repo's learnings.md — the curation
+// nudge the distill step never had. Nothing here is a ledger.
+export interface MemoryBlock {
+  repos: MemoryStats[];
 }
 
 // One launched ticket, joined across captain's two sources. `launchedAt` and the
@@ -124,6 +140,10 @@ export interface GainMetrics {
   // carries a decision at all — an empty ledger must not report a 0% first-pass
   // rate as if it were a measurement (the same rule as latency).
   rework?: ReworkStats;
+  // fleet memory per repo: rules vs inbox size, bullets beyond the injected
+  // tail, the oldest uncurated bullet's age, and traps named more than once.
+  // Omitted when the caller found no memory file at all.
+  memory?: MemoryBlock;
   // per-ticket detail behind the tallies: what launched, what was decided, what
   // the verifier said, which PRs exist. `dropped` is how many older launches the
   // cap left out — never a silent truncation.
@@ -207,7 +227,7 @@ const dayOf = (ts: number): string =>
 const caveatsFor = (input: GainInput): string[] => {
   const lines = [
     "decisions (approvals/rejections) are gap-free per-machine history from log.jsonl — a true ledger",
-    "rework counts PLAN-GATE rejections per ticket from the ledger: cycles at the gate, not post-merge rework — a relaunch that was never rejected is invisible to it. A --since window selects which TICKETS are reported; the cycles counted against them span the whole ledger",
+    "rework counts PLAN-GATE rejections per ticket from the ledger: cycles at the gate, not post-merge rework — a relaunch that was never rejected is invisible to it. A --since window selects which TICKETS are reported; the cycles counted against them span the whole ledger. firstPassStreak is per repo over the WHOLE ledger (never windowed): the newest tickets in a row that were never rejected — a trust signal for batching approvals, not a quality score",
     "fleet composition is a LIVE SNAPSHOT of cmux right now, not a trend over time",
     "verdict pass/fail is a live read of each worktree's verdict.json — overwritten per worktree, so it is not a historical ledger",
     "operation-level throughput (e.g. 'ops/day') is NOT recorded by design — captain keeps no event stream",
@@ -223,6 +243,11 @@ const caveatsFor = (input: GainInput): string[] => {
       "unexplained approvals are approvals logged with no --note: a record of whether the review step RAN, not a judgement of plan quality — approvals predating the --note flag carry none by construction"
     );
   }
+  if (input.memories && input.memories.length > 0) {
+    lines.push(
+      "memory is a live read of each repo's learnings.md: `recurring` are backticked tokens named by two or more inbox bullets — a curation hint for promoting to Rules, never a rule itself; `beyondTail` bullets are no longer injected into briefs"
+    );
+  }
   if (input.merged) {
     lines.push(
       "merged counts come from --git (gh/git), an opt-in approximation gathered at call time"
@@ -231,6 +256,54 @@ const caveatsFor = (input: GainInput): string[] => {
     lines.push("merged counts omitted — pass --git to approximate them via gh");
   }
   return lines;
+};
+
+// The repo half of a `${repo}-${ticket}` ledger name. The ledger records only
+// the joined name, so this is the inverse of identityOf: strip the ticket the
+// name ends with. A name with no ticket suffix (a free-form task) has no repo
+// to trust-tier and is bucketed under "?".
+const repoOfName = (name: string): string => {
+  const ticket = ticketFrom(name);
+  if (ticket && name.toLowerCase().endsWith(`-${ticket}`)) {
+    return name.slice(0, name.length - ticket.length - 1) || "?";
+  }
+  return "?";
+};
+
+// PURE: per repo, the run of most-recently-decided tickets that were never
+// rejected, newest backwards, stopping at the first reworked ticket. Over the
+// WHOLE ledger — a streak is current state, not a windowed rate. Sorted longest
+// first so the driver's trust rule reads the top.
+const firstPassStreaks = (
+  allDecisions: LogRecord[]
+): { repo: string; tickets: number }[] => {
+  const lastTs = new Map<string, number>();
+  const rejected = new Set<string>();
+  for (const d of allDecisions) {
+    lastTs.set(d.name, Math.max(lastTs.get(d.name) ?? 0, d.ts));
+    if (d.kind === "reject") {
+      rejected.add(d.name);
+    }
+  }
+  const byRepo = new Map<string, { name: string; ts: number }[]>();
+  for (const [name, ts] of lastTs) {
+    const repo = repoOfName(name);
+    const list = byRepo.get(repo) ?? [];
+    list.push({ name, ts });
+    byRepo.set(repo, list);
+  }
+  return [...byRepo.entries()]
+    .map(([repo, tickets]) => {
+      let streak = 0;
+      for (const t of tickets.toSorted((a, b) => b.ts - a.ts)) {
+        if (rejected.has(t.name)) {
+          break;
+        }
+        streak += 1;
+      }
+      return { repo, tickets: streak };
+    })
+    .toSorted((a, b) => b.tickets - a.tickets || a.repo.localeCompare(b.repo));
 };
 
 // PURE: median/max over elapsed-seconds samples; undefined when empty so the
@@ -278,6 +351,7 @@ const reworkStats = (
   return {
     firstPass,
     firstPassRate: firstPass / tickets,
+    firstPassStreak: firstPassStreaks(allDecisions),
     tickets,
     // Uncapped, like failingCriteria: a name-keyed tally is small, and a silent
     // truncation is exactly what roster's `dropped` field exists to avoid.
@@ -521,6 +595,15 @@ export const computeGain = (input: GainInput): GainMetrics => {
       total: input.rows.length,
     },
     ...(latency ? { latency } : {}),
+    ...(input.memories && input.memories.length > 0
+      ? {
+          memory: {
+            repos: input.memories.toSorted((a, b) =>
+              a.repo.localeCompare(b.repo)
+            ),
+          },
+        }
+      : {}),
     ...(input.merged ? { merged: input.merged } : {}),
     ...(rework ? { rework } : {}),
     roster: rosterOf(launches, decisions, input.rows, inWindow),

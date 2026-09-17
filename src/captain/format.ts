@@ -219,6 +219,20 @@ export const renderStatus = (
 // (with their inline resolve commands). For a driver that polls often and only
 // needs to act when something is blocked. `rows` is the full (repo-filtered)
 // set so the counts stay honest; only needs-you rows are detailed.
+// The "since last check" block for a human running `status --summary --since`:
+// one line per worktree whose actionable state moved (view.ts fleetDigest),
+// or a single dim line when nothing did.
+export const renderDigest = (lines: string[] | undefined, s: Style): string => {
+  const head = s.dim("SINCE LAST CHECK");
+  if (lines === undefined) {
+    return `${head}\n  ${s.dim("previous snapshot not readable — showing the full view")}\n\n`;
+  }
+  if (lines.length === 0) {
+    return `${head}\n  ${s.dim("nothing changed")}\n\n`;
+  }
+  return `${head}\n${lines.map((l) => `  ${s.cyan("·")} ${l}`).join("\n")}\n\n`;
+};
+
 export const renderSummary = (rows: FleetRow[], s: Style): string => {
   const needs = rows.filter((r) => r.group === "needs-you");
   const { inFlight, ready } = groupCounts(rows);
@@ -256,6 +270,60 @@ const pct = (rate: number): string => `${Math.round(rate * 100)}%`;
 // The telemetry view: derived-on-demand fleet metrics with their honesty labels
 // as a dimmed footer. Plain on a pipe / under --json (those paths never reach
 // here); coloured on a TTY. Display only — every number is computed in gain.ts.
+// Rework at the plan gate: ledger history, like DECISIONS — and not a
+// restatement of it. The approval rate there is per DECISION, so it cannot
+// tell ten tickets rejected once from one ticket rejected ten times; this is
+// per TICKET. A cadence signal, not a failure count — dim prose, no red.
+const reworkLines = (m: GainMetrics, s: Style): string[] => {
+  if (!m.rework) {
+    return [];
+  }
+  const lines = [
+    "",
+    s.dim("REWORK (plan gate)"),
+    `  ${m.rework.firstPass} of ${m.rework.tickets} tickets cleared the gate on the first plan ${s.dim("·")} ${pct(m.rework.firstPassRate)} first pass`,
+  ];
+  for (const t of m.rework.topReworked) {
+    lines.push(
+      `  ${s.yellow("↩")} ${s.bold(t.name)} ${s.dim(`(×${t.rejections})`)}`
+    );
+  }
+  // The graduated-trust signal: per repo, the newest tickets in a row that
+  // cleared the gate first pass. Dim prose — a streak is context for the
+  // driver's batching rule, never a score.
+  const streaks = m.rework.firstPassStreak.filter((r) => r.repo !== "?");
+  if (streaks.length > 0) {
+    lines.push(
+      `  ${s.dim(`first-pass streak: ${streaks.map((r) => `${r.repo} ${r.tickets}`).join(" · ")}`)}`
+    );
+  }
+  return lines;
+};
+
+// Memory: a live read of each repo's learnings.md — the curation nudge.
+const memoryLines = (m: GainMetrics, s: Style): string[] => {
+  if (!m.memory) {
+    return [];
+  }
+  const lines = ["", s.dim("MEMORY (live read)")];
+  for (const r of m.memory.repos) {
+    const parts = [
+      `${r.rules} rules`,
+      `${r.inbox} inbox${r.beyondTail > 0 ? ` (${r.beyondTail} beyond the injected tail)` : ""}`,
+    ];
+    if (r.oldestInboxDays !== undefined) {
+      parts.push(`oldest ${r.oldestInboxDays}d`);
+    }
+    lines.push(`  ${s.bold(r.repo)} ${s.dim(parts.join(" · "))}`);
+    for (const t of r.recurring) {
+      lines.push(
+        `    ${s.yellow("↻")} \`${t.token}\` ${s.dim(`named by ${t.count} bullets — promote to Rules?`)}`
+      );
+    }
+  }
+  return lines;
+};
+
 export const renderGain = (m: GainMetrics, s: Style): string => {
   const lines: string[] = [s.bold("Captain — gain")];
 
@@ -295,25 +363,10 @@ export const renderGain = (m: GainMetrics, s: Style): string => {
     }
   }
 
-  // Rework at the plan gate: ledger history, like DECISIONS above — and not a
-  // restatement of it. The approval rate there is per DECISION, so it cannot
-  // tell ten tickets rejected once from one ticket rejected ten times; this is
-  // per TICKET. A cadence signal, not a failure count — dim prose, no red.
-  if (m.rework) {
-    lines.push(
-      "",
-      s.dim("REWORK (plan gate)"),
-      `  ${m.rework.firstPass} of ${m.rework.tickets} tickets cleared the gate on the first plan ${s.dim("·")} ${pct(m.rework.firstPassRate)} first pass`
-    );
-    for (const t of m.rework.topReworked) {
-      lines.push(
-        `  ${s.yellow("↩")} ${s.bold(t.name)} ${s.dim(`(×${t.rejections})`)}`
-      );
-    }
-  }
-
-  // Fleet: a live snapshot.
+  // Rework + memory (see their renderers), then the fleet: a live snapshot.
   lines.push(
+    ...reworkLines(m, s),
+    ...memoryLines(m, s),
     "",
     s.dim("FLEET (live snapshot)"),
     `  ${m.fleet.total} worktrees ${s.dim("·")} ${s.yellow(`${m.fleet.needsYou} need you`)} ${s.dim("·")} ${s.cyan(`${m.fleet.inFlight} in flight`)} ${s.dim("·")} ${s.green(`${m.fleet.ready} ready`)}`

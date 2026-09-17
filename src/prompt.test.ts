@@ -85,6 +85,12 @@ describe("prompt extras", () => {
       expect(out).toContain("Lead it with what you are least sure of");
       expect(out).toContain("assumptions you had to make");
       expect(out).toContain("Never resolve an ambiguity silently.");
+      // the lead is a NAMED section so the driver's decision card can quote
+      // it verbatim — an unnamed ordering cannot be addressed
+      expect(out).toContain(
+        'Open the plan with a "## Decisions for the reviewer" section'
+      );
+      expect(out).toContain("at most five bullets");
       // the playbook's plan contract: what changes, in what order, proven how
       expect(out).toContain("name the files you will change");
       expect(out).toContain("the order you will do the work in");

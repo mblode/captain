@@ -65,6 +65,11 @@ where a System One judgment fits.
 | 8 | **Notes across context windows** (GPT-6 Astra / Codex) | **N/A — agent-internal** | Captain owns none of the agent's context; its equivalent is that `.captain/plan.md` + rubric survive any compaction because they are files |
 | 9 | **Merged-PR count as the success metric** (Cursor's 6×) | **REJECT — decided** | `gain` counts decisions, verdicts, latency and rework, not throughput — `research/agent-swarm-economics.md` explains why |
 | 10 | **A calibrated System One judge at the plan gate** (Jev) | **ADOPT — built** | `captain triage`: the driver's bounded, frontier-model plan review was System 2 spent on System 1 work |
+| 10a | **Objective → parallel work without a tracker** (Projects/Cursor) | **ADOPT — built** | Free-form tasks get worktrees, several fan out; the driver decomposes and shows the split first |
+| 10b | **"What changed" + "next run due"** (Cursor, Grok Build dock) | **ADOPT — built** | `status --since` returns a deterministic `digest`; every wake ends with it and the next check time |
+| 10c | **The decision card quotes a named plan section** (Grok inline cards) | **ADOPT — built** | `## Decisions for the reviewer` at the top of every plan |
+| 10d | **Graduated trust as review confidence builds** (Cursor migrations) | **ADOPT — built** | `gain.rework.firstPassStreak` per repo; the batching rule lives in the skill, the human still approves |
+| 10e | **"Same mistake twice → a rule"** (Cursor gardening) | **ADAPT — built as a nudge** | `gain.memory.recurring` ranks Inbox traps for the human; promotion stays human |
 | 11 | **Jev for repo routing** (which checkout does this ticket touch) | **ADAPT — not now** | The auto-pickup contract already routes deterministically; a judgment only helps tickets with no contract, and the failure mode is the #1 silent one |
 | 12 | **Jev for verdict-evidence checking** (does the evidence support the pass) | **ADAPT — not now** | The citation-check cookbook shape fits exactly; wait for the first observed thin-verdict miss |
 | 13 | **Jev for fleet-memory curation** (rank Inbox bullets for promotion) | **ADAPT — not now** | Ranking for the human, never promoting; revisit when the Inbox tail cap starts dropping good bullets |
@@ -310,6 +315,67 @@ commander parses, on every invocation, and a network call there would make `capt
 status` depend on a third party. The heuristic stays.
 
 ---
+
+## Built: the conversation layer — how captain talks to you and manages the fleet
+
+Asked directly, the layer worth stealing from the three platforms is not their daemon but
+their *conversation*: how work is started, how progress is reported, what a decision looks
+like, how trust grows, and what happens when the same mistake recurs. Captain's
+conversation layer is the `/captain` skill plus the `status` and `gain` renderers, none of
+which touches the no-state boundary, so all five changes below landed there.
+
+**Starting work: an objective, not a ticket.** Projects and Cursor take "profile each
+endpoint and open PRs" and fan out. Captain took tickets, or one free-form task in the
+checkout that clobbered `.captain/` if you ran two. Now a free-form task can take
+`--worktree` (a sibling `<repo>-<slug>` on branch `<slug>`, the same shape an issue gets, so
+every read path treats it identically), and **several quoted tasks fan out one worktree
+each** with no tracker in between (`runTaskFleet`). The routing predicate is deliberate:
+a token is a task only when it carries whitespace, so `captain tidy the readme` stays one
+task and the typo guard in `route.ts` is untouched. Decomposition stays the driver's: the
+skill now says to read the code, propose the split as one decision card, and only then
+fan out the approved parts. Captain does no decomposition — that is the agent-side line
+the wayfinder audit drew for tracker writes, applied to objectives.
+
+**Talking back: the digest, and when the next check is.** Cursor's coordinator is "never
+blocked, always responsive"; Grok Build's dock shows when the next run is due. Captain's
+driver went quiet between heartbeats and could only say *whether* the fleet changed,
+because the `--since` token was a hash. The token is now the encoded actionable
+projection (`projectFleet`/`encodeSnapshot`), and a decodable previous token yields
+`fleetDigest`: one deterministic line per worktree whose actionable state moved, then a
+counts line. Still caller-held, still stateless, still blind to run-state churn. The skill
+requires every wake to end with that digest verbatim and the time of the next check, and
+the TTY gets the same block under SINCE LAST CHECK. The rule "diffed, never composed"
+matters: the same transition must read the same way every time, which prose from two
+payloads cannot promise.
+
+**The decision card quotes a named section.** The brief already asked agents to lead
+with what they were least sure of, but an unnamed ordering cannot be addressed. Plans now
+open with `## Decisions for the reviewer` (≤5 bullets), and the card quotes it verbatim,
+so the human reads the sentences that matter rather than the plan.
+
+**Graduated trust, derived from the ledger.** Cursor describes heavy scrutiny early and
+less as confidence builds. Captain had the data: `gain.rework` now carries
+`firstPassStreak` per repo — the newest decided tickets in a row never rejected, over the
+whole ledger, never windowed, because a streak is state not a rate. The batching rule is
+the driver's and lives in the skill: a repo at streak ≥ 5 whose pending plans are all
+triage-`clean` and risk `low` may be offered as one approve-all option; each approval still
+carries its own `--note`, one rejection or one `review` card resets it, never across repos.
+Captain computes the number and decides nothing, which is the same split `triage` made.
+
+**"The same mistake twice" as a nudge, not a rule.** Cursor's gardener "adds a lint rule
+whenever it sees the same mistake twice". Captain's Inbox→Rules promotion is human on
+purpose (`research/agent-swarm-economics.md` #6), and the distill step almost never
+happened because nothing prompted it. `gain.memory` now reads every repo's `learnings.md`
+(`memoryStatsOf`, pure over the file) and reports rules vs inbox, `beyondTail` (bullets no
+brief reads any more), `oldestInboxDays`, and `recurring` — backticked tokens named by two
+or more inbox bullets. The skill surfaces it once per session as a one-line nudge. It ranks
+for the human; it promotes nothing.
+
+What was *not* taken, and why: the platforms' progress narrative comes from a coordinator
+that holds the story; captain's comes from a diff of two derivations, which is the only
+version that survives a restart. Their trust ladders are opaque; captain's is a number in
+a greppable ledger with its rule written in a skill file a human edits. Their memory grows
+under the model's control; captain's still needs a person to promote a rule.
 
 ## What captain should not chase from these references
 

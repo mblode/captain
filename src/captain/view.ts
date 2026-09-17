@@ -276,6 +276,214 @@ export const groupCounts = (
   ready: rows.filter((r) => r.group === "ready").length,
 });
 
+// The `--summary --json` snapshot token. It was a hash: enough to answer "did
+// anything change?", useless for "what changed?" — a driver waking on
+// `changed:true` had to re-derive the story from two full payloads. The token
+// is now the projection itself, encoded, so the NEXT call can diff against it
+// and say what happened in one line per worktree. Still caller-held state —
+// captain persists nothing; the caller passes the token back.
+//
+// Only the actionable fields are projected: group counts, each NEEDS YOU row's
+// identity + gate kind + gate id + verdict, the READY identities, and any
+// targeted refs that went missing. Raw busy/idle churn inside IN FLIGHT stays
+// out, so it can never wake a poller (the same rule the hash followed).
+export interface FleetProjection {
+  c: { needsYou: number; inFlight: number; ready: number };
+  // NEEDS YOU rows: identity, gate kind ("" = verdict/needs-input), gate id,
+  // verdict ("" = none)
+  n: { i: string; g: string; d: string; v: string }[];
+  // READY identities
+  r: string[];
+  // targeted refs with no row
+  m: string[];
+}
+
+const SNAPSHOT_PREFIX = "v2.";
+
+export const projectFleet = (
+  rows: FleetRow[],
+  missing: string[]
+): FleetProjection => ({
+  c: groupCounts(rows),
+  m: missing.toSorted((a, b) => a.localeCompare(b)),
+  n: rows
+    .filter((r) => r.group === "needs-you")
+    .map((r) => ({
+      d: r.gate?.id ?? "",
+      g: r.gate?.kind ?? "",
+      i: r.name,
+      v: r.verdict ?? "",
+    }))
+    .toSorted((a, b) => a.i.localeCompare(b.i)),
+  r: rows
+    .filter((r) => r.group === "ready")
+    .map((r) => r.name)
+    .toSorted((a, b) => a.localeCompare(b)),
+});
+
+// Canonical (sorted) JSON → base64url, so two identical fleets encode to the
+// same string and `since === snapshot` stays a plain equality check.
+export const encodeSnapshot = (p: FleetProjection): string =>
+  `${SNAPSHOT_PREFIX}${Buffer.from(JSON.stringify(p), "utf-8").toString("base64url")}`;
+
+// Fail-safe: a legacy 16-hex token, garbage, or a foreign shape decodes to
+// undefined — the caller then reports `changed:true` with no digest, exactly
+// the pre-digest behaviour, instead of throwing at a driver.
+export const decodeSnapshot = (token: string): FleetProjection | undefined => {
+  if (!token.startsWith(SNAPSHOT_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const raw = JSON.parse(
+      Buffer.from(token.slice(SNAPSHOT_PREFIX.length), "base64url").toString(
+        "utf-8"
+      )
+    ) as Partial<FleetProjection>;
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      !Array.isArray(raw.n) ||
+      !Array.isArray(raw.r) ||
+      !Array.isArray(raw.m) ||
+      typeof raw.c !== "object" ||
+      raw.c === null
+    ) {
+      return undefined;
+    }
+    return raw as FleetProjection;
+  } catch {
+    return undefined;
+  }
+};
+
+const HINT_MAX = 80;
+const clip = (text: string): string =>
+  text.length > HINT_MAX ? `${text.slice(0, HINT_MAX - 1)}…` : text;
+
+// What a NEEDS YOU row is asking for, in one clause.
+const needsYouReason = (row: FleetRow): string => {
+  if (row.gate?.kind === "plan") {
+    return "plan ready for approval";
+  }
+  if (row.gate?.kind === "question") {
+    return row.gate.hint
+      ? `asked a question — ${clip(row.gate.hint)}`
+      : "asked a question";
+  }
+  if (row.verdict === "fail") {
+    return row.summary
+      ? `verifier failed — ${clip(row.summary)}`
+      : "verifier failed";
+  }
+  return "waiting on input";
+};
+
+// PURE: the human-readable diff between a previous projection and the fleet
+// now — one line per worktree whose actionable state moved, then a counts line
+// when the totals moved. Deterministic and ordered by name, so the driver can
+// relay it verbatim ("two plans arrived, tig-430 verified") instead of
+// composing prose from two payloads. Empty when nothing actionable changed.
+// The NEEDS YOU half of the digest: rows that arrived or changed their ask,
+// and rows that left (to ready, to gone, or back in flight).
+const needsYouChanges = (
+  prev: FleetProjection,
+  now: FleetProjection,
+  byName: Map<string, FleetRow>,
+  lines: Map<string, string>
+): void => {
+  const prevNeeds = new Map(prev.n.map((e) => [e.i, e]));
+  const nowNeeds = new Set(now.n.map((e) => e.i));
+  const nowReady = new Set(now.r);
+  const nowMissing = new Set(now.m);
+  for (const e of now.n) {
+    const row = byName.get(e.i);
+    if (!row) {
+      continue;
+    }
+    const was = prevNeeds.get(e.i);
+    if (!was) {
+      lines.set(e.i, `${e.i}: ${needsYouReason(row)}`);
+    } else if (was.g !== e.g || was.d !== e.d || was.v !== e.v) {
+      lines.set(e.i, `${e.i}: now ${needsYouReason(row)}`);
+    }
+  }
+  for (const e of prev.n) {
+    if (nowNeeds.has(e.i)) {
+      continue;
+    }
+    if (nowReady.has(e.i)) {
+      lines.set(e.i, `${e.i}: verified, ready to merge`);
+    } else if (nowMissing.has(e.i)) {
+      lines.set(e.i, `${e.i}: worktree gone`);
+    } else {
+      lines.set(e.i, `${e.i}: resolved, back in flight`);
+    }
+  }
+};
+
+// The READY + missing half: newly verified rows, rows that left ready, and
+// targeted refs whose worktree is gone. Never overwrites a line the NEEDS YOU
+// pass already set for the same name.
+const readyChanges = (
+  prev: FleetProjection,
+  now: FleetProjection,
+  lines: Map<string, string>
+): void => {
+  const prevReady = new Set(prev.r);
+  const nowReady = new Set(now.r);
+  const prevMissing = new Set(prev.m);
+  const nowMissing = new Set(now.m);
+  for (const name of now.r) {
+    if (!(prevReady.has(name) || lines.has(name))) {
+      lines.set(name, `${name}: verified, ready to merge`);
+    }
+  }
+  for (const name of prev.r) {
+    if (nowReady.has(name) || lines.has(name)) {
+      continue;
+    }
+    lines.set(
+      name,
+      nowMissing.has(name)
+        ? `${name}: worktree gone`
+        : `${name}: no longer ready`
+    );
+  }
+  for (const name of now.m) {
+    if (!(prevMissing.has(name) || lines.has(name))) {
+      lines.set(name, `${name}: worktree gone`);
+    }
+  }
+};
+
+const countsLine = (
+  p: FleetProjection["c"],
+  c: FleetProjection["c"]
+): string | undefined =>
+  c.needsYou === p.needsYou && c.inFlight === p.inFlight && c.ready === p.ready
+    ? undefined
+    : `counts: needs you ${p.needsYou}→${c.needsYou} · in flight ${p.inFlight}→${c.inFlight} · ready ${p.ready}→${c.ready}`;
+
+export const fleetDigest = (
+  prev: FleetProjection,
+  rows: FleetRow[],
+  missing: string[]
+): string[] => {
+  const now = projectFleet(rows, missing);
+  const byName = new Map(rows.map((r) => [r.name, r]));
+  const lines = new Map<string, string>();
+  needsYouChanges(prev, now, byName, lines);
+  readyChanges(prev, now, lines);
+  const out = [...lines.entries()]
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([, line]) => line);
+  const counts = countsLine(prev.c, now.c);
+  if (counts) {
+    out.push(counts);
+  }
+  return out;
+};
+
 // PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO
 // (paths are repo-relative, so cross-repo "overlap" is meaningless). Two
 // branches touching the same file will conflict at merge — surface the

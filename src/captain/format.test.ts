@@ -193,6 +193,12 @@ describe("renderGain", () => {
         rework: {
           firstPass: 3,
           firstPassRate: 0.75,
+          firstPassStreak: [
+            { repo: "frontyard", tickets: 4 },
+            { repo: "linkiq", tickets: 0 },
+            // a free-form task with no repo half never shows as a streak
+            { repo: "?", tickets: 2 },
+          ],
           tickets: 4,
           topReworked: [{ name: "linkiq-tig-9", rejections: 2 }],
         },
@@ -204,6 +210,8 @@ describe("renderGain", () => {
     expect(out).toContain("75% first pass");
     expect(out).toContain("linkiq-tig-9");
     expect(out).toContain("(×2)");
+    expect(out).toContain("first-pass streak: frontyard 4 · linkiq 0");
+    expect(out).not.toContain("? 2");
     // ledger history sits with DECISIONS, above the live-snapshot sections
     expect(out.indexOf("DECISIONS")).toBeLessThan(out.indexOf("REWORK"));
     expect(out.indexOf("REWORK")).toBeLessThan(out.indexOf("FLEET"));

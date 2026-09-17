@@ -25,9 +25,9 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: install | start | status | approve [--note] | reject --note; bare-token routing via withImplicitStart
+  cli.ts            # Commander entry: install | start [--worktree] | status [--since] | approve [--note] | reject --note | triage | gain; bare-token routing via withImplicitStart
   route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-issue word = likely typo, untouched); routes via source.ts isIssueToken
-  runner.ts         # runStart routes on the first token: runIssueWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
+  runner.ts         # runStart routes on the tokens: runIssueWorktree (issue → worktree fan-out, any source), runTaskFleet (several quoted free-form tasks → one worktree each) or runDispatch (one free-form task → current dir, or --worktree); all share the self-drive brief; resolveAgent picks claude|codex
   source.ts         # THE ISSUE-SOURCE SEAM: IssueSource registry (name/claims/prepare) — the one owner of "which source claims this token + how to parse/fetch it". sourceFor + isIssueToken. Adding a source touches only this file.
   cmux.ts git.ts linear.ts donebear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
   judge.ts          # THE ONE NETWORK EDGE TO A SYSTEM ONE JUDGE: JudgePort seam + realJudge(env) → one fetch to TypeSafe's POST /v1/systemone (Jev). Opt-in (TYPESAFE_API_KEY); only `captain triage` calls it — status/approve/reject/gain never do
@@ -37,9 +37,9 @@ src/
   config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE)
   prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <data-scope> guardrail + <finishing-protocol> + <fleet-memory>
   rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
-  memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
+  memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox); memoryStatsOf (PURE) + listMemoryFiles feed gain.memory
   captain/
-    view.ts         # 100% PURE (lint-enforced): identity, pendingGate (feed → gate), rowOf (the grouping rule), mergeOrderHints. Start here.
+    view.ts         # 100% PURE (lint-enforced): identity, pendingGate (feed → gate), rowOf (the grouping rule), mergeOrderHints, projectFleet/encodeSnapshot/decodeSnapshot + fleetDigest (the --since token and its diff). Start here.
     verdict.ts      # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
     triage.ts       # 100% PURE: TRIAGE_QUESTIONS (the fixed Jev questions over {contract, plan}) + parseAnswers (fail-safe) + triageCard (thresholds → clean | review); the HTTP call is judge.ts
     surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts + readRubricFacts (hash + ticket title, ONE read)
@@ -110,10 +110,22 @@ sentinel is claude-only). `status` still tracks a codex workspace as IN FLIGHT �
 (`control.ts`) fills any workspace's state from its `cmux top` tag row, so a non-`claude_code` tag
 still registers; only the plan-gate label is claude-specific.
 
-For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot) — one such
-dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.md`/`verdict.json`.
-The rubric degrades gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed
-verify procedure).
+For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot) by default —
+one such dispatch per checkout at a time: a second clobbers the shared
+`.captain/rubric.md`/`verdict.json`. `--worktree` gives the task a sibling worktree
+`<repo>-<slug>` on branch `<slug>` instead (`taskWorktree` in `runner.ts`, the same
+`worktreePathFor` shape an issue gets, so `status`/`approve`/`gain` treat it identically and
+re-running the same task reuses it). **Several quoted free-form tasks fan out one worktree
+each** (`runTaskFleet`; `captain "fix the flaky auth test" "tighten the CSP header"`) — the
+objective-to-parallel-work path the platforms offer, with no tracker in between. The routing
+predicate is `isTaskFleetInput`: ≥2 tokens, every one a non-issue token *carrying
+whitespace* — so `captain tidy the readme` (three bare words) is still ONE in-checkout task,
+and a task next to an issue id falls to the single path and errors as before. `--print` with
+several tasks is a usage error, like several issues; the fleet needs cmux. The rubric degrades
+gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed verify
+procedure). The driver decomposes an *objective* into those tasks itself and shows the split
+as one decision card first (`skills/captain/SKILL.md`, step 3) — captain does no
+decomposition.
 
 **Repo selection**: `runner.ts` resolves a run's repo from `--repo-path` (`repoOverride`), else the
 cwd git toplevel (`resolveRepo`) — there is **no** config-based routing. Spanning several repos in
@@ -173,6 +185,19 @@ the driver (stdin / `--plan-file`) — the cmux `exitPlan` feed item carries no 
 `.captain/plan.md` is written only after the gate clears. Rationale and the rest of the
 System One inventory: `research/first-principles-2026-09.md`.
 
+`status --summary --since <token>` says **what** changed, not just whether. The snapshot token
+is the encoded actionable projection (`projectFleet`/`encodeSnapshot` in `view.ts`: group
+counts, each NEEDS YOU row's identity + gate kind + gate id + verdict, the READY identities,
+missing targeted refs — never run-state churn), canonical so equal fleets encode equal and
+`since === snapshot` stays one string compare. A decodable previous token yields `digest`
+(`fleetDigest`, PURE): one line per worktree whose actionable state moved — "tig-430: plan
+ready for approval", "tig-431: verified, ready to merge", "tig-432: asked a question — …",
+"tig-433: worktree gone" — then a counts line. The driver relays it verbatim as the wake's
+"what changed"; a human gets it under SINCE LAST CHECK on the TTY (`--since` no longer
+requires `--json`) with the next token to pass back. A legacy 16-hex token or garbage decodes
+to nothing and degrades to the old `changed:true`-without-digest. Still caller-held state:
+captain persists nothing.
+
 `status --watch [--interval <s>]` re-renders that same derivation on a timer for a human watching
 a terminal (Ctrl-C exits, default 5s). It is **not** a daemon: it persists nothing, every tick is
 an independent `statusOnce` (the `--json`/`--summary` machine paths short-circuit before the git
@@ -207,6 +232,23 @@ clean first pass, inflating the rate in the flattering direction. Omitted wholes
 no ticket in the window carries a decision (the same "no sample ⇒ omit" rule as `latency`), and
 its caveat says what it is not — cycles at the *gate*, not post-merge rework, and a relaunch
 that was never rejected is invisible to it.
+
+`gain.rework.firstPassStreak` is the **graduated-trust** signal: per repo (the repo half of
+the `${repo}-${ticket}` ledger name; a free-form task has none and buckets under `?`), the
+newest decided tickets in a row that were never rejected, stopping at the first reworked one.
+Whole-ledger, never windowed — a streak is current state, not a rate — and repos with a zero
+streak are listed so "no streak" never reads as "no data". The driver's batching rule lives in
+the skill: a repo at streak ≥ 5 whose pending plans are all triage-`clean` and risk `low` may
+be offered as ONE approve-all option; each approval still carries its own `--note`, and a
+single rejection resets it. Captain computes the number; the policy is the driver's.
+
+`gain.memory` is the curation nudge the distill step never had: per repo (`listMemoryFiles`
+→ `memoryStatsOf` in `memory.ts`, PURE over the file), rules vs inbox counts, `beyondTail`
+(inbox bullets past `INBOX_MAX_ENTRIES`, injected into no brief), `oldestInboxDays` (from the
+`[TICKET YYYY-MM-DD]` tag), and `recurring` — backticked tokens named by two or more inbox
+bullets, the "same mistake twice" signal, capped at five. Omitted when no memory file exists.
+It ranks for the human; promotion to Rules stays human (`research/agent-swarm-economics.md`
+#6).
 
 `gain.roster` is the per-ticket detail behind those tallies — the answer to "what got done and
 what's left", which nothing could answer before: `status` is live-only (a merged worktree leaves
@@ -373,10 +415,18 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   violation: it is a foreground, stateless re-render loop the human starts and Ctrl-Cs — it holds
   no state, listens to nothing, and coordinates no writers. The forbidden class is a _persistent
   background listener_, not a polling loop.)
+- **The plan opens with a named section, and the digest is diffed, never composed.** The
+  brief requires `## Decisions for the reviewer` (≤5 bullets) at the top of every plan
+  (`prompt.ts` `planLead`) because the driver's decision card quotes it verbatim — an
+  unnamed "lead with what you are least sure of" cannot be addressed. Likewise the wake's
+  "what changed" is `status --since`'s `digest`, a deterministic diff of two projections,
+  not prose the driver writes from two payloads: the same fleet transition must read the
+  same way every time.
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
-  donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch,
-  an explicit `--repo-path`, the bare-token form (`captain tig-123` == `captain start tig-123`, via
-  `withImplicitStart`), and `--print` for each. Repo selection is `--repo-path` else cwd; spanning
+  donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch
+  (and `--worktree`), several quoted free-form tasks → one worktree each, an explicit
+  `--repo-path`, the bare-token form (`captain tig-123` == `captain start tig-123`, via
+  `withImplicitStart`), and `--print` for each single mode. Repo selection is `--repo-path` else cwd; spanning
   repos in one session is the driver's job (per-ticket `--repo-path`), not config. A fan-out may
   now skip a blocked issue (the frontier rule), so its summary line and `--json` `started` count
   what actually launched — with nothing blocked, both are byte-identical to before. A single

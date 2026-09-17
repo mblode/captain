@@ -26,8 +26,13 @@ For an ordinary fleet, retain the `started[].name` refs and poll only those.
   opaque `snapshot`.
 - Later wakes: the same command with `--since <snapshot>`.
   - `changed:false` → no new fleet action; re-arm immediately.
-  - `changed:true` → returns the current `counts` and `needsYou`. Act, replace the
-    snapshot, then re-arm.
+  - `changed:true` → returns the current `counts`, `needsYou`, and a `digest`: one line
+    per worktree whose actionable state moved ("tig-430: plan ready for approval",
+    "tig-431: verified, ready to merge", "tig-432: asked a question — …") plus a counts
+    line. Relay the digest verbatim as the wake's "what changed" — do not compose it
+    from the two payloads. Act, replace the snapshot, then re-arm.
+  - No `digest` on `changed:true` means the token was from an older captain (a bare
+    hash) — read `needsYou` as before; the new `snapshot` is diffable from here on.
 
 Captain persists nothing — the snapshot belongs to this driver session. A `CronCreate`
 wake cannot retain it, so that rung uses the first form every time.
@@ -42,3 +47,11 @@ entirely (see `auto-pickup.md`).
 ~200–260s lets transitions accumulate. (A human watching a terminal can use
 `captain status --watch` instead; the driver cannot — a blocking foreground loop can't
 yield turns.)
+
+## What a wake says
+
+Every wake ends with two lines, whatever else it did: the digest (or "nothing changed"),
+and when the next check is due ("next check in ~4 min"). The platforms' coordinators
+show when their next run is due; a driver that goes silent between heartbeats reads as
+stuck. A human running `captain status --summary --since <token>` by hand gets the same
+digest under SINCE LAST CHECK and the next token to pass back.

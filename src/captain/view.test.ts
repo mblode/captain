@@ -3,17 +3,21 @@ import { describe, expect, it } from "vitest";
 import type { CmuxFeedItem, CmuxWorkspace } from "./control";
 import type { Verdict } from "./verdict";
 import {
+  decodeSnapshot,
+  encodeSnapshot,
+  fleetDigest,
   identityOf,
   mergeOrderHints,
   nextCommand,
   pendingGate,
   pickAgentWorkspaces,
+  projectFleet,
   rowOf,
   stateHash,
   ticketFrom,
   withHandles,
 } from "./view";
-import type { RowInput } from "./view";
+import type { FleetRow, RowInput } from "./view";
 
 const feedItem = (over: Partial<CmuxFeedItem> = {}): CmuxFeedItem => ({
   cwd: "/wt/tig-1",
@@ -340,5 +344,169 @@ describe("mergeOrderHints", () => {
       entry("ws-b", "x-tig-2", "x", shared),
     ]);
     expect(hints["ws-a"]).toContain("(+2 more)");
+  });
+});
+
+// The snapshot token carries the projection so the next poll can say WHAT
+// changed. Canonical encoding keeps `since === snapshot` a string compare.
+// A terse row for the projection/digest tests below.
+const projRow = (over: Partial<FleetRow> = {}): FleetRow => ({
+  cwd: "/wt/x",
+  group: "in-flight",
+  name: "frontyard-tig-1",
+  run: "running",
+  workspaceId: "ws-1",
+  ...over,
+});
+
+describe("snapshot codec + fleetDigest", () => {
+  it("encodes equal fleets to equal tokens regardless of row order", () => {
+    const a = projRow({
+      gate: { id: "g1", kind: "plan" },
+      group: "needs-you",
+      name: "b",
+    });
+    const b = projRow({ group: "ready", name: "a", verdict: "pass" });
+    expect(encodeSnapshot(projectFleet([a, b], []))).toBe(
+      encodeSnapshot(projectFleet([b, a], []))
+    );
+    expect(encodeSnapshot(projectFleet([a, b], []))).toMatch(/^v2\./u);
+  });
+
+  it("ignores run-state churn but not a gate or verdict change", () => {
+    const base = projRow({ group: "in-flight", run: "running" });
+    const idle = { ...base, run: "idle" as const };
+    expect(encodeSnapshot(projectFleet([base], []))).toBe(
+      encodeSnapshot(projectFleet([idle], []))
+    );
+    const gated = projRow({
+      gate: { id: "g1", kind: "plan" },
+      group: "needs-you",
+    });
+    expect(encodeSnapshot(projectFleet([base], []))).not.toBe(
+      encodeSnapshot(projectFleet([gated], []))
+    );
+  });
+
+  it("round-trips through decode and refuses legacy or garbage tokens", () => {
+    const p = projectFleet(
+      [projRow({ group: "ready", verdict: "pass" })],
+      ["tig-9"]
+    );
+    expect(decodeSnapshot(encodeSnapshot(p))).toEqual(p);
+    expect(decodeSnapshot("0123456789abcdef")).toBeUndefined();
+    expect(decodeSnapshot("v2.!!!")).toBeUndefined();
+    expect(
+      decodeSnapshot(`v2.${Buffer.from("[1,2]").toString("base64url")}`)
+    ).toBeUndefined();
+  });
+
+  it("names each worktree whose actionable state moved, then the counts", () => {
+    const before = projectFleet(
+      [
+        projRow({ group: "in-flight", name: "a" }),
+        projRow({ group: "in-flight", name: "b" }),
+        projRow({
+          gate: { id: "g1", kind: "plan" },
+          group: "needs-you",
+          name: "c",
+        }),
+        projRow({ group: "ready", name: "d", verdict: "pass" }),
+      ],
+      []
+    );
+    const lines = fleetDigest(
+      before,
+      [
+        projRow({
+          gate: { id: "g2", kind: "plan" },
+          group: "needs-you",
+          name: "a",
+        }),
+        projRow({
+          gate: {
+            hint: "Which auth provider should the fallback use?",
+            id: "g3",
+            kind: "question",
+          },
+          group: "needs-you",
+          name: "b",
+        }),
+        projRow({ group: "ready", name: "c", verdict: "pass" }),
+      ],
+      ["d"]
+    );
+    expect(lines).toEqual([
+      "a: plan ready for approval",
+      "b: asked a question — Which auth provider should the fallback use?",
+      "c: verified, ready to merge",
+      "d: worktree gone",
+      "counts: needs you 1→2 · in flight 2→0 · ready 1→1",
+    ]);
+  });
+
+  it("reports a changed ask on the same row as 'now …', and a fail with its summary", () => {
+    const before = projectFleet(
+      [
+        projRow({
+          gate: { id: "g1", kind: "plan" },
+          group: "needs-you",
+          name: "a",
+        }),
+      ],
+      []
+    );
+    expect(
+      fleetDigest(
+        before,
+        [
+          projRow({
+            group: "needs-you",
+            name: "a",
+            summary: "typecheck fails in src/x.ts",
+            verdict: "fail",
+          }),
+        ],
+        []
+      )
+    ).toEqual(["a: now verifier failed — typecheck fails in src/x.ts"]);
+  });
+
+  it("is empty when nothing actionable moved", () => {
+    const rows = [
+      projRow({
+        gate: { id: "g1", kind: "plan" },
+        group: "needs-you",
+        name: "a",
+      }),
+      projRow({ group: "in-flight", name: "b" }),
+    ];
+    const before = projectFleet(rows, []);
+    expect(
+      fleetDigest(
+        before,
+        rows.map((r) => ({ ...r, run: "idle" as const })),
+        []
+      )
+    ).toEqual([]);
+  });
+
+  it("a needs-you row that resolved back to in flight says so", () => {
+    const before = projectFleet(
+      [
+        projRow({
+          gate: { id: "g1", kind: "question" },
+          group: "needs-you",
+          name: "a",
+        }),
+      ],
+      []
+    );
+    expect(
+      fleetDigest(before, [projRow({ group: "in-flight", name: "a" })], [])
+    ).toEqual([
+      "a: resolved, back in flight",
+      "counts: needs you 1→0 · in flight 0→1 · ready 0→0",
+    ]);
   });
 });

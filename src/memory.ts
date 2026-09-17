@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { captainHome } from "./home";
@@ -179,6 +185,131 @@ export const memoryExcerptOf = (content: string): string => {
     bounded = [rules, keptInbox].filter(Boolean).join("\n\n").trim();
   }
   return clipWholeLines(bounded);
+};
+
+// What `captain gain` reports per repo about its memory file — the curation
+// nudge. Pure over the file's content; the fs read is listMemoryFiles below.
+export interface MemoryStats {
+  // the memory dir's name for this repo (basename, or basename-hash)
+  repo: string;
+  rules: number;
+  inbox: number;
+  // inbox bullets past INBOX_MAX_ENTRIES — written by agents, injected into no
+  // brief, read by nobody until a human distills
+  beyondTail: number;
+  // age in days of the oldest inbox bullet carrying a `[TICKET YYYY-MM-DD]`
+  // tag; absent when none is tagged
+  oldestInboxDays?: number;
+  // backticked tokens (commands, env names, flags) named by 2+ distinct inbox
+  // bullets, most-named first — the "same trap twice" signal, capped
+  recurring: { token: string; count: number }[];
+}
+
+const RECURRING_MAX = 5;
+const DAY_SECONDS = 86_400;
+
+const bulletsUnder = (content: string, from: number, to: number): string[] =>
+  content
+    .slice(from, to)
+    .split("\n")
+    .filter((line) => line.trim().startsWith("- "));
+
+// PURE: stats over one learnings.md. `now` is epoch seconds (injected, like
+// gain's). A file with neither heading reads as all-inbox: uncurated by
+// definition.
+export const memoryStatsOf = (
+  repo: string,
+  content: string,
+  now: number
+): MemoryStats => {
+  const rulesAt = headingAt(content, RULES_HEADING);
+  const inboxAt = headingAt(content, INBOX_HEADING);
+  const rules =
+    rulesAt === -1
+      ? []
+      : bulletsUnder(
+          content,
+          rulesAt,
+          inboxAt > rulesAt ? inboxAt : content.length
+        );
+  let inbox: string[] = [];
+  if (inboxAt !== -1) {
+    inbox = bulletsUnder(
+      content,
+      inboxAt,
+      rulesAt > inboxAt ? rulesAt : content.length
+    );
+  } else if (rulesAt === -1) {
+    // no headings at all: every bullet is uncurated by definition
+    inbox = bulletsUnder(content, 0, content.length);
+  }
+
+  let oldest: number | undefined;
+  for (const line of inbox) {
+    const tag = /^\s*-\s+\[[^\]\s]+\s+(\d{4}-\d{2}-\d{2})\]/u.exec(line);
+    if (!tag) {
+      continue;
+    }
+    const ms = Date.parse(`${tag[1]}T00:00:00Z`);
+    if (!Number.isNaN(ms)) {
+      const ts = Math.floor(ms / 1000);
+      oldest = oldest === undefined ? ts : Math.min(oldest, ts);
+    }
+  }
+
+  // One count per bullet per token (a bullet naming `yarn test` twice is one
+  // sighting), so `count` is "how many bullets hit this trap".
+  const mentions = new Map<string, number>();
+  for (const line of inbox) {
+    const tokens = new Set(
+      [...line.matchAll(/`([^`\n]{2,60})`/gu)].map((m) => m[1].trim())
+    );
+    for (const token of tokens) {
+      mentions.set(token, (mentions.get(token) ?? 0) + 1);
+    }
+  }
+  const recurring = [...mentions.entries()]
+    .filter(([, count]) => count >= 2)
+    .map(([token, count]) => ({ count, token }))
+    .toSorted((a, b) => b.count - a.count || a.token.localeCompare(b.token))
+    .slice(0, RECURRING_MAX);
+
+  return {
+    beyondTail: Math.max(0, inbox.length - INBOX_MAX_ENTRIES),
+    inbox: inbox.length,
+    ...(oldest === undefined
+      ? {}
+      : {
+          oldestInboxDays: Math.max(
+            0,
+            Math.floor((now - oldest) / DAY_SECONDS)
+          ),
+        }),
+    recurring,
+    repo,
+    rules: rules.length,
+  };
+};
+
+// Every repo's memory file under the memory root, for `captain gain`: a
+// stateless directory listing, fail-soft to []. The dir name is the repo key
+// (basename, or basename-hash for a disambiguated repo).
+export const listMemoryFiles = (
+  env: NodeJS.ProcessEnv = process.env
+): { repo: string; path: string }[] => {
+  const base = env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory");
+  let dirs: string[];
+  try {
+    dirs = readdirSync(base);
+  } catch {
+    return [];
+  }
+  return dirs
+    .toSorted((a, b) => a.localeCompare(b))
+    .flatMap((dir) => {
+      const path = join(base, dir, "learnings.md");
+      return existsSync(path) ? [{ path, repo: dir }] : [];
+    });
 };
 
 // The injectable excerpt; empty string when the file is missing or has nothing

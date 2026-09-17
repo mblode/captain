@@ -62,11 +62,15 @@ Workflow:
   $ captain TIG-430 TIG-431              Linear issues → worktrees + agents (bare = start)
   $ captain start TIG-430 TIG-431        the same, explicit
   $ captain "tidy the README"            a free-form task in the current dir (no Linear)
+  $ captain "tidy the README" --worktree the same, in its own sibling worktree
+  $ captain "fix flaky auth test" "tighten the CSP header"
+                                         several free-form tasks → one worktree + agent each
   $ captain TIG-430 --agent codex        launch codex instead of Claude Code (best-effort)
   $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
   $ captain status TIG-430 --json        one ticket/workspace, compact JSON
   $ captain status --summary             compact: counts + only what needs you
   $ captain status --summary --json      compact poll + reusable snapshot token
+  $ captain status --summary --since <t> what changed since that token, one line per worktree
   $ captain status --repo linkiq         one repo's worktrees only
   $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
   $ captain approve tig-430 --note "…"   approve and record why in the ledger
@@ -75,7 +79,8 @@ Workflow:
 
 A bare first argument (a Linear issue id/URL, or a free-form task) is treated as
 "captain start …"; start then routes on it: a Linear id/URL fans out worktrees,
-anything else is a free-form task run in the current checkout. Each agent's brief
+one free-form task runs in the current checkout (--worktree gives it a sibling
+worktree), and several quoted free-form tasks fan out one worktree each. Each agent's brief
 carries the whole pipeline (plan → implement → the configured skills → verifier
 verdict); Captain keeps no state — status is derived live from cmux and the
 worktrees. You only make the gated decisions: approve plans, answer questions,
@@ -125,6 +130,10 @@ program
     "--force",
     "launch issues whose blockers are still open (default: fan-out skips them, a single issue errors)"
   )
+  .option(
+    "--worktree",
+    "free-form task only: run it in its own sibling worktree instead of the current checkout (several tasks always do)"
+  )
   .action(
     async (
       input: string[],
@@ -137,6 +146,7 @@ program
         base?: string;
         agent?: string;
         force?: boolean;
+        worktree?: boolean;
       }
     ) => {
       process.exitCode = await runStart({
@@ -149,6 +159,7 @@ program
         // --repo-path is canonical; --repo is the hidden legacy alias.
         repoOverride: options.repoPath ?? options.repo,
         tokens: input,
+        worktree: Boolean(options.worktree),
       });
     }
   );
@@ -184,7 +195,7 @@ program
   )
   .option(
     "--since <snapshot>",
-    "with --summary --json: return only changed:false when unchanged"
+    "with --summary: what changed since that snapshot token (--json adds `digest`, returns changed:false when nothing did)"
   )
   .option(
     "--watch",

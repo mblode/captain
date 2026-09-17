@@ -598,7 +598,9 @@ describe("stateless approve/reject/status over the real surface", () => {
       gate: { kind: "plan" },
       group: "needs-you",
     });
-    expect(parsed.snapshot).toMatch(/^[0-9a-f]{16}$/u);
+    // the token is the encoded projection (so the next call can diff it), not
+    // a hash — opaque to callers, canonical so equal fleets encode equal
+    expect(parsed.snapshot).toMatch(/^v2\.[A-Za-z0-9_-]+$/u);
   });
 
   it("status --summary --json supports stateless aggregate delta polling", () => {
@@ -726,7 +728,7 @@ describe("stateless approve/reject/status over the real surface", () => {
       status({ needs: true, summary: true }, capture().out, port)
     ).toThrow(/--summary cannot be combined/u);
     expect(() => status({ since: "abc" }, capture().out, port)).toThrow(
-      /--since requires --summary --json/u
+      /--since requires --summary/u
     );
     expect(() =>
       status(
@@ -1468,5 +1470,206 @@ describe("triage over the real surface with a fake judge", () => {
       triage("tig-430", "a plan", out, port, judge)
     ).rejects.toMatchObject({ errorType: "CMUX_UNREACHABLE" });
     expect(judge.asked).toHaveLength(0);
+  });
+});
+
+// The digest: `--since` now says WHAT changed, from the token alone.
+describe("status --summary --since digest", () => {
+  let root: string;
+
+  const worktree = (name: string, withVerdict?: object): string => {
+    const cwd = join(root, name);
+    mkdirSync(join(cwd, ".captain"), { recursive: true });
+    const { hash, text } = renderRubric(undefined, name.toUpperCase());
+    writeFileSync(join(cwd, ".captain", "rubric.md"), text);
+    if (withVerdict) {
+      writeFileSync(
+        join(cwd, ".captain", "verdict.json"),
+        JSON.stringify({
+          criteria: [{ evidence: "x", name: "implements", pass: true }],
+          issue: name.toUpperCase(),
+          rubricHash: hash,
+          summary: "all criteria pass",
+          ts: 1,
+          verdict: "pass",
+          ...withVerdict,
+        })
+      );
+    }
+    return cwd;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "captain-digest-"));
+    vi.stubEnv("CAPTAIN_HOME", join(root, "home"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("--json carries a digest line per transition since the token", () => {
+    const a = worktree("tig-430");
+    const b = worktree("tig-431");
+    const workspaces = [
+      { cwd: a, id: "ws-a", name: "tig-430", ref: "r" },
+      { cwd: b, id: "ws-b", name: "tig-431", ref: "r" },
+    ];
+    const first = capture();
+    status({ json: true, summary: true }, first.out, fakePort(workspaces, []));
+    const { snapshot } = JSON.parse(first.text()) as { snapshot: string };
+
+    // a plan arrives on tig-430, tig-431 verifies (the fake port copies its
+    // feed at construction, so the next tick gets a fresh port)
+    const port = fakePort(workspaces, [
+      {
+        cwd: a,
+        id: "feed-a",
+        kind: "exitPlan",
+        request_id: "req-a",
+        status: "pending",
+      },
+    ]);
+    writeFileSync(
+      join(b, ".captain", "verdict.json"),
+      JSON.stringify({
+        criteria: [{ evidence: "x", name: "implements", pass: true }],
+        issue: "TIG-431",
+        prUrl: "https://x/pr/2",
+        rubricHash: renderRubric(undefined, "TIG-431").hash,
+        summary: "ok",
+        ts: 1,
+        verdict: "pass",
+      })
+    );
+    const second = capture();
+    status({ json: true, since: snapshot, summary: true }, second.out, port);
+    const parsed = JSON.parse(second.text()) as {
+      changed: boolean;
+      digest: string[];
+      snapshot: string;
+    };
+    expect(parsed.changed).toBe(true);
+    expect(parsed.digest).toEqual([
+      "tig-430: plan ready for approval",
+      "tig-431: verified, ready to merge",
+      "counts: needs you 0→1 · in flight 2→0 · ready 0→1",
+    ]);
+
+    // and the new token settles
+    const third = capture();
+    status(
+      { json: true, since: parsed.snapshot, summary: true },
+      third.out,
+      port
+    );
+    expect(JSON.parse(third.text())).toEqual({
+      changed: false,
+      snapshot: parsed.snapshot,
+    });
+  });
+
+  it("a legacy hash token still reports changed:true, just without a digest", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort([{ cwd, id: "ws-1", name: "tig-430", ref: "r" }], []);
+    const { out, text } = capture();
+    status({ json: true, since: "0123456789abcdef", summary: true }, out, port);
+    const parsed = JSON.parse(text()) as Record<string, unknown>;
+    expect(parsed.changed).toBe(true);
+    expect(parsed.digest).toBeUndefined();
+    expect(parsed.snapshot).toMatch(/^v2\./u);
+  });
+
+  it("the TTY view renders SINCE LAST CHECK and hands back the next token", () => {
+    const cwd = worktree("tig-430");
+    const workspaces = [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }];
+    const port = fakePort(workspaces, []);
+    const first = capture();
+    status({ json: true, summary: true }, first.out, port);
+    const { snapshot } = JSON.parse(first.text()) as { snapshot: string };
+
+    const quiet = capture();
+    status({ since: snapshot, summary: true }, quiet.out, port);
+    expect(quiet.text()).toContain("SINCE LAST CHECK");
+    expect(quiet.text()).toContain("nothing changed");
+    expect(quiet.text()).toContain(
+      "next: captain status --summary --since v2."
+    );
+
+    const asked = fakePort(workspaces, [
+      {
+        cwd,
+        id: "feed-1",
+        kind: "question",
+        question_prompt: "Which auth provider?",
+        status: "pending",
+      },
+    ]);
+    const moved = capture();
+    status({ since: snapshot, summary: true }, moved.out, asked);
+    expect(moved.text()).toContain(
+      "tig-430: asked a question — Which auth provider?"
+    );
+  });
+});
+
+// gain's MEMORY block reads every learnings.md under the memory root.
+describe("gain memory block", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "captain-gainmem-"));
+    vi.stubEnv("CAPTAIN_HOME", join(root, "home"));
+    vi.stubEnv("CAPTAIN_MEMORY_DIR", join(root, "memory"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("reports per-repo memory stats and recurring traps, omitted when no file exists", () => {
+    const port = fakePort([], []);
+    const none = capture();
+    gain({ json: true }, none.out, port);
+    expect(
+      (JSON.parse(none.text()) as { memory?: unknown }).memory
+    ).toBeUndefined();
+
+    const dir = join(root, "memory", "frontyard");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "learnings.md"),
+      "## Rules\n\n- keep it\n\n## Inbox\n\n- [TIG-1 2026-01-01] `yarn test` OOMs\n- [TIG-2 2026-02-01] `yarn test` again\n"
+    );
+    const { out, text } = capture();
+    gain({ json: true }, out, port);
+    const parsed = JSON.parse(text()) as {
+      memory: {
+        repos: {
+          repo: string;
+          rules: number;
+          inbox: number;
+          recurring: unknown[];
+        }[];
+      };
+      caveats: string[];
+    };
+    expect(parsed.memory.repos).toHaveLength(1);
+    expect(parsed.memory.repos[0]).toMatchObject({
+      inbox: 2,
+      recurring: [{ count: 2, token: "yarn test" }],
+      repo: "frontyard",
+      rules: 1,
+    });
+    expect(parsed.caveats.join("\n")).toContain("memory is a live read");
+
+    const tty = capture();
+    gain({}, tty.out, port);
+    expect(tty.text()).toContain("MEMORY (live read)");
+    expect(tty.text()).toContain(
+      "`yarn test` named by 2 bullets — promote to Rules?"
+    );
   });
 });

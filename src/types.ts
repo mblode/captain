@@ -142,6 +142,10 @@ export interface CliOptions {
   stderr?: NodeJS.WritableStream;
   // which coding agent to launch: claude (default) or codex; overrides config
   agent?: string;
+  // free-form task only: run it in its own sibling worktree (like an issue)
+  // instead of the current checkout. Several free-form tasks in one call
+  // always get worktrees — they cannot share one checkout's `.captain/`.
+  worktree?: boolean;
   tokens: string[];
 }
 
@@ -162,4 +166,9 @@ export interface DispatchOptions {
   name?: string;
   // which coding agent to launch: claude (default) or codex; overrides config
   agent?: string;
+  // run in a sibling worktree `<repo>-<slug>` on branch `<slug>` instead of the
+  // checkout itself — the same shape an issue gets, so N tasks can run at once
+  worktree?: boolean;
+  // with `worktree`: branch off this ref instead of origin's default
+  base?: string;
 }

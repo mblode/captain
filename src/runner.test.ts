@@ -18,6 +18,7 @@ import { launchPlanMode } from "./launch";
 import { memoryPath } from "./memory";
 import {
   collapsedWorktreeNotes,
+  isTaskFleetInput,
   runDispatch,
   runIssueWorktree,
   runStart,
@@ -1401,5 +1402,131 @@ describe("uncappedJestNote", () => {
       "module.exports = { maxWorkers: '25%' }"
     );
     expect(uncappedJestNote(dir)).toBeNull();
+  });
+});
+
+// Free-form tasks get worktrees: one with --worktree, several always.
+describe("free-form tasks in worktrees", () => {
+  it("isTaskFleetInput: several quoted tasks, never bare words or issue tokens", () => {
+    expect(
+      isTaskFleetInput(["fix the flaky auth test", "tighten the CSP header"])
+    ).toBe(true);
+    // three bare words are ONE task, not three
+    expect(isTaskFleetInput(["tidy", "the", "readme"])).toBe(false);
+    // a single quoted task is the single path
+    expect(isTaskFleetInput(["tidy the readme"])).toBe(false);
+    // a task next to an issue id has no single meaning
+    expect(isTaskFleetInput(["tidy the readme", "TST-7"])).toBe(false);
+    expect(isTaskFleetInput(["TST-7", "TST-8"])).toBe(false);
+  });
+
+  it("--worktree gives one task a sibling worktree on a slug branch, like an issue", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+
+    const status = await runDispatch({
+      cwd: repo,
+      env: safeEnv(),
+      json: true,
+      print: true,
+      stdout: output.stream,
+      task: "tidy the README",
+      worktree: true,
+    });
+
+    expect(status).toBe(0);
+    const worktree = join(root, "src-tidy-the-readme");
+    expect(
+      runRequired("git", ["-C", worktree, "branch", "--show-current"], {
+        env: safeEnv(),
+      })
+    ).toBe("tidy-the-readme");
+    const parsed = JSON.parse(output.value().trim()) as {
+      cwd: string;
+      name: string;
+      branch?: string;
+      prompt: string;
+    };
+    expect(parsed).toMatchObject({
+      branch: "tidy-the-readme",
+      cwd: worktree,
+      name: "tidy-the-readme",
+    });
+    expect(parsed.prompt).toContain("Task:\n\ntidy the README");
+    // the rubric lands in the WORKTREE, and the checkout stays clean
+    const rubric = await readFile(
+      join(worktree, ".captain", "rubric.md"),
+      "utf-8"
+    );
+    expect(rubric).toContain("- Source: free-form");
+    await expect(access(join(repo, ".captain"))).rejects.toThrow();
+  });
+
+  it("re-running the same task reuses its worktree", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const opts = {
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      stdout: captureWritable().stream,
+      task: "tidy the README",
+      worktree: true,
+    };
+    await runDispatch(opts);
+    await runDispatch({ ...opts, stdout: captureWritable().stream });
+    const list = runRequired("git", ["-C", repo, "worktree", "list"], {
+      env: safeEnv(),
+    });
+    expect(
+      list.split("\n").filter((l) => l.includes("src-tidy-the-readme"))
+    ).toHaveLength(1);
+  });
+
+  it("several quoted tasks route to the task fleet, which needs cmux", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    // safeEnv has no cmux on PATH, so the fleet path refuses up front — proving
+    // the ROUTE (the single path would have run happily without cmux)
+    await expect(
+      runStart({
+        cwd: repo,
+        env: safeEnv(),
+        stdout: captureWritable().stream,
+        tokens: ["fix the flaky auth test", "tighten the CSP header"],
+      })
+    ).rejects.toMatchObject({ errorType: "CMUX_UNREACHABLE" });
+  });
+
+  it("--print with several tasks is a usage error, like several issues", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    await expect(
+      runStart({
+        cwd: repo,
+        env: safeEnv(),
+        print: true,
+        stdout: captureWritable().stream,
+        tokens: ["fix the flaky auth test", "tighten the CSP header"],
+      })
+    ).rejects.toThrow(/--print accepts one task at a time/u);
+  });
+
+  it("three bare words are still one in-checkout task (parity)", async () => {
+    const { repo, root } = await createGitRepo("src");
+    cleanup.push(root);
+    const output = captureWritable();
+    await runStart({
+      cwd: repo,
+      env: safeEnv(),
+      print: true,
+      stdout: output.stream,
+      tokens: ["tidy", "the", "readme"],
+    });
+    expect(output.value()).toContain("Task:\n\ntidy the readme");
+    expect(
+      await readFile(join(repo, ".captain", "rubric.md"), "utf-8")
+    ).toContain("# Definition of done — tidy-the-readme");
   });
 });

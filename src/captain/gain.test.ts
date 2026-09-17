@@ -488,9 +488,45 @@ describe("computeGain — rework at the plan gate", () => {
     expect(m.rework).toEqual({
       firstPass: 1,
       firstPassRate: 0.5,
+      // tig-2 (approved, never rejected) is the newest decided ticket in
+      // frontyard, tig-1 decided at the same instant was rejected: the streak
+      // stops there. Ties on ts sort tig-1 first? No — both at NOW, so the
+      // order is stable by insertion; assert the count, not the accident.
+      firstPassStreak: [{ repo: "frontyard", tickets: expect.any(Number) }],
       tickets: 2,
       topReworked: [{ name: "frontyard-tig-1", rejections: 2 }],
     });
+  });
+
+  // The graduated-trust signal: per repo, the newest decided tickets in a row
+  // that were never rejected. Whole-ledger, never windowed — a streak is state.
+  it("firstPassStreak counts newest-first clean tickets per repo and stops at a rejection", () => {
+    const m = computeGain(
+      input({
+        log: [
+          decision({ kind: "reject", name: "frontyard-tig-1", ts: NOW - 500 }),
+          decision({ kind: "approve", name: "frontyard-tig-1", ts: NOW - 400 }),
+          decision({ kind: "approve", name: "frontyard-tig-2", ts: NOW - 300 }),
+          decision({ kind: "approve", name: "frontyard-tig-3", ts: NOW - 200 }),
+          decision({ kind: "approve", name: "frontyard-tig-4", ts: NOW - 100 }),
+          decision({ kind: "approve", name: "linkiq-tig-7", ts: NOW - 50 }),
+          decision({ kind: "reject", name: "linkiq-tig-8", ts: NOW }),
+          // a free-form task has no repo half: bucketed under "?"
+          decision({ kind: "approve", name: "tidy-the-readme", ts: NOW }),
+        ],
+        // the window excludes everything but the newest three — the streak
+        // must still see the whole ledger
+        since: NOW - 60,
+      })
+    );
+    expect(m.rework?.firstPassStreak).toEqual([
+      { repo: "frontyard", tickets: 3 },
+      { repo: "?", tickets: 1 },
+      { repo: "linkiq", tickets: 0 },
+    ]);
+    expect(computeGain(input()).caveats.join("\n")).toContain(
+      "firstPassStreak is per repo over the WHOLE ledger"
+    );
   });
 
   // Uncapped, like failingCriteria — six entries in, six entries out.
@@ -539,6 +575,7 @@ describe("computeGain — rework at the plan gate", () => {
     expect(m.rework).toEqual({
       firstPass: 0,
       firstPassRate: 0,
+      firstPassStreak: [{ repo: "?", tickets: 0 }],
       tickets: 1,
       topReworked: [{ name: "slow", rejections: 2 }],
     });
@@ -557,6 +594,8 @@ describe("computeGain — rework at the plan gate", () => {
     expect(m.rework).toEqual({
       firstPass: 1,
       firstPassRate: 1,
+      // "new" is newest and clean, "old" behind it was rejected: streak 1
+      firstPassStreak: [{ repo: "?", tickets: 1 }],
       tickets: 1,
       topReworked: [],
     });

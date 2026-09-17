@@ -16,7 +16,10 @@ You control three gates: approving each plan, answering questions, and the merge
 ```bash
 captain start TIG-430 TIG-431         # Linear issues: one worktree + agent each
 captain start "tidy the README"       # a free-form task, no Linear, current dir
+captain start "tidy the README" --worktree            # the same, in its own worktree
+captain "fix the flaky auth test" "tighten the CSP"   # several tasks: one worktree each
 captain status                        # what's blocked, in flight, and ready
+captain status --summary --since <t>  # what changed since that snapshot, one line each
 captain approve tig-430               # or: captain approve all
 captain approve tig-430 --note "low risk, scope matches"   # record why
 captain reject tig-431 --note "don't touch auth"
@@ -24,7 +27,9 @@ captain gain                          # fleet telemetry, derived live (alias: au
 captain triage tig-430 < plan.txt     # opt-in: sort one plan into clean / review before you read it
 ```
 
-`captain --help` lists every command and flag. `captain start` routes on its first argument: a Linear issue id/URL fans out a worktree per issue; anything else is a free-form task in the current checkout. Pass `--repo-path <path>` to pick the repo (a ticket's repo is decided per ticket, not by a static map); `--print` previews the brief without launching.
+`captain --help` lists every command and flag. `captain start` routes on its arguments: a Linear issue id/URL fans out a worktree per issue; one free-form task runs in the current checkout (`--worktree` gives it a sibling worktree); several quoted free-form tasks fan out one worktree each, so you can hand Captain a decomposed objective without a tracker. Pass `--repo-path <path>` to pick the repo (a ticket's repo is decided per ticket, not by a static map); `--print` previews the brief without launching.
+
+`captain status --summary` returns a snapshot token. Pass it back with `--since` and you get what changed since, one line per worktree ("tig-430: plan ready for approval", "tig-431: verified, ready to merge") plus a counts line, and the next token. The `/captain` driver ends every wake with that digest and when its next check is due.
 
 ## Triage before you read (opt-in)
 
@@ -63,5 +68,7 @@ Without that token a non-empty list replaces the pipeline entirely. An empty or 
 ## How agents finish
 
 Each worktree gets a definition of done (`.captain/rubric.md`, rendered from the Linear issue, no LLM call). The agent runs a fresh-context verifier sub-agent against it and writes `.captain/verdict.json` citing the rubric's hash: a valid pass shows READY TO MERGE with `✓ verified`, a fail shows NEEDS YOU with the verifier's summary. Verified learnings are saved per repo (`~/.claude/captain/memory/<repo>/learnings.md`) and fed into the next brief.
+
+Every plan opens with a `## Decisions for the reviewer` section, at most five bullets, and that is what the driver's decision card quotes, so you read the sentences that matter rather than the plan. `captain gain` reports, per repo, how many tickets in a row cleared the plan gate first pass; when that streak is long and every pending plan in the repo is triage-clean and low risk, the driver may offer them as one approve-all decision instead of one each. It also reports each repo's fleet memory: how many inbox bullets no brief reads any more, how old the oldest is, and which traps two or more bullets name, so distilling the inbox into rules stops being a step nobody is prompted to take.
 
 Captain keeps **no state**. `status`, `approve`, `reject`, and `gain` are all derived fresh on every call from cmux signals and the per-worktree `.captain/` files. There is no daemon to start, restart, or go stale.

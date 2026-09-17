@@ -63,10 +63,17 @@ Load only when the condition applies:
 3. **Fan out:** group tickets by repo, one `captain start <ids…> --repo-path <repo>` per
    repo (one worktree + workspace + self-driving agent each). `start` is implicit, so bare
    `captain TIG-430` works — though a single non-issue word is treated as a typo'd
-   subcommand and errors. A non-issue arg starts a free-form task in the current checkout.
-   `--base <ref>` stacks on a prerequisite branch. **Confirm each `started[].cwd`**
-   (`--json`) before approving any plan — a worktree in the wrong repo can never pass its
-   rubric.
+   subcommand and errors. A non-issue arg starts a free-form task in the current checkout;
+   `--worktree` gives it a sibling worktree instead, and **several quoted tasks fan out one
+   worktree each** (`captain "fix the flaky auth test" "tighten the CSP header"`), no
+   tracker needed. `--base <ref>` stacks on a prerequisite branch. **Confirm each
+   `started[].cwd`** (`--json`) before approving any plan — a worktree in the wrong repo
+   can never pass its rubric.
+   - **An objective, not tickets** ("make the checkout page fast"): decompose it yourself
+     first. Read the code, propose the split — one line per part, the repo it touches, and
+     what proves it — as ONE decision card, and wait for approval of the split. Then fan
+     out the approved parts as quoted free-form tasks per repo. Never fan out an
+     undecomposed objective as one task, and never decompose without showing the split.
    - `--print` prepares and writes/prints the brief without launching. Not a dry-run, and
      multiple issue ids are rejected.
    - Each agent launches on a **pinned model + effort** (default `default` / `high`), so
@@ -75,7 +82,10 @@ Load only when the condition applies:
    - `--agent codex` (or `CAPTAIN_AGENT` / config `.agent`) is **best-effort**: full
      autonomy, an adapted brief (plan then proceed), no plan gate.
 4. **Arm the heartbeat** — see [references/heartbeat.md](references/heartbeat.md). Never
-   hand polling back to the human.
+   hand polling back to the human. **Every wake ends the same way**: what changed since
+   the last one (relay `status --since`'s `digest` lines verbatim, or "nothing changed")
+   and when the next check is due ("next check in ~4 min"). Silence between wakes is
+   fine; a wake that ends without those two lines is not.
 
 ## The loop
 
@@ -86,13 +96,13 @@ them in control.
 | You say | Run |
 | --- | --- |
 | "status" / "what's blocked" / "what's ready" | For a known run, `captain status <ticket-or-workspace…> --json`; add `--summary` for polling. Use unfiltered `captain status` only when the request is fleet-wide. `--repo`, `--needs`, and `--ready` also narrow — never fetch the full fleet merely to post-filter it. |
-| "show me the plans" | If `TYPESAFE_API_KEY` is set, first run `captain triage <ticket> --json` per pending plan, feeding it the captured plan text on stdin (`--plan-file` works too): a `clean` card carries a ready `approveCommand` with its `--note`; a `review` card lists why. Then send only the `review` plans (or every plan, with no key) — up to the bounded batch below — to **one read-only reviewer** per heartbeat; it returns one compact `{ticket, summary, scopeDrift, risk, recommendation}` decision card per plan. Deep-read only plans it flags high-risk or ambiguous — never spend your window on `--scrollback`. Triage decides nothing: the human still approves every plan |
-| "approve all plans" | `captain approve <ticket> --note "<the card's recommendation>"`, one call per gate so each carries its own card. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
+| "show me the plans" | Every plan opens with a `## Decisions for the reviewer` section (the brief requires it): quote that section verbatim on the card — it is the three sentences the human needs, and the rest of the plan is context. If `TYPESAFE_API_KEY` is set, first run `captain triage <ticket> --json` per pending plan, feeding it the captured plan text on stdin (`--plan-file` works too): a `clean` card carries a ready `approveCommand` with its `--note`; a `review` card lists why. Then send only the `review` plans (or every plan, with no key) — up to the bounded batch below — to **one read-only reviewer** per heartbeat; it returns one compact `{ticket, summary, scopeDrift, risk, recommendation}` decision card per plan. Deep-read only plans it flags high-risk or ambiguous — never spend your window on `--scrollback`. Triage decides nothing: the human still approves every plan |
+| "approve all plans" | `captain approve <ticket> --note "<the card's recommendation>"`, one call per gate so each carries its own card. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning. **Graduated trust**: when `captain gain --json` shows `rework.firstPassStreak` ≥ 5 for a repo AND every pending plan in it is triage-`clean` with risk `low`, you may offer those plans as ONE approve-all option in the batch ("frontyard: 4 clean, low-risk plans, 12 straight first-pass — approve all?") instead of one decision each. Each approval still carries its own `--note`; a single rejection or `review` card in that repo drops it back to one decision per gate. Never batch across repos, never batch an elevated or `review` plan |
 | "send 404 back: don't touch auth" | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace |
 | "what's verified" | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging |
 | "what's been done" / "what's left" / "what are these PRs" | `captain gain --json`, read `roster` — one entry per launch, newest first. `verdict: "pass"` + a `prUrl` is done; `group: "needs-you"` is on the human; `live: false` is a worktree already merged and removed (it keeps its launch and decision, loses title/verdict/PR). Then `/eli5` it. `roster.dropped > 0` means narrow with `--since 24h`. Do **not** reconstruct this from scrollback or `read-screen` |
 | "this one's gone quiet" | `cmux read-screen --workspace <id>`, then `cmux send --workspace <id> "continue with your workflow\n"` to nudge |
-| "distill the learnings" | Edit `~/.claude/captain/memory/<repo>/learnings.md` — promote held-up Inbox bullets to `## Rules`, cut slop; `~/.claude/captain/log.jsonl` has approve/reject notes |
+| "distill the learnings" | Start from `captain gain --json` → `memory.repos`: `recurring` names the traps two or more Inbox bullets hit (the "same mistake twice" signal — promote those first), `beyondTail` counts bullets no brief reads any more, `oldestInboxDays` says how stale the queue is. Then edit `~/.claude/captain/memory/<repo>/learnings.md` — promote held-up Inbox bullets to `## Rules`, cut slop; `~/.claude/captain/log.jsonl` has approve/reject notes. Once per session, when `memory` shows `beyondTail > 0` or any `recurring`, mention it in the gate batch as a one-line nudge — never promote on your own |
 
 **Escalating NEEDS YOU:** once per heartbeat, give pending plan gates to **one read-only
 batch reviewer** with the ticket, repo, and captured plan for each gate. Bound a batch to

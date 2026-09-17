@@ -587,6 +587,63 @@ const reusableIssue = (
   return worktree ? { workspace, worktree } : undefined;
 };
 
+// What a fan-out reports once every target has been launched, reused, or
+// skipped — shared by the issue fleet and the free-form task fleet so both
+// speak the same `{ started }` / "spawned N workspaces" contract.
+interface FleetReport {
+  launched: {
+    name: string;
+    branch: string;
+    cwd: string;
+    workspaceId?: string;
+  }[];
+  worktreePaths: string[];
+  reused: number;
+  // human lines for tokens that did not launch (a blocked issue)
+  skipped: string[];
+}
+
+const reportFleet = (
+  { launched, reused, skipped, worktreePaths }: FleetReport,
+  options: { json?: boolean },
+  env: NodeJS.ProcessEnv,
+  stdout: NodeJS.WritableStream
+): number => {
+  // One workspace listing serves both collapse detection and --json id lookup.
+  const workspaces = realCmux(env).listWorkspaces();
+  if (options.json) {
+    const started = launched.map((item) =>
+      compactEntry({
+        ...item,
+        workspaceId:
+          item.workspaceId ?? workspaceIdForCwd(item.cwd, workspaces),
+      })
+    );
+    stdout.write(`${JSON.stringify({ started })}\n`);
+    return 0;
+  }
+  // Counts come from what actually launched: with nothing skipped this equals
+  // the token count, so the usual output is unchanged.
+  stdout.write(
+    reused === 0
+      ? `spawned ${launched.length} workspaces — each agent drives its own pipeline to PR-ready\n`
+      : `ready ${launched.length} workspaces — ${launched.length - reused} launched, ${reused} reused\n`
+  );
+  for (const line of skipped) {
+    stdout.write(`  ${line}\n`);
+  }
+  // All tokens in one invocation share a repo, so one worktree speaks for all.
+  const jestNote = worktreePaths[0] && uncappedJestNote(worktreePaths[0]);
+  if (jestNote) {
+    stdout.write(`  ${jestNote}\n`);
+  }
+  for (const note of collapsedWorktreeNotes(worktreePaths, workspaces)) {
+    stdout.write(`  ${note}\n`);
+  }
+  stdout.write("follow along: captain status\n");
+  return 0;
+};
+
 interface LaunchFleetArgs extends DispatchArgs {
   agent: string;
   // index -> the still-open blockers that keep this token out of the frontier
@@ -672,41 +729,20 @@ const launchPreparedFleet = async ({
     );
   }
 
-  // One workspace listing serves both collapse detection and --json id lookup.
-  const workspaces = realCmux(env).listWorkspaces();
-  if (options.json) {
-    const started = launched.map((item) =>
-      compactEntry({
-        ...item,
-        workspaceId:
-          item.workspaceId ?? workspaceIdForCwd(item.cwd, workspaces),
-      })
-    );
-    stdout.write(`${JSON.stringify({ started })}\n`);
-    return 0;
-  }
-  // Counts come from what actually launched: with nothing blocked this equals
-  // tokens.length, so the usual output is unchanged.
-  stdout.write(
-    reused === 0
-      ? `spawned ${launched.length} workspaces — each agent drives its own pipeline to PR-ready\n`
-      : `ready ${launched.length} workspaces — ${launched.length - reused} launched, ${reused} reused\n`
+  return reportFleet(
+    {
+      launched,
+      reused,
+      skipped: [...blocked].map(
+        ([index, openBlockerIds]) =>
+          `skipped ${seeds[index].displayId} — blocked by ${openBlockerIds.join(", ")} (--force to launch anyway)`
+      ),
+      worktreePaths,
+    },
+    options,
+    env,
+    stdout
   );
-  for (const [index, openBlockerIds] of blocked) {
-    stdout.write(
-      `  skipped ${seeds[index].displayId} — blocked by ${openBlockerIds.join(", ")} (--force to launch anyway)\n`
-    );
-  }
-  // All tokens in one invocation share a repo, so one worktree speaks for all.
-  const jestNote = worktreePaths[0] && uncappedJestNote(worktreePaths[0]);
-  if (jestNote) {
-    stdout.write(`  ${jestNote}\n`);
-  }
-  for (const note of collapsedWorktreeNotes(worktreePaths, workspaces)) {
-    stdout.write(`  ${note}\n`);
-  }
-  stdout.write("follow along: captain status\n");
-  return 0;
 };
 
 // The frontier rule's single-issue half. Fan-out skips a blocked ticket and
@@ -993,10 +1029,66 @@ export const runIssueWorktree = async (
   }
 };
 
-// `captain dispatch "<task>"` — the non-Linear path: no issue fetch, no worktree.
-// The agent runs in the current checkout (cwd = repoRoot), with the same
-// self-drive brief, rubric and verdict gate as fanout. One dispatch per checkout
-// at a time — a second clobbers the shared `.captain/` files.
+// The workspace label + branch + worktree slug of a free-form task. Errors
+// when the task slugifies to nothing (all punctuation), naming the way out.
+const taskName = (task: string, override?: string): string => {
+  const name = slugify(override || task);
+  if (!name) {
+    throw new CliError(
+      "could not derive a workspace name from the task — pass --name <slug>",
+      EXIT.USAGE,
+      "USAGE"
+    );
+  }
+  return name;
+};
+
+// A free-form task's worktree: `<repo>-<slug>` on branch `<slug>` — the same
+// shape an issue gets (worktreePathFor), so status/gain/approve treat it
+// exactly like an issue worktree, and re-running the same task reuses it.
+const taskWorktree = (
+  repoRoot: string,
+  name: string,
+  env: NodeJS.ProcessEnv,
+  base?: string
+): Promise<WorktreeResult> =>
+  ensureWorktree({
+    base,
+    env,
+    issueId: name,
+    repoRoot,
+    skipFetch: true,
+    slug: "",
+  });
+
+// The free-form brief with both loops closed, written into whichever dir the
+// agent will run in (the checkout itself, or the task's worktree).
+const materializeTask = (
+  task: string,
+  name: string,
+  cwd: string,
+  repoRoot: string,
+  context: Pick<PrepareContext, "env" | "skills" | "dataScope" | "agent">
+): Promise<string> =>
+  withLoopExtras(
+    `Task:\n\n${task}\n`,
+    cwd,
+    repoRoot,
+    undefined,
+    name,
+    context.env,
+    context.skills,
+    context.dataScope,
+    context.agent,
+    "free-form"
+  );
+
+// `captain "<task>"` — the non-issue path: no issue fetch. By default the agent
+// runs in the current checkout (cwd = repoRoot) with the same self-drive brief,
+// rubric and verdict gate as fan-out — one such dispatch per checkout at a
+// time, since a second clobbers the shared `.captain/` files. `--worktree`
+// gives the task a sibling worktree instead, exactly like an issue, which is
+// what makes several tasks at once possible (runTaskFleet).
 export const runDispatch = async (
   options: DispatchOptions
 ): Promise<number> => {
@@ -1007,7 +1099,7 @@ export const runDispatch = async (
 
   if (!task) {
     throw new CliError(
-      'usage: captain start "<task>" [--name <slug>] [--repo-path <path>]',
+      'usage: captain start "<task>" [--worktree] [--name <slug>] [--repo-path <path>]',
       EXIT.USAGE,
       "USAGE"
     );
@@ -1018,60 +1110,70 @@ export const runDispatch = async (
   try {
     progress.step("resolving repo");
     const repo = resolveRepo({ cwd, env, repoOverride: options.repoOverride });
+    const name = taskName(task, options.name);
 
-    const name = slugify(options.name || task);
-    if (!name) {
-      throw new CliError(
-        "could not derive a workspace name from the task — pass --name <slug>",
-        EXIT.USAGE,
-        "USAGE"
-      );
+    let worktree: WorktreeResult | undefined;
+    if (options.worktree) {
+      progress.step("git fetch origin");
+      fetchOrigin(repo.repoRoot, env);
+      progress.step("creating worktree");
+      worktree = await taskWorktree(repo.repoRoot, name, env, options.base);
     }
+    const runCwd = worktree?.worktreePath ?? repo.repoRoot;
+    const label = worktree?.branch ?? name;
 
-    let prompt = `Task:\n\n${task}\n`;
-    prompt = await withLoopExtras(
-      prompt,
-      repo.repoRoot,
-      repo.repoRoot,
-      undefined,
-      name,
-      env,
-      loadSkills(env),
-      loadDataScope(env),
+    const prompt = await materializeTask(task, name, runCwd, repo.repoRoot, {
       agent,
-      "free-form"
-    );
+      dataScope: loadDataScope(env),
+      env,
+      skills: loadSkills(env),
+    });
 
     if (options.print) {
       progress.done();
       if (options.json) {
-        // Dispatch runs in the checkout itself — no branch, so omit it.
+        // In-checkout dispatch has no branch, so omit it (never undefined).
         stdout.write(
-          `${JSON.stringify({ cwd: repo.repoRoot, name, prompt })}\n`
+          `${JSON.stringify({
+            cwd: runCwd,
+            name: label,
+            prompt,
+            ...(worktree ? { branch: worktree.branch } : {}),
+          })}\n`
         );
         return 0;
       }
       stdout.write(`agent prompt:\n${prompt}\n`);
+      if (worktree) {
+        stdout.write(`\nrun:\ncd ${runCwd}\n`);
+      }
       return 0;
     }
 
-    const dispatchJestNote = !options.json && uncappedJestNote(repo.repoRoot);
+    const dispatchJestNote = !options.json && uncappedJestNote(runCwd);
     if (dispatchJestNote) {
       stdout.write(`  ${dispatchJestNote}\n`);
     }
     return launchOrFallback(
       {
         agent,
-        cwd: repo.repoRoot,
+        cwd: runCwd,
         displayId: name,
         env,
-        label: name,
+        label,
         progress,
         prompt,
+        // A task worktree is dedicated, like an issue's, so a live agent there
+        // is a retry to reattach to. The checkout itself may host anything.
+        reuseExisting: Boolean(worktree),
       },
       stdout,
-      // Dispatch runs in the checkout itself — no branch to report.
-      { cwd: repo.repoRoot, json: Boolean(options.json), name }
+      {
+        branch: worktree?.branch,
+        cwd: runCwd,
+        json: Boolean(options.json),
+        name: label,
+      }
     );
   } catch (error) {
     progress.done();
@@ -1079,17 +1181,148 @@ export const runDispatch = async (
   }
 };
 
+// Several free-form tasks in one call: `captain "fix the flaky auth test"
+// "tighten the CSP header"` fans out one worktree + workspace + agent each,
+// the way N issue tokens do — no tracker in between. Each argv token is one
+// task; a token is only a task when it carries whitespace (see
+// isTaskFleetInput), so `captain tidy the readme` stays one task.
+export const runTaskFleet = async (options: CliOptions): Promise<number> => {
+  const cwd = options.cwd ?? process.cwd();
+  const env = options.env ?? process.env;
+  const stdout = options.stdout ?? process.stdout;
+  const tasks = options.tokens.map((t) => t.trim()).filter(Boolean);
+
+  if (options.print) {
+    throw new CliError(
+      "--print accepts one task at a time because it prepares a worktree; run it once per task",
+      EXIT.USAGE,
+      "USAGE"
+    );
+  }
+  if (!cmuxReachable(env)) {
+    throw new CliError(
+      "cmux is not reachable (needed for multi-task fan-out) — is it running? run `captain install`",
+      EXIT.CMUX_UNREACHABLE,
+      "CMUX_UNREACHABLE"
+    );
+  }
+
+  const progress = createProgress(options.stderr ?? process.stderr);
+  const context = {
+    agent: resolveAgent(options.agent, env),
+    dataScope: loadDataScope(env),
+    env,
+    skills: loadSkills(env),
+  };
+  try {
+    progress.step("resolving repo");
+    const repo = resolveRepo({ cwd, env, repoOverride: options.repoOverride });
+    const names = tasks.map((task) => taskName(task));
+    const collision = names.find((n, i) => names.indexOf(n) !== i);
+    if (collision) {
+      throw new CliError(
+        `two tasks share the worktree name "${collision}" — reword one so they slugify differently`,
+        EXIT.USAGE,
+        "USAGE"
+      );
+    }
+    if (!commandExists(context.agent, env)) {
+      throw new CliError(
+        `${context.agent} is not on PATH — install it, then \`captain install\``,
+        EXIT.USAGE,
+        "MISSING_DEPENDENCY"
+      );
+    }
+    progress.step("git fetch origin");
+    fetchOrigin(repo.repoRoot, env);
+
+    const launched: FleetReport["launched"] = [];
+    const worktreePaths: string[] = [];
+    let reused = 0;
+    for (const [index, task] of tasks.entries()) {
+      const name = names[index];
+      const scoped = withPrefix(
+        progress,
+        `[${index + 1}/${tasks.length}] ${name} · `
+      );
+      scoped.step("creating worktree");
+      const worktree = await taskWorktree(
+        repo.repoRoot,
+        name,
+        env,
+        options.base
+      );
+      worktreePaths.push(worktree.worktreePath);
+      const prompt = await materializeTask(
+        task,
+        name,
+        worktree.worktreePath,
+        repo.repoRoot,
+        context
+      );
+      const outcome = await launchViaCmux(
+        {
+          agent: context.agent,
+          cwd: worktree.worktreePath,
+          displayId: name,
+          env,
+          label: worktree.branch,
+          progress: scoped,
+          prompt,
+          reuseExisting: true,
+        },
+        false
+      );
+      if (outcome.reused) {
+        reused += 1;
+      }
+      launched.push({
+        branch: worktree.branch,
+        cwd: worktree.worktreePath,
+        name: worktree.branch,
+        workspaceId: outcome.workspaceId,
+      });
+      progress.done(
+        `${outcome.reused ? "reusing" : "opened"} ${worktree.branch} (${index + 1}/${tasks.length})`
+      );
+    }
+    return reportFleet(
+      { launched, reused, skipped: [], worktreePaths },
+      options,
+      env,
+      stdout
+    );
+  } catch (error) {
+    progress.done();
+    throw error;
+  }
+};
+
+// PURE: several free-form tasks, one per argv token. A token is a task only
+// when it carries whitespace — a quoted sentence — so `captain tidy the
+// readme` (three bare words) is still ONE task, and a bare word next to issue
+// tokens is still the typo guard's business (route.ts). Every token must be
+// a task: mixing a task with an issue id has no single meaning, and falls to
+// the single-target path where it errors as before.
+export const isTaskFleetInput = (tokens: string[]): boolean =>
+  tokens.length >= 2 &&
+  tokens.every((t) => !isIssueToken(t) && /\s/u.test(t.trim()));
+
 // The single entry point behind `captain start`: route to the issue worktree
-// fan-out (Linear or donebear) or the free-form current-dir dispatch by
-// inspecting the first token. Empty tokens fall through to runIssueWorktree,
-// which reads stdin then errors.
+// fan-out (Linear or donebear), the free-form task fleet (several quoted
+// tasks), or the free-form single dispatch by inspecting the tokens. Empty
+// tokens fall through to runIssueWorktree, which reads stdin then errors.
 export const runStart = (
   options: CliOptions & { name?: string }
 ): Promise<number> => {
   const [first] = options.tokens;
   if (first && !isIssueToken(first)) {
+    if (isTaskFleetInput(options.tokens)) {
+      return runTaskFleet(options);
+    }
     return runDispatch({
       agent: options.agent,
+      base: options.base,
       cwd: options.cwd,
       env: options.env,
       json: options.json,
@@ -1099,6 +1332,7 @@ export const runStart = (
       stderr: options.stderr,
       stdout: options.stdout,
       task: options.tokens.join(" "),
+      worktree: options.worktree,
     });
   }
   return runIssueWorktree(options);
