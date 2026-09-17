@@ -44,6 +44,9 @@ export default defineConfig({
         "src/captain/view.ts",
         "src/captain/verdict.ts",
         "src/captain/gain.ts",
+        // the plan-gate triage: the judge's questions + answers → card. The
+        // HTTP call is src/judge.ts, the one network edge, kept out of here.
+        "src/captain/triage.ts",
         // the launch-side decisions: the rubric text, argv routing, the
         // frontier rule. Documented as pure in AGENTS.md, unenforced until now.
         "src/rubric.ts",

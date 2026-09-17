@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 import { CliError, EXIT } from "../errors";
+import { realJudge } from "../judge";
+import type { JudgePort } from "../judge";
 import { run, shellQuote } from "../shell";
 import { realCmux } from "./control";
 import type { CmuxPort } from "./control";
@@ -15,7 +17,14 @@ import {
 import type { Style } from "./format";
 import { computeGain, parseSince } from "./gain";
 import { appendLog, now, readLog } from "./log";
-import { fleetRows, readVerdict } from "./surface";
+import { fleetRows, readRubricContract, readVerdict } from "./surface";
+import {
+  parseAnswers,
+  TRIAGE_QUESTIONS,
+  triageCard,
+  triageState,
+} from "./triage";
+import type { TriageCard } from "./triage";
 import type { Verdict } from "./verdict";
 import { groupCounts, mergeOrderHints, ticketFrom } from "./view";
 import type { FleetRow } from "./view";
@@ -600,6 +609,93 @@ export const approve = (
     );
   }
   out.write(`${msg.hint(s, "next: captain status")}\n`);
+};
+
+const fmtP = (v: number | undefined): string =>
+  v === undefined ? "—" : v.toFixed(2);
+
+const renderTriage = (
+  out: NodeJS.WritableStream,
+  s: Style,
+  row: FleetRow,
+  card: TriageCard,
+  approveCommand: string
+): void => {
+  const head =
+    card.triage === "clean"
+      ? msg.ok(s, `${s.bold(row.name)} — triage clean`)
+      : msg.warn(s, `${s.bold(row.name)} — needs a human read`);
+  out.write(`${head}\n`);
+  if (row.title) {
+    out.write(`  ${s.dim(row.title)}\n`);
+  }
+  for (const flag of card.flags) {
+    out.write(`  ${s.yellow("·")} ${flag}\n`);
+  }
+  out.write(
+    `  ${s.dim(`in scope ${fmtP(card.inScope)} · risk ${card.risk ? `${card.risk.level} (${fmtP(card.risk.confidence)})` : "—"} · files ${fmtP(card.shape.files)} · order ${fmtP(card.shape.order)} · tests ${fmtP(card.shape.tests)} · silent assumption ${fmtP(card.silentAssumption)}`)}\n`
+  );
+  const handle = row.handle ?? row.ticket ?? row.name;
+  out.write(
+    `${msg.hint(s, card.triage === "clean" ? approveCommand : `read the plan, then: captain approve ${handle} --note "…"  or  captain reject ${handle} --note "…"`)}\n`
+  );
+};
+
+// Triage ONE plan-gated worktree's plan with a System One judge (TypeSafe's
+// Jev, opt-in via TYPESAFE_API_KEY). Reads the worktree's rubric contract, asks
+// the fixed TRIAGE_QUESTIONS over {contract, plan}, prints the card. Touches no
+// gate and writes no ledger record: it is advisory input to the human's
+// approve/reject, never a decision — the card's `note` is shaped to ride along
+// on `captain approve --note`. One target per call because the plan text is
+// one ticket's; the driver captures it (the exitPlan feed item carries no plan
+// body, so captain cannot read it itself) and pipes it in.
+export const triage = async (
+  spec: string,
+  plan: string,
+  out: NodeJS.WritableStream,
+  port: CmuxPort = realCmux(process.env),
+  judge: JudgePort = realJudge(process.env),
+  options: { json?: boolean } = {}
+): Promise<void> => {
+  const planText = plan.trim();
+  if (!planText) {
+    throw badOptions(
+      "triage needs the plan text — pipe it on stdin or pass --plan-file <path>"
+    );
+  }
+  assertCmuxReachable(port);
+  const { matched, ambiguous, unknown } = resolvePlanTargets(port, spec);
+  if (matched.length !== 1) {
+    if (matched.length === 0) {
+      throw badRef(unresolvedPlanMessage({ ambiguous, matched, unknown }));
+    }
+    throw badOptions(
+      `triage takes one plan-gated worktree at a time (the plan text is one ticket's) — "${spec}" matched ${matched.map((r) => r.name).join(", ")}`
+    );
+  }
+  const [row] = matched;
+  const contract = readRubricContract(row.cwd);
+  const { state, truncated } = triageState(contract ?? "", planText);
+  const answered = await judge.systemOne(state, TRIAGE_QUESTIONS);
+  const card = triageCard(parseAnswers(answered.answers), {
+    contractMissing: contract === undefined,
+    truncated,
+  });
+  const handle = row.handle ?? row.ticket ?? row.name;
+  const approveCommand = `captain approve ${handle} --note ${shellQuote(card.note)}`;
+  if (options.json) {
+    out.write(
+      `${JSON.stringify({
+        approveCommand,
+        handle,
+        ...(answered.model ? { model: answered.model } : {}),
+        name: row.name,
+        ...card,
+      })}\n`
+    );
+    return;
+  }
+  renderTriage(out, styleFor(out), row, card, approveCommand);
 };
 
 // Reject a plan: deliver the feedback first, then reply false to the plan gate

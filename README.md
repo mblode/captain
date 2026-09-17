@@ -65,6 +65,7 @@ Everything between those gates is fixed: plan, implement, the review skills you 
 
 - Set `LINEAR_API_KEY` to pull ticket details into each brief, or `DONEBEAR_TOKEN` to drive [Done Bear](https://donebear.com) tasks the same way.
 - Pick the agent per run with `--agent claude` or `--agent codex`. Codex runs without a plan gate.
+- Set `TYPESAFE_API_KEY` to enable `captain triage`: a calibrated judge sorts each pending plan into clean or review before you read it. It never approves anything.
 - Captain keeps no state. Every view is derived live from cmux and the worktrees, so there is no daemon to start or go stale.
 
 ## License

@@ -21,9 +21,16 @@ captain approve tig-430               # or: captain approve all
 captain approve tig-430 --note "low risk, scope matches"   # record why
 captain reject tig-431 --note "don't touch auth"
 captain gain                          # fleet telemetry, derived live (alias: audit)
+captain triage tig-430 < plan.txt     # opt-in: sort one plan into clean / review before you read it
 ```
 
 `captain --help` lists every command and flag. `captain start` routes on its first argument: a Linear issue id/URL fans out a worktree per issue; anything else is a free-form task in the current checkout. Pass `--repo-path <path>` to pick the repo (a ticket's repo is decided per ticket, not by a static map); `--print` previews the brief without launching.
+
+## Triage before you read (opt-in)
+
+`captain triage <ticket>` hands one plan, together with the worktree's definition of done, to a System One judge ([TypeSafe](https://typesafe.ai)'s Jev, a model that returns calibrated probabilities rather than prose) and asks six fixed questions: is the plan in scope, what is its blast radius, does it name the files, the work order and the proof tests, does it resolve an ambiguity silently. The card comes back `clean` (every answer decisive and safe) or `review` (anything else, with the reasons), plus a ready `captain approve … --note` line so the approval is recorded with its reasoning.
+
+It is a triage, never a decision: nothing is approved, no gate is touched, and a missing or garbled answer is `review`. Set `TYPESAFE_API_KEY` to enable it; pipe the plan text on stdin or pass `--plan-file`. Without the key every other command works as before.
 
 ## The pipeline
 

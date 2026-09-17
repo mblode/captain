@@ -37,6 +37,18 @@ export const rubricBody = (text: string): string => {
   return i === -1 ? text : text.slice(0, i);
 };
 
+// The contract half of a rubric: issue context + acceptance criteria, i.e. the
+// body minus the fixed "How to verify" procedure. This is what a plan is judged
+// against (`captain triage`) — the procedure is captain's, not the ticket's,
+// and would only pad the judge's state. Splits on the LAST heading for the
+// same reason rubricBody does: the embedded description is verbatim.
+const VERIFY_HEADING = "\n## How to verify\n";
+export const rubricContract = (text: string): string => {
+  const body = rubricBody(text);
+  const i = body.lastIndexOf(VERIFY_HEADING);
+  return i === -1 ? body : body.slice(0, i);
+};
+
 const criteriaFor = (
   issue: Issue | undefined,
   displayId: string,

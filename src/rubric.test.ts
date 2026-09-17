@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderRubric, rubricBody, rubricHash } from "./rubric";
+import { renderRubric, rubricBody, rubricContract, rubricHash } from "./rubric";
 import type { Issue } from "./types";
 
 const issue: Issue = {
@@ -131,5 +131,40 @@ describe("renderRubric", () => {
 describe("rubricBody", () => {
   it("returns the whole text when no verdict heading exists", () => {
     expect(rubricBody("hand-written rubric")).toBe("hand-written rubric");
+  });
+});
+
+describe("rubricContract", () => {
+  it("keeps the issue context and criteria, drops the procedure and verdict tail", () => {
+    const { text } = renderRubric(
+      {
+        criteria: [{ title: "Adds a test" }],
+        identifier: "ENG-1",
+        title: "Do it",
+      },
+      "ENG-1"
+    );
+    const contract = rubricContract(text);
+    expect(contract).toContain("## Issue context");
+    expect(contract).toContain("## Acceptance criteria");
+    expect(contract).toContain("Adds a test");
+    expect(contract).not.toContain("## How to verify");
+    expect(contract).not.toContain("## Verdict");
+    expect(contract).not.toContain("rubricHash");
+  });
+
+  it("splits on the LAST procedure heading so a description mentioning it survives", () => {
+    const { text } = renderRubric(
+      {
+        description: "See\n\n## How to verify\n\nthe author's own notes",
+        identifier: "ENG-2",
+      },
+      "ENG-2"
+    );
+    expect(rubricContract(text)).toContain("the author's own notes");
+  });
+
+  it("returns the body untouched when no procedure heading exists", () => {
+    expect(rubricContract("hand-written rubric")).toBe("hand-written rubric");
   });
 });

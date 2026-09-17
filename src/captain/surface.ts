@@ -5,6 +5,7 @@ import { repoLabel } from "../git";
 import {
   RUBRIC_RELPATH,
   rubricBody,
+  rubricContract,
   rubricHash,
   VERDICT_RELPATH,
 } from "../rubric";
@@ -62,6 +63,17 @@ export const readRubricFacts = (
     // throw here would take down status/gain/approve/reject for every worktree
     // instead of degrading the one row that could not be read.
     return {};
+  }
+};
+
+// The rubric's contract half (issue context + acceptance criteria) for one
+// worktree, or undefined when the file cannot be read — the triage command
+// then judges against an empty contract and says so on the card.
+export const readRubricContract = (cwd: string): string | undefined => {
+  try {
+    return rubricContract(readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8"));
+  } catch {
+    return undefined;
   }
 };
 

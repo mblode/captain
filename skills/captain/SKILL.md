@@ -86,7 +86,7 @@ them in control.
 | You say | Run |
 | --- | --- |
 | "status" / "what's blocked" / "what's ready" | For a known run, `captain status <ticket-or-workspace…> --json`; add `--summary` for polling. Use unfiltered `captain status` only when the request is fleet-wide. `--repo`, `--needs`, and `--ready` also narrow — never fetch the full fleet merely to post-filter it. |
-| "show me the plans" | Send up to the bounded batch below to **one read-only reviewer** per heartbeat; it returns one compact `{ticket, summary, scopeDrift, risk, recommendation}` decision card per plan. Deep-read only plans it flags high-risk or ambiguous — never spend your window on `--scrollback` |
+| "show me the plans" | If `TYPESAFE_API_KEY` is set, first run `captain triage <ticket> --json` per pending plan, feeding it the captured plan text on stdin (`--plan-file` works too): a `clean` card carries a ready `approveCommand` with its `--note`; a `review` card lists why. Then send only the `review` plans (or every plan, with no key) — up to the bounded batch below — to **one read-only reviewer** per heartbeat; it returns one compact `{ticket, summary, scopeDrift, risk, recommendation}` decision card per plan. Deep-read only plans it flags high-risk or ambiguous — never spend your window on `--scrollback`. Triage decides nothing: the human still approves every plan |
 | "approve all plans" | `captain approve <ticket> --note "<the card's recommendation>"`, one call per gate so each carries its own card. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
 | "send 404 back: don't touch auth" | `captain reject tig-404 --note "…"` — replies to the gate _and_ types it into the workspace |
 | "what's verified" | `captain status` — READY rows carry `✓ verified`; spot-read `verdict.json`'s criteria before merging |
@@ -119,7 +119,9 @@ per wake, not per gate.
   reads it first; high-risk or ambiguous cards get a deeper second read. Pass the card
   through: `captain approve <ticket> --note "…"`. This is now measurable —
   `captain gain` reports `decisions.unexplainedApprovals`, so a skipped review shows up in
-  the ledger instead of vanishing.
+  the ledger instead of vanishing. A `clean` triage card counts as a card (its
+  `approveCommand` carries the note); a `review` card is a reason to read, never a
+  reason to reject on its own.
 - **Never guess off-script questions** — answer verbatim in the workspace, or `reject` if
   it's a plan.
 - **Stops at PR-ready** — merging and deploying stay with you.

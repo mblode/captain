@@ -30,6 +30,7 @@ src/
   runner.ts         # runStart routes on the first token: runIssueWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
   source.ts         # THE ISSUE-SOURCE SEAM: IssueSource registry (name/claims/prepare) — the one owner of "which source claims this token + how to parse/fetch it". sourceFor + isIssueToken. Adding a source touches only this file.
   cmux.ts git.ts linear.ts donebear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
+  judge.ts          # THE ONE NETWORK EDGE TO A SYSTEM ONE JUDGE: JudgePort seam + realJudge(env) → one fetch to TypeSafe's POST /v1/systemone (Jev). Opt-in (TYPESAFE_API_KEY); only `captain triage` calls it — status/approve/reject/gain never do
   # types.ts    : Issue (the source-neutral contract: identifier/title/description/criteria + optional Linear context) — every source maps INTO it, nothing downstream knows the source
   # linear.ts   : fetchLinearIssue (id/URL → GraphQL) + mapLinearIssue (raw API → Issue; sub-issues → criteria)
   # donebear.ts : isDonebearToken/parseDonebearInput (task URL or bare UUID → db-<8hex> id) + fetchDonebearTask + mapTaskToIssue (task+checklist → Issue; unchecked checklist items → criteria)
@@ -40,9 +41,10 @@ src/
   captain/
     view.ts         # 100% PURE (lint-enforced): identity, pendingGate (feed → gate), rowOf (the grouping rule), mergeOrderHints. Start here.
     verdict.ts      # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
+    triage.ts       # 100% PURE: TRIAGE_QUESTIONS (the fixed Jev questions over {contract, plan}) + parseAnswers (fail-safe) + triageCard (thresholds → clean | review); the HTTP call is judge.ts
     surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts + readRubricFacts (hash + ticket title, ONE read)
     control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
-    commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
+    commands.ts     # stateless status/approve/reject/gain/triage + friendly-id resolution
     gain.ts         # 100% PURE: computeGain (decisions + launch ledger + live fleet snapshot + verdict tallies → metrics incl. launch→detection latency); the gain command's fs/cmux edge lives in commands.ts
     doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
     format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
@@ -157,6 +159,20 @@ worktree never has to pass the check. See `research/wayfinder-browser-harness-au
 feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
 intent queue, no daemon to race.
 
+`triage` (opt-in, `TYPESAFE_API_KEY`) sits *before* approve/reject and decides nothing: it
+hands ONE plan-gated worktree's plan, plus the rubric's contract half (`rubricContract` —
+issue context + acceptance criteria, minus the fixed verify procedure), to a System One
+judge (TypeSafe's Jev, `judge.ts`) and asks the six fixed `TRIAGE_QUESTIONS`
+(`captain/triage.ts`) in one parallel call: in scope (Noul), blast radius (Score over the
+auto-pickup tiers low/moderate/elevated), names files / work order / proof tests (Nouls),
+resolves an ambiguity silently (Noul). `triageCard` sorts the answers into `clean` (every
+dimension answered and decisive in the safe direction) or `review` (anything else, reasons
+listed), and shapes a `note` for `captain approve --note` so a triaged approval enters the
+ledger explained. It touches no gate, writes no ledger record, and the plan text comes from
+the driver (stdin / `--plan-file`) — the cmux `exitPlan` feed item carries no plan body and
+`.captain/plan.md` is written only after the gate clears. Rationale and the rest of the
+System One inventory: `research/first-principles-2026-09.md`.
+
 `status --watch [--interval <s>]` re-renders that same derivation on a timer for a human watching
 a terminal (Ctrl-C exits, default 5s). It is **not** a daemon: it persists nothing, every tick is
 an independent `statusOnce` (the `--json`/`--summary` machine paths short-circuit before the git
@@ -235,9 +251,12 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
   `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
 - **The pure core stays pure**, and PURE has exactly ONE definition: **no filesystem, no
   subprocess**. `node:crypto` is fine (`rubric.ts` hashes) — it is deterministic and needs no
-  I/O. Six modules are in the contract and all six are lint-enforced (`oxlint.config.ts`,
-  `no-restricted-imports`): `view.ts`, `verdict.ts`, `gain.ts` on the surface side, and
-  `rubric.ts`, `route.ts`, `issue.ts` on the launch side. **The list in `oxlint.config.ts` is
+  I/O. Seven modules are in the contract and all seven are lint-enforced (`oxlint.config.ts`,
+  `no-restricted-imports`): `view.ts`, `verdict.ts`, `gain.ts`, `triage.ts` on the surface
+  side, and `rubric.ts`, `route.ts`, `issue.ts` on the launch side. **No network either**:
+  a System One judgment is a network call, so it can never live in these modules or on the
+  `status` read path — `triage.ts` holds the questions and the thresholds, `judge.ts` holds
+  the fetch, and only the opt-in `triage` command joins them. **The list in `oxlint.config.ts` is
   the contract** — adding a module here without adding it there writes a rule nobody enforces,
   which is how `rubric.ts` sat documented-but-unenforced for months. Decisions take plain input
   data; `surface.ts` and `commands.ts` are the fs/cmux edges that feed them.
@@ -427,6 +446,31 @@ approve/reject notes land in `~/.claude/captain/log.jsonl`.
     persistent chat listener respectively; the latter was already decided in
     `research/builderbot-audit.md`.
 
+- **`triage` is a triage, not a decision, and `clean` is fail-closed.** A missing,
+  malformed, or wrong-typed answer from the judge is dropped by `parseAnswers` and surfaces
+  as "unanswered" → `review`; a plan cut at `PLAN_CHARS_MAX` or a worktree with no rubric on
+  disk is `review` even on perfect answers. The Noul band is two **literals** (`DECISIVE`
+  0.8 / `DECISIVE_NO` 0.2), not `1 - DECISIVE` — that expression is 0.19999999999999996 and
+  put an answer of exactly 0.20 in the wrong band. Thresholds are exported constants and
+  have not been measured on real plans; TypeSafe's own docs call theirs examples to
+  evaluate. The wire shape (`POST /v1/systemone`, `{model, questions, state}` →
+  `{model, answers, usage}`) is pinned from the Sept 2026 docs by `judge.test.ts`, not from
+  a live call — confirm the answer shapes on the first live run. Never wire the judge into
+  `approve` so it acts on its own answer: the human approves every plan, the judge only
+  sorts the queue. And the other System One candidates — repo routing, verdict-evidence
+  checking, memory-curation ranking — are sorted ADAPT-not-now in
+  `research/first-principles-2026-09.md`; read it before proposing one.
+- **The four September 2026 platform references are one product drawn four times.**
+  Claude Projects, Cursor Projects and Grok Bot are each a **persistent, hosted, stateful
+  coordinator** with shared memory, proactive triggers and a "check in when attention is
+  needed" human loop — the watcher-daemon class deleted June 2026, now every vendor's
+  default. GPT-6 Astra's cross-window notes are agent-internal. Captain's answer is written
+  up once in `research/first-principles-2026-09.md`: its value is governance (gates an
+  agent cannot argue past, a rubric nobody's model wrote, read-only trackers with the
+  frontier rule), measurement (`gain` over a greppable ledger, not PR counts) and locality
+  (stateless derivation, pinned models, no cloud box). Don't re-propose a coordinator
+  service, proactive subscriptions, bot-to-bot threads, or throughput metrics from those
+  posts — each has a decided entry there.
 - **Captain reads trackers; it never writes them.** Audited Aug 2026 against Matt Pocock's
   `wayfinder` and rejected — see `research/wayfinder-browser-harness-audit.md`. The read side
   landed (the frontier rule above); the write side is the non-goal. Wayfinder's map issue is a
@@ -459,7 +503,10 @@ with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (override
 `CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default
 `high`) · `CAPTAIN_AGENT` (which agent to launch, `claude` | `codex`, default `claude`) ·
 `CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
-`CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
+`CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR` · `TYPESAFE_API_KEY` (opt-in: enables
+`captain triage`, the System One plan-gate judge; nothing else reads it) · `TYPESAFE_MODEL`
+(judge model, default `jev-latest`) · `TYPESAFE_ENDPOINT` (judge URL override, default
+`https://api.typesafe.ai/v1/systemone`).
 
 `~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[] — each entry a
 `/skill` token, a plain-English instruction, or `"$defaults"`), `.dataScope` (string),

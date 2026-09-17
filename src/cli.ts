@@ -9,6 +9,7 @@ import {
   parseInterval,
   reject,
   status,
+  triage,
 } from "./captain/commands";
 import { install } from "./captain/doctor";
 import { msg, style, useColor } from "./captain/format";
@@ -70,6 +71,7 @@ Workflow:
   $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
   $ captain approve tig-430 --note "…"   approve and record why in the ledger
   $ captain reject tig-430 --note "…"    send a plan back with feedback
+  $ captain triage tig-430 < plan.txt    opt-in: a System One judge sorts the plan into clean / review
 
 A bare first argument (a Linear issue id/URL, or a free-form task) is treated as
 "captain start …"; start then routes on it: a Linear id/URL fans out worktrees,
@@ -249,6 +251,40 @@ program
       note: options.note,
     });
   });
+
+// Opt-in (TYPESAFE_API_KEY): a calibrated System One judge reads the plan next
+// to the worktree's rubric contract and sorts it into clean / review. Advisory
+// only — it resolves no gate and writes no ledger record.
+program
+  .command("triage")
+  .description(
+    "opt-in: judge one plan against its rubric contract with TypeSafe's Jev — clean or review, never a decision"
+  )
+  .argument("<ref>", "one plan-gated ticket name / workspace")
+  .option(
+    "--plan-file <path>",
+    "the plan text the agent presented (default: read it from stdin)"
+  )
+  .option("--json", "emit JSON: the card + approveCommand")
+  .action(
+    async (ref: string, options: { planFile?: string; json?: boolean }) => {
+      let plan: string;
+      if (options.planFile) {
+        plan = readFileSync(options.planFile, "utf-8");
+      } else if (process.stdin.isTTY) {
+        throw new CliError(
+          "triage reads the plan from stdin — pipe it in, or pass --plan-file <path>",
+          EXIT.USAGE,
+          "BAD_OPTIONS"
+        );
+      } else {
+        plan = readFileSync(0, "utf-8");
+      }
+      await triage(ref, plan, process.stdout, undefined, undefined, {
+        json: options.json,
+      });
+    }
+  );
 
 program
   .command("reject")

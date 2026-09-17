@@ -2,9 +2,12 @@
 // on a number without parsing prose. 1 stays the generic/unexpected fallback.
 //   2  — usage error or a bad/unresolvable reference (the agent passed garbage)
 //   11 — cmux is not reachable (its daemon is down)
+//   12 — the System One judge (TypeSafe) is not configured or not reachable;
+//        only `captain triage` can raise it — every other command is offline
 export const EXIT = {
   CMUX_UNREACHABLE: 11,
   GENERIC: 1,
+  JUDGE_UNAVAILABLE: 12,
   USAGE: 2,
 } as const;
 

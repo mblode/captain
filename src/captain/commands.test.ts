@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +13,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CliError, EXIT } from "../errors";
+import type { JudgePort } from "../judge";
 import { renderRubric } from "../rubric";
 import { runRequired } from "../shell";
 import {
@@ -16,6 +23,7 @@ import {
   reject,
   resolveTargets,
   status,
+  triage,
 } from "./commands";
 import type {
   CmuxFeedItem,
@@ -1244,5 +1252,221 @@ describe("parseInterval", () => {
       expect((error as CliError).exitCode).toBe(EXIT.USAGE);
       expect((error as CliError).errorType).toBe("BAD_OPTIONS");
     }
+  });
+});
+
+// triage driven end to end: the REAL surface (temp worktrees with a rubric)
+// through an in-memory CmuxPort and an in-memory JudgePort. The judge fake
+// records the one request so the tests can pin what the judge is asked over.
+describe("triage over the real surface with a fake judge", () => {
+  let root: string;
+
+  interface FakeJudge extends JudgePort {
+    asked: { state: unknown; questions: Record<string, unknown> }[];
+  }
+
+  const fakeJudge = (answers: unknown, model = "jev-1.13.0"): FakeJudge => {
+    const asked: FakeJudge["asked"] = [];
+    return {
+      asked,
+      systemOne: (state, questions) => {
+        asked.push({ questions, state });
+        return Promise.resolve({ answers, model });
+      },
+    };
+  };
+
+  const cleanAnswers = {
+    inScope: { noul: 0.96, type: "noul" },
+    namesFiles: { noul: 0.93, type: "noul" },
+    namesOrder: { noul: 0.9, type: "noul" },
+    namesTests: { noul: 0.88, type: "noul" },
+    risk: {
+      confidence: 0.91,
+      probabilities: { "0": 0.94, "1": 0.05, "2": 0.01 },
+      score: 0.07,
+      type: "score",
+    },
+    silentAssumption: { noul: 0.04, type: "noul" },
+  };
+
+  const worktree = (name: string, withRubric = true): string => {
+    const cwd = join(root, name);
+    mkdirSync(join(cwd, ".captain"), { recursive: true });
+    if (withRubric) {
+      const { text } = renderRubric(
+        { identifier: name.toUpperCase(), title: "Rename the button" },
+        name.toUpperCase()
+      );
+      writeFileSync(join(cwd, ".captain", "rubric.md"), text);
+    }
+    return cwd;
+  };
+
+  const planGated = (cwd: string, id = "ws-1"): FakePort =>
+    fakePort(
+      [{ cwd, id, name: "tig-430", ref: "tig-430" }],
+      [{ cwd, id: `feed-${id}`, kind: "exitPlan", status: "pending" }]
+    );
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "captain-triage-"));
+    vi.stubEnv("CAPTAIN_HOME", join(root, "home"));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it("asks the judge over {contract, plan} — the rubric's contract half, verbatim", async () => {
+    const cwd = worktree("tig-430");
+    const port = planGated(cwd);
+    const judge = fakeJudge(cleanAnswers);
+    const { out, text } = capture();
+    await triage(
+      "tig-430",
+      "1. Edit Button.tsx\n2. Add Button.test.tsx",
+      out,
+      port,
+      judge,
+      {
+        json: true,
+      }
+    );
+    expect(judge.asked).toHaveLength(1);
+    const state = judge.asked[0].state as { contract: string; plan: string };
+    expect(state.plan).toBe("1. Edit Button.tsx\n2. Add Button.test.tsx");
+    expect(state.contract).toContain("Rename the button");
+    expect(state.contract).toContain("## Acceptance criteria");
+    expect(state.contract).not.toContain("## How to verify");
+    expect(Object.keys(judge.asked[0].questions).toSorted()).toEqual([
+      "inScope",
+      "namesFiles",
+      "namesOrder",
+      "namesTests",
+      "risk",
+      "silentAssumption",
+    ]);
+    const card = JSON.parse(text()) as Record<string, unknown>;
+    expect(card).toMatchObject({
+      handle: "tig-430",
+      model: "jev-1.13.0",
+      name: "tig-430",
+      triage: "clean",
+      truncated: false,
+    });
+    expect(card.approveCommand).toBe(
+      "captain approve tig-430 --note 'triage clean: in scope 0.96 · risk low (0.91) · names files, order, tests'"
+    );
+  });
+
+  it("resolves no gate and writes no ledger record — it is advisory", async () => {
+    const cwd = worktree("tig-430");
+    const port = planGated(cwd);
+    const { out } = capture();
+    await triage("tig-430", "a plan", out, port, fakeJudge(cleanAnswers));
+    expect(port.replies).toEqual([]);
+    expect(port.sent).toEqual([]);
+    expect(existsSync(join(root, "home", "log.jsonl"))).toBe(false);
+  });
+
+  it("renders review flags and both next commands on a TTY-less stream", async () => {
+    const cwd = worktree("tig-430");
+    const port = planGated(cwd);
+    const judge = fakeJudge({
+      ...cleanAnswers,
+      inScope: { noul: 0.2, type: "noul" },
+    });
+    const { out, text } = capture();
+    await triage("tig-430", "a plan", out, port, judge);
+    expect(text()).toContain("needs a human read");
+    expect(text()).toContain("scope drift (0.20)");
+    expect(text()).toContain("captain reject tig-430 --note");
+  });
+
+  it("a worktree with no rubric is judged against an empty contract and says so", async () => {
+    const cwd = worktree("tig-430", false);
+    const port = planGated(cwd);
+    const judge = fakeJudge(cleanAnswers);
+    const { out, text } = capture();
+    await triage("tig-430", "a plan", out, port, judge, { json: true });
+    expect((judge.asked[0].state as { contract: string }).contract).toBe("");
+    const card = JSON.parse(text()) as { triage: string; flags: string[] };
+    expect(card.triage).toBe("review");
+    expect(card.flags[0]).toMatch(/no rubric on disk/u);
+  });
+
+  it("garbage from the judge is review, never clean", async () => {
+    const cwd = worktree("tig-430");
+    const port = planGated(cwd);
+    const { out, text } = capture();
+    await triage("tig-430", "a plan", out, port, fakeJudge("not an object"), {
+      json: true,
+    });
+    const card = JSON.parse(text()) as { triage: string; flags: string[] };
+    expect(card.triage).toBe("review");
+    expect(card.flags).toContain("scope unanswered");
+  });
+
+  it("refuses an empty plan before touching cmux or the judge", async () => {
+    const cwd = worktree("tig-430");
+    const port = planGated(cwd);
+    const judge = fakeJudge(cleanAnswers);
+    const { out } = capture();
+    await expect(
+      triage("tig-430", "  \n", out, port, judge)
+    ).rejects.toMatchObject({
+      errorType: "BAD_OPTIONS",
+      exitCode: EXIT.USAGE,
+    });
+    expect(judge.asked).toHaveLength(0);
+  });
+
+  it("refuses more than one target — the plan text is one ticket's", async () => {
+    const a = worktree("tig-430");
+    const b = worktree("tig-431");
+    const port = fakePort(
+      [
+        { cwd: a, id: "ws-a", name: "tig-430", ref: "a" },
+        { cwd: b, id: "ws-b", name: "tig-431", ref: "b" },
+      ],
+      [
+        { cwd: a, id: "feed-a", kind: "exitPlan", status: "pending" },
+        { cwd: b, id: "feed-b", kind: "exitPlan", status: "pending" },
+      ]
+    );
+    const judge = fakeJudge(cleanAnswers);
+    const { out } = capture();
+    await expect(
+      triage("all", "a plan", out, port, judge)
+    ).rejects.toMatchObject({
+      errorType: "BAD_OPTIONS",
+    });
+    expect(judge.asked).toHaveLength(0);
+  });
+
+  it("an unknown ref is a BAD_REF, same as approve", async () => {
+    const cwd = worktree("tig-430");
+    const port = planGated(cwd);
+    const { out } = capture();
+    await expect(
+      triage("tig-999", "a plan", out, port, fakeJudge(cleanAnswers))
+    ).rejects.toMatchObject({ errorType: "BAD_REF" });
+  });
+
+  it("a dead cmux is CMUX_UNREACHABLE before the judge is asked", async () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [{ cwd, id: "feed-1", kind: "exitPlan", status: "pending" }],
+      { reachable: false }
+    );
+    const judge = fakeJudge(cleanAnswers);
+    const { out } = capture();
+    await expect(
+      triage("tig-430", "a plan", out, port, judge)
+    ).rejects.toMatchObject({ errorType: "CMUX_UNREACHABLE" });
+    expect(judge.asked).toHaveLength(0);
   });
 });
