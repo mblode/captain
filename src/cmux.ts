@@ -16,8 +16,52 @@ interface OpenWorkspaceOptions {
 export const isFanOutInput = (tokens: string[], print: boolean): boolean =>
   !print && tokens.length >= 2 && tokens.every(isIssueToken);
 
+// Driver-facing copy when ping fails. `captain install` only helps a missing
+// binary. A refused socket means the app is down. Access denied means the app
+// is up but Socket Control Mode is `cmuxOnly` — the /captain driver never
+// runs inside a cmux pane (it sits in linear-god / Claude Code).
+export const formatCmuxUnreachable = (options: {
+  onPath: boolean;
+  pingStderr: string;
+  pingStdout: string;
+}): string => {
+  if (!options.onPath) {
+    return "cmux is not on PATH — run `captain install`";
+  }
+  const err = (
+    options.pingStderr.trim() || options.pingStdout.trim()
+  ).replaceAll(/\s+/gu, " ");
+  if (/access denied|only processes started inside cmux/iu.test(err)) {
+    return "cmux socket is in cmux-only mode — captain's driver is linear-god, not a cmux pane. Set cmux Settings → Automation → Socket Control Mode to Automation mode (not Full open access).";
+  }
+  return err
+    ? `cmux is not reachable — ${err}`
+    : "cmux is not reachable — is the app running?";
+};
+
+export const explainCmuxUnreachable = (
+  env: NodeJS.ProcessEnv
+): string | undefined => {
+  if (!commandExists("cmux", env)) {
+    return formatCmuxUnreachable({
+      onPath: false,
+      pingStderr: "",
+      pingStdout: "",
+    });
+  }
+  const ping = run("cmux", ["ping"], { env });
+  if (ping.status === 0) {
+    return undefined;
+  }
+  return formatCmuxUnreachable({
+    onPath: true,
+    pingStderr: ping.stderr,
+    pingStdout: ping.stdout,
+  });
+};
+
 export const cmuxReachable = (env: NodeJS.ProcessEnv): boolean =>
-  commandExists("cmux", env) && run("cmux", ["ping"], { env }).status === 0;
+  explainCmuxUnreachable(env) === undefined;
 
 // The agent env rides in front of every launch command via `env`, so every
 // Bash tool the agent runs inherits the fleet's resource caps (keys are

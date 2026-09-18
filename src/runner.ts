@@ -6,7 +6,12 @@ import { realCmux } from "./captain/control";
 import type { CmuxPort, CmuxWorkspace } from "./captain/control";
 import { appendLog, now } from "./captain/log";
 import { identityOf, pickAgentWorkspaces, ticketFrom } from "./captain/view";
-import { cmuxReachable, isFanOutInput, openIssueWorkspace } from "./cmux";
+import {
+  cmuxReachable,
+  explainCmuxUnreachable,
+  isFanOutInput,
+  openIssueWorkspace,
+} from "./cmux";
 import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
 import {
@@ -24,7 +29,7 @@ import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
 import { createProgress, withPrefix } from "./progress";
 import type { Progress } from "./progress";
 import { renderPrompt, renderPromptExtras } from "./prompt";
-import { resolveRepo } from "./repo";
+import { refuseDriverIssueCwd, resolveRepo } from "./repo";
 import { renderRubric, RUBRIC_RELPATH } from "./rubric";
 import { commandExists } from "./shell";
 import { isIssueToken, sourceFor } from "./source";
@@ -747,7 +752,7 @@ const dispatchFanOut = async ({
   const { agent } = context;
   if (!cmuxReachable(env)) {
     throw new CliError(
-      "cmux is not reachable (needed for multi-issue fan-out) — is it running? run `captain install`",
+      `${explainCmuxUnreachable(env) ?? "cmux is not reachable"} (needed for multi-issue fan-out)`,
       EXIT.CMUX_UNREACHABLE,
       "CMUX_UNREACHABLE"
     );
@@ -758,6 +763,7 @@ const dispatchFanOut = async ({
     env,
     repoOverride: context.repoOverride,
   });
+  refuseDriverIssueCwd(repo.repoRoot, context.repoOverride);
   const scopedContexts = tokens.map((token, index) => ({
     ...context,
     progress: withPrefix(
@@ -852,6 +858,7 @@ const dispatchSingle = async ({
     env,
     repoOverride: context.repoOverride,
   });
+  refuseDriverIssueCwd(repo.repoRoot, context.repoOverride);
   const seed = issueSeed(tokens.join(" "));
   // A real launch retry can be answered from cmux + the derived worktree path
   // alone. Do this before issue/git I/O and before rewriting the rubric hash.

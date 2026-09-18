@@ -79,10 +79,11 @@ describe("prompt extras", () => {
 
   // The plan gate is the human's one cheap chance to redirect a run, so both
   // agent variants must ask for the unknowns rather than just "a plan".
-  it("asks the plan to lead with ambiguities and assumptions", () => {
+  it("asks the plan to lead with a named Decisions for the reviewer section", () => {
     for (const agent of ["claude", "codex"]) {
       const out = renderPromptExtras({ agent, workflow: true });
-      expect(out).toContain("Lead it with what you are least sure of");
+      expect(out).toContain("## Decisions for the reviewer");
+      expect(out).toContain("at most five bullets");
       expect(out).toContain("assumptions you had to make");
       expect(out).toContain("Never resolve an ambiguity silently.");
       // the playbook's plan contract: what changes, in what order, proven how

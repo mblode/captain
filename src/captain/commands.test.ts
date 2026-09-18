@@ -582,6 +582,7 @@ describe("stateless approve/reject/status over the real surface", () => {
     const parsed = JSON.parse(text()) as {
       counts: { needsYou: number; inFlight: number; ready: number };
       needsYou: FleetRow[];
+      ready: string[];
       snapshot: string;
     };
     expect(parsed.counts).toEqual({ inFlight: 1, needsYou: 1, ready: 1 });
@@ -590,7 +591,51 @@ describe("stateless approve/reject/status over the real surface", () => {
       gate: { kind: "plan" },
       group: "needs-you",
     });
+    expect(parsed.ready).toEqual(["tig-431"]);
     expect(parsed.snapshot).toMatch(/^[0-9a-f]{16}$/u);
+  });
+
+  it("summary snapshot changes when a row moves from needs-you to ready", () => {
+    const cwd = worktree("tig-430");
+    const workspaces = [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }];
+    const gated = fakePort(workspaces, [
+      { cwd, id: "feed-1", kind: "exitPlan", status: "pending" },
+    ]);
+    const first = capture();
+    status({ json: true, summary: true }, first.out, gated);
+    const initial = JSON.parse(first.text()) as {
+      ready: string[];
+      snapshot: string;
+    };
+    expect(initial.ready).toEqual([]);
+
+    const { hash } = renderRubric(undefined, "TIG-430");
+    writeFileSync(
+      join(cwd, ".captain", "verdict.json"),
+      JSON.stringify({
+        criteria: [{ evidence: "x", name: "implements", pass: true }],
+        issue: "TIG-430",
+        rubricHash: hash,
+        summary: "all criteria pass",
+        ts: 1,
+        verdict: "pass",
+      })
+    );
+    const verified = fakePort(workspaces, []);
+    const moved = capture();
+    status(
+      { json: true, since: initial.snapshot, summary: true },
+      moved.out,
+      verified
+    );
+    const changed = JSON.parse(moved.text()) as {
+      changed: boolean;
+      ready: string[];
+      snapshot: string;
+    };
+    expect(changed.changed).toBe(true);
+    expect(changed.ready).toEqual(["tig-430"]);
+    expect(changed.snapshot).not.toBe(initial.snapshot);
   });
 
   it("status --summary --json supports stateless aggregate delta polling", () => {

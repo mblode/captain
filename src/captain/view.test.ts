@@ -111,6 +111,22 @@ describe("pendingGate", () => {
       pendingGate([feedItem({ kind: "userPrompt" })], "/wt/tig-1")
     ).toBeUndefined();
   });
+
+  it("maps permissionRequest to a question gate (not a plan)", () => {
+    expect(
+      pendingGate(
+        [feedItem({ kind: "permissionRequest", text: "Bash" })],
+        "/wt/tig-1"
+      )
+    ).toMatchObject({ kind: "question" });
+  });
+
+  it("joins macOS /private cwd aliases so a live plan is not gate=None", () => {
+    expect(
+      pendingGate([feedItem({ cwd: "/private/var/wt/tig-1" })], "/var/wt/tig-1")
+        ?.kind
+    ).toBe("plan");
+  });
 });
 
 describe("rowOf grouping", () => {

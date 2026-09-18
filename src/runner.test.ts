@@ -266,6 +266,40 @@ describe("runner integration", () => {
     ).rejects.toThrow(/not in a git repo/u);
   });
 
+  it("refuses an issue start from linear-god without --repo-path", async () => {
+    const { repo, root } = await createGitRepo("linear-god");
+    cleanup.push(root);
+
+    await expect(
+      runIssueWorktree({
+        cwd: repo,
+        env: safeEnv(),
+        print: true,
+        tokens: ["TST-123"],
+      })
+    ).rejects.toMatchObject({
+      errorType: "DRIVER_CWD",
+    });
+  });
+
+  it("allows an issue start from linear-god when --repo-path names a product repo", async () => {
+    const driver = await createGitRepo("linear-god");
+    const product = await createGitRepo("src");
+    cleanup.push(driver.root, product.root);
+
+    const output = captureWritable();
+    const status = await runIssueWorktree({
+      cwd: driver.repo,
+      env: safeEnv(),
+      print: true,
+      repoOverride: product.repo,
+      stdout: output.stream,
+      tokens: ["TST-123"],
+    });
+    expect(status).toBe(0);
+    expect(output.value()).toContain("<workflow>");
+  });
+
   it("fails closed with an actionable error when issue context is unavailable", async () => {
     const { repo, root } = await createGitRepo("src");
     cleanup.push(root);

@@ -116,9 +116,29 @@ export const pickAgentWorkspaces = (
   return workspaces.filter((w) => byCwd.get(w.cwd) === w);
 };
 
-// Feed kinds that gate on a human: a plan awaiting approval, or a question /
-// notification the agent is blocked on.
-const GATE_KINDS = new Set(["exitPlan", "question", "notification"]);
+// Feed kinds that gate on a human. Wire names are WorkstreamKind raw values
+// (cmux 0.64): exitPlan, question, permissionRequest. `notification` is kept
+// because older feed.list payloads used it; current cmux maps that hook to
+// telemetry, so it is harmless if absent.
+const GATE_KINDS = new Set([
+  "exitPlan",
+  "question",
+  "notification",
+  "permissionRequest",
+]);
+
+// Worktree cwd vs feed.cwd: macOS often reports `/var/...` on one side and
+// `/private/var/...` on the other. Trailing slashes too. A strict === here is
+// how a live plan reads as gate=None.
+const normalizeCwd = (path: string): string => {
+  const trimmed = path.replace(/\/+$/u, "") || "/";
+  return trimmed.startsWith("/private/")
+    ? trimmed.slice("/private".length)
+    : trimmed;
+};
+
+const sameCwd = (left: string, right: string): boolean =>
+  left === right || normalizeCwd(left) === normalizeCwd(right);
 
 // The newest unresolved gating feed item for a worktree, matched by cwd (the
 // cross-channel join key). `resolved_at` is set the moment an item is
@@ -129,7 +149,7 @@ export const pendingGate = (
   cwd: string
 ): Gate | undefined => {
   const item = items.findLast(
-    (f) => GATE_KINDS.has(f.kind) && f.cwd === cwd && !f.resolved_at
+    (f) => GATE_KINDS.has(f.kind) && sameCwd(f.cwd, cwd) && !f.resolved_at
   );
   if (!item) {
     return undefined;

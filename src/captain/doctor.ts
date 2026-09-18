@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { cmuxReachable } from "../cmux";
+import { explainCmuxUnreachable } from "../cmux";
 import { loadSkills } from "../config";
 import { commandExists, run } from "../shell";
 import { msg, style, useColor } from "./format";
@@ -24,6 +24,10 @@ interface Check {
 // stays pure (and testable) — mirrors the surface.ts/CmuxPort seam.
 export interface DoctorDeps {
   cmuxReachable: () => boolean;
+  // When cmux is down, the ping-derived fix. Tests inject it; realDeps uses
+  // explainCmuxUnreachable so `captain install` does not say "install cmux"
+  // for a cmux-only socket that is already running.
+  cmuxHint?: string;
   // The pipeline skills the configured brief actually runs (loadSkills), stripped
   // of the leading `/`. Injected so buildChecks stays pure; realDeps resolves it.
   configuredSkills: string[];
@@ -79,7 +83,10 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
   const cmuxOk = deps.cmuxReachable();
   checks.push({
     detail: cmuxOk ? "reachable" : "not reachable",
-    hint: "install cmux (https://cmux.com) and make sure it's running",
+    hint: cmuxOk
+      ? undefined
+      : (deps.cmuxHint ??
+        "install cmux (https://cmux.com) and make sure it's running"),
     label: "cmux",
     level: "required",
     ok: cmuxOk,
@@ -149,18 +156,22 @@ const skillProbe = (env: NodeJS.ProcessEnv): ((skill: string) => boolean) => {
   return (skill) => dirs.some((dir) => existsSync(join(dir, skill)));
 };
 
-export const realDeps = (env: NodeJS.ProcessEnv): DoctorDeps => ({
-  cmuxReachable: () => cmuxReachable(env),
-  configuredSkills: loadSkills(env).map((s) => s.replace(/^\//u, "")),
-  env,
-  hasCommand: (command) => commandExists(command, env),
-  installBundle: (bundle) =>
-    run("npx", ["skills", "add", bundle, "-g"], { env, stdio: "inherit" })
-      .status === 0,
-  nodeMajor: Number.parseInt(process.versions.node.split(".")[0], 10),
-  nodeVersion: `v${process.versions.node}`,
-  skillInstalled: skillProbe(env),
-});
+export const realDeps = (env: NodeJS.ProcessEnv): DoctorDeps => {
+  const cmuxWhy = explainCmuxUnreachable(env);
+  return {
+    cmuxHint: cmuxWhy,
+    cmuxReachable: () => cmuxWhy === undefined,
+    configuredSkills: loadSkills(env).map((s) => s.replace(/^\//u, "")),
+    env,
+    hasCommand: (command) => commandExists(command, env),
+    installBundle: (bundle) =>
+      run("npx", ["skills", "add", bundle, "-g"], { env, stdio: "inherit" })
+        .status === 0,
+    nodeMajor: Number.parseInt(process.versions.node.split(".")[0], 10),
+    nodeVersion: `v${process.versions.node}`,
+    skillInstalled: skillProbe(env),
+  };
+};
 
 const line = (s: Style, check: Check): string => {
   const head = check.ok

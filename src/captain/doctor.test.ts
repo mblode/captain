@@ -63,6 +63,18 @@ describe("buildChecks", () => {
     expect(cmux?.hint).toContain("cmux.com");
   });
 
+  it("relays the ping explanation instead of 'install cmux' when given", () => {
+    const cmux = buildChecks(
+      deps({
+        cmuxHint:
+          "Set cmux Settings → Automation → Socket Control Mode to Automation mode",
+        cmuxReachable: () => false,
+      })
+    ).find((c) => c.label === "cmux");
+    expect(cmux?.hint).toContain("Automation mode");
+    expect(cmux?.hint).not.toContain("cmux.com");
+  });
+
   it("a missing LINEAR_API_KEY is only recommended", () => {
     const key = buildChecks(deps({ env: {} })).find(
       (c) => c.label === "LINEAR_API_KEY"

@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-import { CliError } from "./errors";
+import { CliError, EXIT } from "./errors";
 import { run } from "./shell";
 import type { ResolvedRepo } from "./types";
 
@@ -51,4 +51,26 @@ export const resolveRepo = (options: ResolveRepoOptions): ResolvedRepo => {
   throw new CliError(
     "not in a git repo (run from inside the target repo or pass --repo <path>)"
   );
+};
+
+// Steering-desk checkouts, not product repos. An issue start without
+// --repo-path plants worktrees here — the silent failure `/captain pick up`
+// from linear-god actually hits. Override always wins (the driver named a path).
+export const DRIVER_SESSION_REPOS = new Set(["linear-god"]);
+
+export const refuseDriverIssueCwd = (
+  repoRoot: string,
+  repoOverride?: string
+): void => {
+  if (repoOverride) {
+    return;
+  }
+  const name = basename(repoRoot);
+  if (DRIVER_SESSION_REPOS.has(name)) {
+    throw new CliError(
+      `refusing to plant issue worktrees in ${name} — pass --repo-path to the product checkout`,
+      EXIT.USAGE,
+      "DRIVER_CWD"
+    );
+  }
 };

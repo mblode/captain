@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { agentCommand, claudeCommand, codexCommand } from "./cmux";
+import {
+  agentCommand,
+  claudeCommand,
+  codexCommand,
+  formatCmuxUnreachable,
+} from "./cmux";
 
 describe("claudeCommand", () => {
   it("renders the pinned model/effort launch with no env prefix by default", () => {
@@ -96,5 +101,39 @@ describe("agentCommand", () => {
     expect(
       agentCommand("codex", "/tmp/p/prompt.txt", "default", "high", {}, "tig-1")
     ).toBe(codexCommand("/tmp/p/prompt.txt", "default", "high"));
+  });
+});
+
+describe("formatCmuxUnreachable", () => {
+  it("tells the driver to install only when cmux is missing from PATH", () => {
+    expect(
+      formatCmuxUnreachable({
+        onPath: false,
+        pingStderr: "",
+        pingStdout: "",
+      })
+    ).toBe("cmux is not on PATH — run `captain install`");
+  });
+
+  it("relays ping stderr when the binary exists but the socket is down", () => {
+    expect(
+      formatCmuxUnreachable({
+        onPath: true,
+        pingStderr:
+          "Error: Failed to connect to socket at /Users/me/.local/state/cmux/cmux.sock (Connection refused, errno 61)\n",
+        pingStdout: "",
+      })
+    ).toContain("cmux.sock (Connection refused");
+  });
+
+  it("names Automation mode when cmuxOnly rejects the linear-god driver", () => {
+    expect(
+      formatCmuxUnreachable({
+        onPath: true,
+        pingStderr:
+          "ERROR: Access denied - only processes started inside cmux can connect",
+        pingStdout: "",
+      })
+    ).toMatch(/Socket Control Mode to Automation mode/u);
   });
 });

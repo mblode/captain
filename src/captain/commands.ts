@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { explainCmuxUnreachable } from "../cmux";
 import { CliError, EXIT } from "../errors";
 import { run, shellQuote } from "../shell";
 import { realCmux } from "./control";
@@ -182,6 +183,10 @@ const changedFiles = (cwd: string, env: NodeJS.ProcessEnv): string[] => {
 // unreachable daemon this writes a structured error with a dedicated exit code
 // and returns true so the caller bails, instead of rendering a phantom-empty
 // fleet. Shared by `status` and `gain`.
+const cmuxDownMessage = (): string =>
+  explainCmuxUnreachable(process.env) ??
+  "cmux is not reachable — is the app running?";
+
 const cmuxUnreachable = (
   port: CmuxPort,
   options: { json?: boolean },
@@ -191,8 +196,7 @@ const cmuxUnreachable = (
     return false;
   }
   process.exitCode = EXIT.CMUX_UNREACHABLE;
-  const message =
-    "cmux is not reachable — is it running? run 'captain install'";
+  const message = cmuxDownMessage();
   if (options.json) {
     out.write(
       `${JSON.stringify({ error: { message, type: "CMUX_UNREACHABLE" } })}\n`
@@ -206,7 +210,7 @@ const cmuxUnreachable = (
 const assertCmuxReachable = (port: CmuxPort): void => {
   if (!port.reachable()) {
     throw new CliError(
-      "cmux is not reachable — is it running? run 'captain install'",
+      cmuxDownMessage(),
       EXIT.CMUX_UNREACHABLE,
       "CMUX_UNREACHABLE"
     );
@@ -284,6 +288,7 @@ const repoRows = (rows: FleetRow[], raw: string): FleetRow[] => {
 const fleetSnapshot = (
   counts: ReturnType<typeof groupCounts>,
   needsYou: FleetRow[],
+  ready: string[],
   missing: string[]
 ): string => {
   const projection = {
@@ -299,6 +304,7 @@ const fleetSnapshot = (
         verdict: row.verdict,
       }))
       .toSorted((a, b) => a.identity.localeCompare(b.identity)),
+    ready,
   };
   return createHash("sha256")
     .update(JSON.stringify(projection))
@@ -346,14 +352,19 @@ const statusOnce = (
     missing = unknown;
     rows = matched;
   }
-  // --summary: counts for every group + full detail for NEEDS YOU only. Counts
-  // come off the (repo/ref-filtered) full set, so they stay honest regardless
-  // of any group-narrowing flags.
+  // --summary: counts for every group + full detail for NEEDS YOU + READY
+  // identities (so a poller can relay what verified without a full --json).
+  // Counts come off the (repo/ref-filtered) full set, so they stay honest
+  // regardless of any group-narrowing flags.
   if (options.summary) {
     const counts = groupCounts(rows);
     const needsYou = rows.filter((r) => r.group === "needs-you");
+    const ready = rows
+      .filter((r) => r.group === "ready")
+      .map((r) => r.name)
+      .toSorted((a, b) => a.localeCompare(b));
     if (options.json) {
-      const snapshot = fleetSnapshot(counts, needsYou, missing);
+      const snapshot = fleetSnapshot(counts, needsYou, ready, missing);
       if (options.since === snapshot) {
         out.write(`${JSON.stringify({ changed: false, snapshot })}\n`);
         return;
@@ -364,6 +375,7 @@ const statusOnce = (
           counts,
           ...(missing.length === 0 ? {} : { missing }),
           needsYou,
+          ready,
           snapshot,
         })}\n`
       );
