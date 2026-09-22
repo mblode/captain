@@ -147,28 +147,80 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
   - kill the chat mid-run, start a new one, and it picks up from `captain status` with nothing lost;
   - with 4 PRs waiting on you, `start` refuses.
 
+### Your answers (22 Sep), and what they set
+
+- **Stack: Next.js, TypeScript, Fastify.** This plan assumes the rebuild keeps that stack. If the new stack differs, only the walking-skeleton item changes.
+- **Reviewers: you plus 2 others, plus an AI bug bot and auto Stamp.** Three humans can review more than one, so start WIP at 4 and raise it to 6 after one week where queue wait and reverts stay flat.
+  - The risk is your own research: "Now with Stamp everything ends up auto approving anyway". Stamp counts as two approvals, so a Stamped PR may never get a human look. Rules are below.
+- **Cutover: gradual, area by area.** Use a strangler at the edge. Each route goes to the old or new system behind a flag, so cutover and rollback are both one flag flip.
+- **Staging: yes.** Staging is the parity oracle. Goldens are recorded from staging, so no production data or PII goes into fixtures.
+
+### Rules for Stamp and the bug bot
+
+1. **Stamp approves only what Captain already calls READY TO MERGE:** CI green, a passing verifier verdict, and a passing review from the other vendor. Stamp is the last check, not the only one.
+2. **Stamp never approves escalate paths:** auth, billing, payments, migrations, deletes, permissions, public API contracts, build and release config. Enforce it with CODEOWNERS on those paths requiring a named human, and with Stamp's own path excludes. Don't rely on the size rule.
+3. **Stamp never approves UI changes.** A page or component change needs a human to click through the preview (Dave's UAT point). Exclude `apps/web/**/components` and route files from Stamp, or require a label a human adds after clicking through.
+4. **The bug bot is a third reviewer. Check that it earns its place.**
+   - At roughly $5 per PR in the chat's numbers, run it on ready-for-review PRs only, not on drafts or every push.
+   - After two weeks, compare what it found that the cross-vendor review missed, and keep only the one that catches more.
+5. **Stamp's size limit (≤100 lines, ≤2 files) suits small slices.** Keep that limit in the slicing rules, not as a reason to skip review.
+
 ### Phase 1: Rebuild ground truth (week 1–2; you think, agents gather)
-- [ ] **The point:** one page covering scope, what "parity" means, what's out, the cutover style and the deadline. "At some point you have to think" (your talk title).
-- [ ] **Inventory:** the chat fans out discovery tasks, one per area of the old system (routes, data, jobs, integrations, revenue flows), into `docs/inventory/`. Check: every old route appears in some inventory file.
-- [ ] **Bake-off:** 10 real tasks × {Sol, Opus 5.5, Grok 4.7}, each reviewed by the other vendor. Score quality, speed and plan usage, and set the table above from the results.
-- [ ] **Walking skeleton** (codebase-architecture Design mode, `stack-defaults.md` unless the old system forces something else):
-  - modular monorepo;
-  - one vertical feature in production behind a flag;
+- [ ] **The point:** one page covering scope, what "parity" means per area, what's out, the area order and the deadline.
+- [ ] **Inventory:** the chat fans out one discovery task per area of the old system into `docs/inventory/<area>.md`:
+  - Fastify routes and their schemas;
+  - Next.js routes and pages;
+  - data model;
+  - jobs and queues;
+  - integrations;
+  - revenue flows.
+
+  Check: every route that `fastify.printRoutes()` lists, and every Next.js route, appears in some inventory file.
+- [ ] **Bake-off:** 10 real tasks × {Sol, Opus 5.5, Grok 4.7}, each reviewed by the other vendor. Score quality, speed and plan usage, and set the harness defaults from the results.
+- [ ] **Walking skeleton** (codebase-architecture Design mode):
+  - A monorepo with `apps/web` (Next.js App Router), `apps/api` (Fastify) and `packages/contracts` (the request and response schemas both apps import).
+  - Fastify with a schema type provider, so each route's schema is its contract and its types.
+  - One Fastify plugin per module (`handler` / `service` / `dao`).
+  - One vertical feature in production behind a flag.
   - AGENTS.md with the `check` / `verify` / `verify:full` tiers and the list of "commands that lie".
-- [ ] **CI that checks the real thing:** `verify:full` builds the deploy artifact and runs a boot check and e2e smoke. Prove it by breaking the Dockerfile on purpose and watching CI go red. This is the 21 Aug fix.
-- [ ] **Parity harness:** record golden request/response pairs and Playwright flows from the old system and replay them against the new one per area. Parity % is what "done" means for each area.
-- [ ] **Context without magic:** every worktree gets `../legacy` (the old codebase, read-only) and the CLIs `gh`, `linear`, a read-replica `psql` and logs. AGENTS.md says which source answers which question.
-- [ ] **Guardrails:** import boundaries, auth policy per route, a blast-radius list (what escalates to a plan stop), session-start dependency install, worktree port offsets. Prove each one fails on a deliberate violation.
+- [ ] **CI that checks the real thing:** `verify:full` covers:
+  - `next build`;
+  - a boot check that builds the Fastify app and awaits `app.ready()` without listening, which catches plugin and route registration errors;
+  - the deploy artifact build;
+  - e2e smoke.
+
+  Prove it by breaking the Dockerfile and a plugin on purpose and watching CI go red. This is the 21 Aug fix.
+- [ ] **Parity harness (from staging):**
+  - **API:** record request and response pairs from staging per area. Replay them against the new Fastify app with `app.inject()`: in process, fast, no network. Volatile fields (ids, timestamps) get normalised.
+  - **UI:** Playwright flows recorded against staging, replayed against the new app's preview.
+  - Parity % per area is what "done" means for that area.
+- [ ] **Context without magic:** every worktree gets `../legacy` (the old codebase, read-only), the CLIs `gh`, `linear`, `psql` on a staging read replica, and logs. AGENTS.md says which source answers which question.
+- [ ] **Guardrails:**
+  - import boundaries between modules;
+  - an auth policy on every Fastify route, enforced by an `onRoute` hook that fails startup when a route has none;
+  - the blast-radius list (CODEOWNERS plus Stamp excludes, per the rules above);
+  - session-start dependency install;
+  - worktree port offsets from `CAPTAIN_SLOT` for both apps.
+
+  Prove each one fails on a deliberate violation.
+- [ ] **Strangler edge:** a routing layer (Next.js `rewrites` or proxy, or the load balancer) that sends each path to old or new by a per-area flag. Prove it by flipping one test route in staging and back.
 
 ### Phase 2: Run the backlog (weeks 2–N)
-- [ ] Give the chat one inventory area at a time. It slices vertical tasks with real blockers (`planning/references/splitting.md`), shows you the epic as one decision card, then files and dispatches the frontier.
-- [ ] Start at WIP 4, low-risk tasks only. Codex runs overnight on reset windows. The morning summary is your merge queue.
-- [ ] Every PR: CI green, cross-vendor review passed, parity for its area not regressed. UI PRs also need a preview URL plus a Playwright video that you click through. Then you merge.
-- [ ] Weekly, 15 minutes: `captain gain` (queue wait, first-pass rate, reverts, main-red time, parity % by area). Change one thing: WIP, a route, or promote a learning into `## Rules`. Add something from "not built unless needed" only when its trigger has fired.
+- [ ] Give the chat one inventory area at a time, in the Phase 1 order. It slices vertical tasks with real blockers (`planning/references/splitting.md`), sized to fit Stamp's limit where it can. It shows you the epic as one decision card, then files and dispatches the frontier.
+- [ ] Start at WIP 4, low-risk tasks only. Codex runs overnight on reset windows. The morning summary is the merge queue for all three reviewers.
+- [ ] Every PR must have:
+  - CI green;
+  - the cross-vendor review passed;
+  - parity for its area not regressed.
+
+  UI PRs also need a preview URL plus a Playwright video that a human clicks through. Stamp only within the rules above; everything else gets a human merge.
+- [ ] Weekly, 15 minutes: `captain gain` plus Stamp's approval share (how many merges had no human look). Change one thing: WIP (towards 6), a harness default, or a learning promoted into `## Rules`. Add something from "not built unless needed" only when its trigger has fired.
 
 ### Phase 3: Cutover, per area
-- [ ] An area at 100% parity, plus a shadow or dual run where it's safe, and a human UAT pass, gets its flag flipped. Rollback is proven in staging first. An agent watches the rollout for that cutover only (graphs, error rates, rollback if needed).
-- [ ] Data moves expand, then migrate, then contract, with a restore drill on a production snapshot before the first real move.
+- [ ] **Shadow first:** for an area at 100% parity on staging, run shadow reads in production. The new Fastify handlers get a copy of each read request, and responses are compared and logged, never returned. Fix diffs until a week is clean.
+- [ ] **Flip the area's flag** for a small share of traffic, then all of it. Rollback is the same flag, proven in staging first. An agent watches the rollout for this cutover only (graphs, error rates, and a rollback recommendation you act on).
+- [ ] **Human UAT pass** on the area's key flows before the full flip.
+- [ ] **Data:** expand, then migrate, then contract, with a restore drill on a production snapshot before the first real move. Migrations are always escalate tasks.
 - [ ] Retire the old area, then repeat.
 
 ## Verification
@@ -178,7 +230,7 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
 
 ## STOP conditions
 - A harness can't run headless in cmux under its plan → use it by hand for now. Don't use proxies.
-- The old system can't be recorded for goldens (no staging, or PII you can't scrub) → redesign parity before Phase 2.
+- Staging responses can't be recorded without PII, or staging has drifted too far from production to be the oracle → redesign parity before Phase 2.
 - The review queue is over capacity for 3 days → freeze new starts, and don't add agents.
 
 ## Assumptions and open questions
@@ -190,8 +242,5 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
   - whether `cursor-agent` and `codex` run headless in cmux under your plans at the concurrency you need;
   - whether Remote Control works on a long-lived cmux-hosted session;
   - how good Opus 5.5 is on your code.
-- **Open, and these change Phase 1:**
-  - the stack and size of the Series A codebase;
-  - who else reviews (which sets WIP);
-  - strangler vs big-bang, and the deadline;
-  - whether staging exists.
+- **Answered 22 Sep:** Next.js + TypeScript + Fastify; you plus 2 reviewers, an AI bug bot and auto Stamp; gradual cutover; staging exists (see "Your answers").
+- **Still open:** the codebase's size, the deadline, and the area order. All three go in "The point" in Phase 1.

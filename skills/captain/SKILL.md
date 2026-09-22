@@ -114,5 +114,8 @@ A verified PR (group `captain`, next `captain review <id>`) gets the other vendo
   task ready. `na` is not a pass.
 - **Test pools:** workers launch with `VITEST_MAX_THREADS/FORKS=2` and `CAPTAIN_SLOT`.
   Uncapped Jest config in the repo is still a hole.
+- **Auto-approval (Stamp or similar) is the last check, not the only one.** Only let it
+  approve a PR the board calls READY TO MERGE, never an `escalate` task, and never a UI
+  change a human hasn't clicked through. If a Stamped PR skipped any of that, tell the human.
 - **Worktrees stay after `done`.** Remove them when the human asks:
   `git worktree remove <path>`.
