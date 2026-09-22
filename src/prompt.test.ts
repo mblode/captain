@@ -123,7 +123,7 @@ describe("prompt extras", () => {
       "5. Finish with the finishing protocol below (verifier + verdict)."
     );
     // only the configured skills appear — not the unconfigured defaults
-    expect(out).not.toContain("/pr-reviewer");
+    expect(out).not.toContain("/ui-verification");
     expect(out).not.toContain("/pr-babysitter");
   });
 
@@ -133,13 +133,13 @@ describe("prompt extras", () => {
   it("renders a prose step verbatim and a skill token as Run", () => {
     const out = renderPromptExtras({
       skills: [
-        "/pr-reviewer",
+        "/tidy",
         "If the diff touches user-facing UI, run /ui-design.",
         "/pr-creator",
       ],
       workflow: true,
     });
-    expect(out).toContain("3. Run /pr-reviewer.");
+    expect(out).toContain("3. Run /tidy.");
     expect(out).toContain(
       "4. If the diff touches user-facing UI, run /ui-design."
     );
@@ -158,7 +158,7 @@ describe("prompt extras", () => {
     expect(out).not.toContain("Once the plan is approved");
     expect(out).toContain("no plan-approval gate");
     // the rest of the pipeline is unchanged
-    expect(out).toContain("3. Run /pr-reviewer.");
+    expect(out).toContain("3. Run /tidy.");
   });
 
   it("keeps the plan-gate steps for claude (and by default)", () => {

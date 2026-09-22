@@ -30,13 +30,13 @@ captain gain                          # fleet telemetry, derived live (alias: au
 Each agent's brief carries the whole software dev lifecycle and the agent self-drives it:
 
 ```text
-plan, implement, /pr-reviewer, /tidy,
+plan, implement, /tidy,
   "If the diff touches user-facing UI, run /product-design then /ui-design, …",
-  "If the diff changes a rendered page or component, run /visual-qa before finishing.",
+  "If the diff changes a rendered page or component, run /ui-verification before finishing.",
 /pr-creator, /pr-babysitter, verifier verdict
 ```
 
-`/pr-reviewer` runs before `/tidy` on purpose: the reviewer is read-only and writes a report whose fixes are committable, and `/tidy` applies that report's confirmed findings alongside its own sweep. Reversed, the report has nothing downstream to apply it.
+`/tidy` runs before `/pr-creator` on purpose: it reviews the diff and applies its own fixes in one pass, so the PR opens carrying fixes rather than findings.
 
 The plan, implement, and verifier steps are fixed (`status` derives from them); the steps in between are configurable. Each one is either a `/skill` token or a plain-English instruction rendered verbatim — which is how a step becomes conditional, with no extra config schema. Set them in `~/.config/captain/config.json` (`.skills`) or with `CAPTAIN_SKILLS=/tidy,/pr-creator`.
 

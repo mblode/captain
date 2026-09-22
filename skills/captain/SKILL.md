@@ -8,7 +8,7 @@ description: Conduct a fleet of cmux worktrees — fan out Linear/donebear ticke
 **IS:** the instrument a long-lived Claude Code driver session uses — you type
 `/captain pick up the tickets` / `/captain check and approve plans`; this skill runs the
 CLI. **IS NOT:** Claude/Cursor Projects, a cloud coordinator, or typing cmux keys to
-approve a plan. The worker self-drives plan → implement → `/pr-reviewer` → `/tidy` →
+approve a plan. The worker self-drives plan → implement → `/tidy` →
 conditional UI steps → `/pr-creator` → `/pr-babysitter` → verdict. Merge stays with the
 human.
 
