@@ -150,10 +150,46 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
 ### Your answers (22 Sep), and what they set
 
 - **Stack: Next.js, TypeScript, Fastify.** This plan assumes the rebuild keeps that stack. If the new stack differs, only the walking-skeleton item changes.
-- **Reviewers: you plus 2 others, plus an AI bug bot and auto Stamp.** Three humans can review more than one, so start WIP at 4 and raise it to 6 after one week where queue wait and reverts stay flat.
+- **Reviewers: you plus 2 others, plus an AI bug bot and auto Stamp.** Three humans can review more than one, so WIP goes 6 in week 1, then 12 from week 2 (see "The month"). Drop it back the day review wait climbs.
   - The risk is your own research: "Now with Stamp everything ends up auto approving anyway". Stamp counts as two approvals, so a Stamped PR may never get a human look. Rules are below.
 - **Cutover: gradual, area by area.** Use a strangler at the edge. Each route goes to the old or new system behind a flag, so cutover and rollback are both one flag flip.
 - **Staging: yes.** Staging is the parity oracle. Goldens are recorded from staging, so no production data or PII goes into fixtures.
+
+### The month: 100k lines, about 20 working days
+
+The rest of the plan follows from this arithmetic.
+
+- **Reading every line doesn't fit.** Careful review runs at roughly 200–400 lines an hour, in sessions under 90 minutes (the SmartBear/Cisco review study). At 400 lines an hour, 100k lines is about 250 reviewer-hours. Three people with about 4 focused review hours a day for 20 days gives 240 hours. Review alone would take everyone's whole month, with nothing left for the rest of the job.
+- **WIP 4 doesn't fit either.** Throughput is WIP divided by cycle time. At about one day per task, 4 in flight means about 4 PRs a day, or 80 in the month. At ~300 lines a PR that's ~24k lines.
+- **What does fit** is WIP 12 (three reviewers × 4) from week 2. That's about 12 PRs a day over roughly 16 working days: ~190 PRs and ~55–60k lines. It works only if most PRs are *checked by evidence and skimmed*, not read line by line.
+
+So the month has three rules:
+
+1. **Cut scope before building anything.**
+   - Every inventory area gets one label: **delete** (unused: check PostHog and logs), **stay** (works, low churn, stays on the old system behind the edge), **port** (mechanical move, parity-proven) or **rewrite** (the reason for the rebuild).
+   - Expect a fair share of **delete** and **stay**.
+   - The month's goal is the platform live with the **rewrite** and **port** areas cut over, not 100k lines replaced.
+   - The strangler edge means **stay** areas cost nothing to leave.
+2. **Evidence replaces line-by-line reading for most PRs.**
+   - **port** PRs are merged on evidence: parity green against staging, CI green, verdict and cross-vendor review. Stamp handles them within the Stamp rules.
+   - Human reading goes to **rewrite** PRs, **escalate** paths and UI click-throughs.
+   - This is where your review hours go, deliberately.
+3. **Cut over continuously, not in week 4.**
+   - Shadow an area as soon as its parity reaches 100%, then flip it.
+   - After day 20, start no new areas. The last week is for flips, fixes and stabilising.
+
+### Timeline
+
+| Days | What | Done means |
+|---|---|---|
+| 1 | Captain live on your machine. Run the three Phase 0 proofs on real work (the skeleton tasks) | proofs pass |
+| 1–2 | Inventory plus usage data, then the delete / stay / port / rewrite label per area, and the area order | "The point" signed off by you |
+| 2–5 | Skeleton, CI that checks the real thing, parity harness, strangler edge, guardrails. Run these *as the first fleet tasks* at WIP 6 | a test route flips old to new in staging and back |
+| 6–20 | The backlog at WIP 12, area by area in order. Shadow each area as its parity hits 100% | areas cut over one by one |
+| 21–22 | Last flips, then freeze new areas | no new area starts |
+| 23–27 | Stabilise, roll back anything unhealthy, retire old areas that are fully cut over | error rates at or below the old system's |
+
+The separate bake-off is gone: there isn't time. The first week's real tasks are the bake-off. The chat varies harness and model across the skeleton tasks, and day 5 sets the defaults from what merged cleanly.
 
 ### Rules for Stamp and the bug bot
 
@@ -165,8 +201,8 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
    - After two weeks, compare what it found that the cross-vendor review missed, and keep only the one that catches more.
 5. **Stamp's size limit (≤100 lines, ≤2 files) suits small slices.** Keep that limit in the slicing rules, not as a reason to skip review.
 
-### Phase 1: Rebuild ground truth (week 1–2; you think, agents gather)
-- [ ] **The point:** one page covering scope, what "parity" means per area, what's out, the area order and the deadline.
+### Phase 1: Rebuild ground truth (days 1–5; you think, agents gather)
+- [ ] **The point:** one page covering each area's label (delete / stay / port / rewrite), what "parity" means per area, the area order, and the deadline. Done by day 2.
 - [ ] **Inventory:** the chat fans out one discovery task per area of the old system into `docs/inventory/<area>.md`:
   - Fastify routes and their schemas;
   - Next.js routes and pages;
@@ -175,8 +211,8 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
   - integrations;
   - revenue flows.
 
-  Check: every route that `fastify.printRoutes()` lists, and every Next.js route, appears in some inventory file.
-- [ ] **Bake-off:** 10 real tasks × {Sol, Opus 5.5, Grok 4.7}, each reviewed by the other vendor. Score quality, speed and plan usage, and set the harness defaults from the results.
+  Check: every route that `fastify.printRoutes()` lists, and every Next.js route, appears in some inventory file. Each area also gets its 90-day traffic and error counts from PostHog and logs, so the delete and stay labels come from data.
+- [ ] **Harness defaults from real work:** no separate bake-off. The chat spreads the week-1 skeleton tasks across Sol, Opus 5.5 and Grok 4.7, and on day 5 sets the defaults from what merged cleanly on the first pass.
 - [ ] **Walking skeleton** (codebase-architecture Design mode):
   - A monorepo with `apps/web` (Next.js App Router), `apps/api` (Fastify) and `packages/contracts` (the request and response schemas both apps import).
   - Fastify with a schema type provider, so each route's schema is its contract and its types.
@@ -205,18 +241,18 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
   Prove each one fails on a deliberate violation.
 - [ ] **Strangler edge:** a routing layer (Next.js `rewrites` or proxy, or the load balancer) that sends each path to old or new by a per-area flag. Prove it by flipping one test route in staging and back.
 
-### Phase 2: Run the backlog (weeks 2–N)
+### Phase 2: Run the backlog (days 6–20)
 - [ ] Give the chat one inventory area at a time, in the Phase 1 order. It slices vertical tasks with real blockers (`planning/references/splitting.md`), sized to fit Stamp's limit where it can. It shows you the epic as one decision card, then files and dispatches the frontier.
-- [ ] Start at WIP 4, low-risk tasks only. Codex runs overnight on reset windows. The morning summary is the merge queue for all three reviewers.
+- [ ] `captain` WIP 12 (`project.json`), **port** areas first because they're parity-proven and Stamp-eligible, **rewrite** areas alongside at a lower share. Codex runs overnight on reset windows. The morning summary is the merge queue for all three reviewers, split by who reads what (rewrite, escalate and UI to humans).
 - [ ] Every PR must have:
   - CI green;
   - the cross-vendor review passed;
   - parity for its area not regressed.
 
   UI PRs also need a preview URL plus a Playwright video that a human clicks through. Stamp only within the rules above; everything else gets a human merge.
-- [ ] Weekly, 15 minutes: `captain gain` plus Stamp's approval share (how many merges had no human look). Change one thing: WIP (towards 6), a harness default, or a learning promoted into `## Rules`. Add something from "not built unless needed" only when its trigger has fired.
+- [ ] **Daily, 10 minutes** (a month is too short for weekly): review wait, reverts, main-red time, parity % by area, and Stamp's share of merges. Change one thing: WIP, a harness default, or a learning promoted into `## Rules`. If an area's parity stalls for two days, relabel it **stay** and move on.
 
-### Phase 3: Cutover, per area
+### Phase 3: Cutover, per area (continuous from about day 10; flips end day 22)
 - [ ] **Shadow first:** for an area at 100% parity on staging, run shadow reads in production. The new Fastify handlers get a copy of each read request, and responses are compared and logged, never returned. Fix diffs until a week is clean.
 - [ ] **Flip the area's flag** for a small share of traffic, then all of it. Rollback is the same flag, proven in staging first. An agent watches the rollout for this cutover only (graphs, error rates, and a rollback recommendation you act on).
 - [ ] **Human UAT pass** on the area's key flows before the full flip.
@@ -231,7 +267,8 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
 ## STOP conditions
 - A harness can't run headless in cmux under its plan → use it by hand for now. Don't use proxies.
 - Staging responses can't be recorded without PII, or staging has drifted too far from production to be the oracle → redesign parity before Phase 2.
-- The review queue is over capacity for 3 days → freeze new starts, and don't add agents.
+- The review queue is over capacity for 2 days → freeze new starts, and don't add agents.
+- Day 15 and projected cutover covers under half of the rewrite and port areas → cut scope with the team that day (relabel areas as **stay**). Don't raise WIP past review capacity to catch up.
 
 ## Assumptions and open questions
 - **Verified this session:**
@@ -243,4 +280,5 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
   - whether Remote Control works on a long-lived cmux-hosted session;
   - how good Opus 5.5 is on your code.
 - **Answered 22 Sep:** Next.js + TypeScript + Fastify; you plus 2 reviewers, an AI bug bot and auto Stamp; gradual cutover; staging exists (see "Your answers").
-- **Still open:** the codebase's size, the deadline, and the area order. All three go in "The point" in Phase 1.
+- **Answered 22 Sep:** 100k lines, one month.
+- **Still open:** the area order and each area's delete / stay / port / rewrite label. Both go in "The point" in Phase 1, by day 2.
