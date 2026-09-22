@@ -38,9 +38,9 @@ export interface Project {
   bootstrap: string;
 }
 
-export const DEFAULT_WIP = 4;
+const DEFAULT_WIP = 4;
 
-export const projectsRoot = (env: NodeJS.ProcessEnv): string =>
+const projectsRoot = (env: NodeJS.ProcessEnv): string =>
   env.CAPTAIN_DIR || join(env.HOME || homedir(), "captain");
 
 const PROJECT_FILE = "project.json";
@@ -110,8 +110,7 @@ export const resolveProject = (
   );
 };
 
-export const tasksDir = (project: Project): string =>
-  join(project.dir, "tasks");
+const tasksDir = (project: Project): string => join(project.dir, "tasks");
 
 export const learningsPath = (project: Project): string =>
   join(project.dir, "learnings.md");

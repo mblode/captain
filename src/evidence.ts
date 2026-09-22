@@ -83,7 +83,7 @@ const workerOf = (
       w.name !== reviewName(task.branch)
   );
 
-export const evidenceFor = (
+const evidenceFor = (
   project: Project,
   tasks: Task[],
   ports: Ports

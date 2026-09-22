@@ -9,15 +9,15 @@ export const renderPrompt = (task: Pick<Task, "id" | "title">): string =>
   "task contract and your definition of done. Do not edit it.";
 
 interface PromptExtras {
-  // include the self-drive workflow section (fan-out briefs set this; Captain
-  // has no watcher — the agent drives its own pipeline end to end)
+  // include the self-drive workflow section (every worker brief sets this;
+  // there is no watcher — the agent drives its own pipeline end to end)
   workflow?: boolean;
   // the configured skills run between *implement* and the verifier/verdict
   // finish (empty/undefined → DEFAULT_SKILLS)
   skills?: string[];
-  // worktree-relative path to the rubric written at fan-out
+  // worktree-relative path to the rubric `captain start` writes
   rubricPath?: string;
-  // the injected excerpt of the per-repo memory file (empty → section omitted)
+  // the injected excerpt of the project's memory file (empty → section omitted)
   memory?: string;
   // absolute path agents append end-of-run learnings to
   memoryPath?: string;

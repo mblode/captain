@@ -6,7 +6,7 @@ import { join } from "node:path";
 // tail line is just a bad last line; there is no reader to corrupt), greppable
 // by hand.
 
-export const LOG_KINDS = [
+const LOG_KINDS = [
   "add",
   "start",
   "approve",
@@ -15,7 +15,7 @@ export const LOG_KINDS = [
   "done",
   "drop",
 ] as const;
-export type LogKind = (typeof LOG_KINDS)[number];
+type LogKind = (typeof LOG_KINDS)[number];
 
 export interface LogRecord {
   ts: number;

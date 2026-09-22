@@ -3,7 +3,7 @@
 // The file is the task list's only record: the chat edits it directly, `captain`
 // commands write it through here, and nothing else holds task state.
 
-export const STATES = ["todo", "active", "done", "dropped"] as const;
+const STATES = ["todo", "active", "done", "dropped"] as const;
 export type TaskState = (typeof STATES)[number];
 
 export const HARNESSES = ["claude", "codex", "cursor"] as const;

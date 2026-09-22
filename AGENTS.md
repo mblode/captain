@@ -5,7 +5,7 @@ the chat; the `captain` CLI is its hands. Tasks are plain markdown files in a pr
 each started task gets a git worktree, a cmux workspace and a full harness (Claude Code, Codex or
 Cursor). The board is derived live from cmux, git, GitHub and each worktree's `.captain/` files.
 Nothing about progress is stored, so there is no daemon. The design and its reasoning are in
-`docs/plans/captain-v3.md`; the history is in `research/`.
+`docs/plans/captain-v3.md`; the v2 decision record is in `research/` (see `research/README.md`).
 
 ## Commands
 

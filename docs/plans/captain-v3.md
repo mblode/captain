@@ -132,7 +132,7 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
 - [x] Copy this plan to `captain/docs/plans/captain-v3.md`, with a `.notes.md` beside it (Deviations, How it ended).
 - [x] Task folder format: add `captain init <project>` and `captain add` (from a message or a ticket id). Reuse `source.ts` and `issue.ts`.
 - [x] `captain start --harness claude|codex|cursor`: worktree, bootstrap script, cmux workspace, branch `t/<id>-<slug>`. Reuse `git.ts`, `cmux.ts`, `prompt.ts`.
-- [x] `captain status`: rows from the task folder plus cmux, git and `gh`. Reuse `view.ts` `rowOf` and `control.ts`.
+- [x] `captain status`: rows from the task folder plus cmux, git and `gh`. The grouping rule is now `board.ts` `rowOf`, fed through `control.ts`.
 - [x] WIP limit check in `start`, one config number.
 - [x] Fix the stale skill names (`config.ts:23,26`, `doctor.ts:48`).
 - [x] Rewrite `skills/captain/SKILL.md` as the Grok-Bot-style chat:

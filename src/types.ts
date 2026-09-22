@@ -73,7 +73,7 @@ interface LinearApiRelationEnd {
 // A relation record names both ends; which end is "this" issue depends on
 // whether it was reached via relations or inverseRelations, so both are
 // selected and the mapper picks the end that is not the issue itself.
-export interface LinearApiRelation {
+interface LinearApiRelation {
   type?: string | null;
   issue?: LinearApiRelationEnd | null;
   relatedIssue?: LinearApiRelationEnd | null;

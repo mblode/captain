@@ -100,7 +100,7 @@ describe("formatCmuxUnreachable", () => {
     ).toContain("cmux.sock (Connection refused");
   });
 
-  it("names Automation mode when cmuxOnly rejects the linear-god driver", () => {
+  it("names Automation mode when cmuxOnly rejects a chat outside cmux", () => {
     expect(
       formatCmuxUnreachable({
         onPath: true,

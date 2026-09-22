@@ -40,7 +40,7 @@ export const msg = {
 };
 
 // A bare duration in seconds: "5m" / "2h5m" / "5d".
-export const fmtDuration = (sec: number): string => {
+const fmtDuration = (sec: number): string => {
   const m = Math.floor(Math.max(0, sec) / 60);
   if (m < 1) {
     return "<1m";

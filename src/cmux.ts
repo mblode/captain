@@ -48,7 +48,7 @@ export const cmuxReachable = (env: NodeJS.ProcessEnv): boolean =>
   explainCmuxUnreachable(env) === undefined;
 
 // `default` means: pass no model flag and let the harness use its own default.
-export const DEFAULT_MODEL = "default";
+const DEFAULT_MODEL = "default";
 
 export interface LaunchSpec {
   harness: Harness;

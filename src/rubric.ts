@@ -134,9 +134,9 @@ const renderIssueContext = (
   return context;
 };
 
-// The per-run definition of done, written to `.captain/rubric.md` for issue
-// fan-out and free-form dispatch. Mechanically derived from the source-neutral
-// issue/task contract — captain makes no LLM call and does no summarising. The "How to verify" section is the fixed
+// The per-task definition of done, written to `.captain/rubric.md` by
+// `captain start`. Mechanically derived from the task's contract — captain
+// makes no LLM call and does no summarising. The "How to verify" section is the fixed
 // grading procedure (a fresh-context verifier sub-agent), so the verification
 // standard is set by captain once, not improvised per agent.
 export const renderRubric = (
@@ -147,7 +147,7 @@ export const renderRubric = (
 ): { text: string; hash: string } => {
   let body = `# Definition of done — ${displayId}\n\n`;
   body +=
-    "Captain wrote this file at fan-out. Do not edit it; your verdict must cite its hash.\n\n";
+    "Captain wrote this file when the task started. Do not edit it; your verdict must cite its hash.\n\n";
 
   body += renderIssueContext(issue, displayId, source);
 
