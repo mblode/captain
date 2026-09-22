@@ -11,7 +11,7 @@ The chat is a Claude Code session running the `/captain` skill. Everything it do
 
 - Node.js >= 24
 - `git`, `gh` ([GitHub CLI](https://cli.github.com/)), `claude` ([Claude Code](https://claude.com/claude-code)) and [`cmux`](https://cmux.com/) on your PATH
-- Optional harnesses: `codex` and `cursor-agent`
+- Optional harnesses: `codex` and the Cursor CLI (`agent`)
 - Optional: `LINEAR_API_KEY` or `DONEBEAR_TOKEN`, to add tasks from tickets
 
 ## Install
@@ -21,7 +21,7 @@ npm i -g cmux-captain   # the CLI
 captain install         # add the skills, then check your setup
 ```
 
-`captain install` adds the `/captain` skill plus the pipeline skills each worker's brief runs (`/tidy`, `/pr-creator`, `/pr-babysitter`), then checks node, git, gh, claude, codex, cursor-agent, cmux and `LINEAR_API_KEY`. Re-run it any time.
+`captain install` adds the `/captain` skill plus the pipeline skills each worker's brief runs (`/tidy`, `/pr-creator`, `/pr-babysitter`), then checks node, git, gh, claude, codex, agent, cmux and `LINEAR_API_KEY`. Re-run it any time.
 
 Then create a project and start the chat:
 

@@ -34,7 +34,7 @@ src/
   evidence.ts     # the fs/cmux/GitHub edge: gathers each active task's evidence, then board.ts decides
   project.ts      # the project folder: project.json, tasks/*.md, learnings.md, log.jsonl, its own git history
   github.ts       # the GithubPort: `gh pr list --head <branch>` -> PR state + CI rollup (rollup is pure)
-  cmux.ts         # harnessCommand (claude | codex | cursor-agent launch lines), openWorkspace, cmux reachability
+  cmux.ts         # harnessCommand (claude | codex | Cursor `agent` launch lines), openWorkspace, cmux reachability
   prompt.ts       # the worker brief (<workflow>, <data-scope>, <finishing-protocol>, <fleet-memory>) and the review brief
   rubric.ts       # PURE: renderRubric -> .captain/rubric.md (definition of done) + rubricHash; the .captain/ paths
   memory.ts       # learnings.md (Rules + tail-capped Inbox) excerpt for briefs
@@ -72,7 +72,8 @@ the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last 
 after the branch running `harnessCommand`. An `escalate` task always runs on Claude in plan mode
 (`--permission-mode plan --allow-dangerously-skip-permissions`); everything else runs unattended
 (`--dangerously-skip-permissions`, codex `--dangerously-bypass-approvals-and-sandbox`,
-`cursor-agent --force`). The project `bootstrap` runs first in the same shell. Every launch gets
+Cursor `agent --force`). Binaries, default models and efforts come from `DEFAULT_HARNESS` in
+`config.ts` (Codex pins `gpt-6-sol`; Cursor's CLI binary is `agent`). The project `bootstrap` runs first in the same shell. Every launch gets
 the agent env (test pool caps) plus `CAPTAIN_SLOT`.
 
 **The board** (`status`, `evidence.ts` + `board.ts`). For each active task: the worker workspace
@@ -130,8 +131,11 @@ needs CI green, a passing verdict and a passing review.
   tracker needs updating, the chat or a worker does it with its own tools.
 - **Messaging between sessions is not a control plane.** Workers are steered with
   `captain send` and gated with `approve`/`reject`, never Claude Code `SendMessage`.
-- **Harness flags are unverified against live `cursor-agent`.** `--model`/`--force` match its
-  documented CLI; confirm on first real use and pin a test if it changes.
+- **Harness flags are checked, not live-run.** Every flag `harnessCommand` emits was checked on
+  22 Sep 2026 against Claude Code 2.1.280 `--help`, Codex 0.156.0 `--help` and the Cursor CLI
+  parameter docs. After a harness upgrade, re-check its `--help` and update `cmux.test.ts`.
+- **A config `bin` is a plain command name or path only** (`safeBin`): it lands unquoted at the
+  front of the launch line, so anything with spaces or shell characters falls back to the default.
 
 ## Env knobs
 
@@ -143,5 +147,5 @@ needs CI green, a passing verdict and a passing review.
 
 `config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string), `.agentEnv`
 (string map merged over the `VITEST_MAX_FORKS/THREADS=2` defaults; `""` drops a key),
-`.harness.<claude|codex|cursor>.model` / `.effort` (each harness's defaults; a task's own values
-win).
+`.harness.<claude|codex|cursor>.model` / `.effort` / `.bin` (each harness's defaults; a task's own
+values win).

@@ -64,13 +64,15 @@ wrong about half the time. Defaults:
 
 | Work | Harness, model |
 | --- | --- |
-| Routine implementation, migrations, mechanical changes | `codex`, Sol medium or Luna |
+| Routine implementation (the default) | `codex`, `gpt-6-sol` medium |
+| Mechanical, high-volume changes (renames, ports, codemods) | `codex`, `gpt-6-luna` low |
 | UI and anything needing taste | `claude`, Sonnet 5 |
 | Narrow bugs, quick frontend fixes | `cursor`, Grok fast |
 | Hard or ambiguous work the human tags "hard" | `claude`, Opus high |
 | Auth, billing, data migrations, deletes, public contracts, build or release config | `--risk escalate` (always Claude in plan mode) |
 
-Pin with `--harness`, `--model`, `--effort` on `add` or `start`. Don't put a frontier
+The reviewer defaults to the other vendor at high effort: Claude reviews Codex and Cursor
+work, `codex` on `gpt-6-sol` reviews Claude's. Pin with `--harness`, `--model`, `--effort` on `add` or `start`. Don't put a frontier
 model on a routine task to be safe. The cheap tier handles it.
 
 ## Plans (escalate tasks only)

@@ -59,7 +59,7 @@ Three parts, all local, all files and CLIs:
 
 **Kept from v2 as-is:** `source.ts`, `linear.ts`, `donebear.ts`, `issue.ts` (blockers), `git.ts` (worktree and lock), `cmux.ts` + `captain/control.ts` (cmux port, approve/reject), `prompt.ts` (brief), `memory.ts`, `captain/log.ts`, `captain/gain.ts`, `errors.ts`, `config.ts`. Also kept: the rubric and verdict (`rubric.ts`, `captain/verdict.ts`), as the reviewer's checklist.
 
-**Changed:** `status` membership comes from the task folder, not the cmux cwd plus `.captain/`. `start` gains `--harness cursor` (runs `cursor-agent`). Stale pipeline names get fixed: `config.ts:23,26` still has `/pr-reviewer` and `/visual-qa`, and `doctor.ts:48` still installs `pr-reviewer`. These become `/tidy` and `/ui-verification`.
+**Changed:** `status` membership comes from the task folder, not the cmux cwd plus `.captain/`. `start` gains `--harness cursor` (runs the Cursor CLI, `agent`). Stale pipeline names get fixed: `config.ts:23,26` still has `/pr-reviewer` and `/visual-qa`, and `doctor.ts:48` still installs `pr-reviewer`. These become `/tidy` and `/ui-verification`.
 
 **Not built unless it's needed.** Each of these has a trigger that justifies adding it:
 
@@ -86,7 +86,7 @@ Captain v3 already has that shape, run locally and on flat plans. Four lessons c
 
 1. **You choose the model, not an automatic router.** Dave: automatic model routing "fails to pick right almost half the time". An experienced human takes 5 seconds because they already have the context. So there's no route table, and Jev is dropped from the "later" list for routing.
    - The chat puts a default harness and model on each decision card, and you override it with one word ("hard", "codex", "cursor").
-   - **The default for workers is the cheap tier.** "Medium/low complexity tasks… mostly saturated", so Sonnet 5, Luna or Sol medium do them well.
+   - **The default for workers is the cheap tier.** "Medium/low complexity tasks… mostly saturated", so Sonnet 5, GPT-6 Luna or GPT-6 Sol medium do them well.
    - Frontier models (Opus 5.5 high, Astra, Fable) are reserved for the chat itself, for slicing epics, for reviewing escalate-tier work, and for tasks you tag "hard".
 2. **No separate budget per model.** Those end with people either never using the powerful model or burning through it early. The single rule above replaces budgets. `captain status` shows how much of each plan is used, so you see a limit coming before you hit it.
 3. **No context magic.** OpenAI gives agents many data sources and lets them choose what to pull, with no RAG in between. Captain does the same:
@@ -118,8 +118,8 @@ Add an agent that watches the deploy only for the cutover of each area, where da
 | Job | Harness / model | Why (chat evidence) |
 |---|---|---|
 | The `captain` chat, specs, slicing, UI | Claude Code, Opus 5.5 (high) | Leads on long-horizon and delegation. "Keep UI in Claude" |
-| Bulk implementation (the **default** for workers) | Codex CLI, GPT-5.6 Sol (medium) or Luna. Claude Code on Sonnet 5 for UI | Generous limits (≤15 concurrent), resets every few days, strict on instructions |
-| Review of Claude's PRs | Codex, Astra (low/medium) | "Codex is more thorough". Never let Astra edit tests ("throws away the guardrails") |
+| Bulk implementation (the **default** for workers) | Codex CLI, GPT-6 Sol (`gpt-6-sol`, medium), or GPT-6 Luna (`gpt-6-luna`) for mechanical ports. Claude Code on Sonnet 5 for UI | Generous limits (≤15 concurrent), resets every few days, strict on instructions |
+| Review of Claude's PRs | Codex, GPT-6 Sol at high effort (Astra only for the hardest reviews) | "Codex is more thorough". OpenAI says GPT-6 Sol makes about half the mistakes of 5.6 Sol with "Astra-level reliability" at $2/$10 per M tokens, so it replaces Astra as the default reviewer without Astra's Pro cap. Verify in week 1. Never let a reviewer edit tests |
 | Review of Codex's PRs | Claude Code, Opus 5.5 | A different vendor catches different mistakes |
 | Narrow bugs, frontend fixes, hygiene | Cursor, Grok 4.7 fast | Fast, "good at fixing narrow issues" |
 | Hardest architecture calls | Fable 5.1, sparingly | Burns the weekly cap in 2–3 days |
@@ -212,7 +212,7 @@ The separate bake-off is gone: there isn't time. The first week's real tasks are
   - revenue flows.
 
   Check: every route that `fastify.printRoutes()` lists, and every Next.js route, appears in some inventory file. Each area also gets its 90-day traffic and error counts from PostHog and logs, so the delete and stay labels come from data.
-- [ ] **Harness defaults from real work:** no separate bake-off. The chat spreads the week-1 skeleton tasks across Sol, Opus 5.5 and Grok 4.7, and on day 5 sets the defaults from what merged cleanly on the first pass.
+- [ ] **Harness defaults from real work:** no separate bake-off. The chat spreads the week-1 skeleton tasks across GPT-6 Sol, Opus 5.5 and Grok 4.7 (plus GPT-6 Luna on the mechanical ones), and on day 5 sets the defaults from what merged cleanly on the first pass.
 - [ ] **Walking skeleton** (codebase-architecture Design mode):
   - A monorepo with `apps/web` (Next.js App Router), `apps/api` (Fastify) and `packages/contracts` (the request and response schemas both apps import).
   - Fastify with a schema type provider, so each route's schema is its contract and its types.
@@ -276,7 +276,7 @@ The separate bake-off is gone: there isn't time. The first week's real tasks are
   - the stale names are at `config.ts:23,26` and `doctor.ts:48`;
   - the release facts come from the vendor pages fetched 22 Sep (the OpenAI and x.ai/bot pages returned 403 and were covered from search).
 - **Unverified:**
-  - whether `cursor-agent` and `codex` run headless in cmux under your plans at the concurrency you need;
+  - whether the Cursor CLI (`agent`) and `codex` run headless in cmux under your plans at the concurrency you need (their flags were checked against `--help` and docs on 22 Sep, but not run live);
   - whether Remote Control works on a long-lived cmux-hosted session;
   - how good Opus 5.5 is on your code.
 - **Answered 22 Sep:** Next.js + TypeScript + Fastify; you plus 2 reviewers, an AI bug bot and auto Stamp; gradual cutover; staging exists (see "Your answers").

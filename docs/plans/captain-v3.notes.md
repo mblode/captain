@@ -18,7 +18,8 @@ Kept next to `captain-v3.md`. Log every deviation from the plan here as it happe
   Taken: added `captain peek <id>` (the end of the worker's screen), plus `done`, `drop` and a new `gain` over the task files and log.
 - Plan said: harness defaults come from the bake-off.
   Taken: until then, low-risk tasks default to `codex`, escalate tasks always run on `claude`, and each harness's model and effort default is configurable under `.harness` in `config.json`.
-- Not verified here: `cursor-agent --model <m> --force "<prompt>"` matches its documented CLI but hasn't been run live. There is no cmux in this environment, so the three live Phase 0 proofs are still open.
+- Checked 22 Sep (not run live): every flag Captain launches with exists in Claude Code 2.1.280 and Codex 0.156.0 `--help`, and in the Cursor CLI parameter docs. The Cursor binary is now `agent`, not `cursor-agent`, so Captain defaults to `agent` with a `bin` override in config.
+- GPT-6 Sol and Luna shipped 22 Sep (`gpt-6-sol`, `gpt-6-luna`; $2/$10 and $0.10/$0.50 per M tokens). Codex workers now pin `gpt-6-sol` by default, reviews default to high effort, and GPT-6 Sol replaces Astra as Claude's default reviewer. There is no cmux in this environment, so the three live Phase 0 proofs are still open.
 - No backwards compatibility (per the user): the v2 fan-out, dispatch, bare-token routing, `--agent`, `--repo-path`, `status --summary/--since/--watch`, and the `~/.claude/captain` log and memory are deleted, not ported.
 
 ## How the run ended

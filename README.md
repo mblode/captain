@@ -29,7 +29,7 @@ Setup, every command, and how a task gets from a message to a merged PR.
 
 ## Install
 
-You need [Node 24+](https://nodejs.org), with `git`, `gh`, `claude` and [cmux](https://cmux.com) on your PATH. `codex` and `cursor-agent` are optional extra harnesses.
+You need [Node 24+](https://nodejs.org), with `git`, `gh`, `claude` and [cmux](https://cmux.com) on your PATH. `codex` and the Cursor CLI (`agent`) are optional extra harnesses.
 
 ```bash
 npm install -g cmux-captain

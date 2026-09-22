@@ -47,18 +47,13 @@ export const explainCmuxUnreachable = (
 export const cmuxReachable = (env: NodeJS.ProcessEnv): boolean =>
   explainCmuxUnreachable(env) === undefined;
 
-// The binary each harness runs.
-export const HARNESS_BIN: Record<Harness, string> = {
-  claude: "claude",
-  codex: "codex",
-  cursor: "cursor-agent",
-};
-
 // `default` means: pass no model flag and let the harness use its own default.
 export const DEFAULT_MODEL = "default";
 
 export interface LaunchSpec {
   harness: Harness;
+  // the binary to run (DEFAULT_HARNESS in config.ts: claude, codex, agent)
+  bin: string;
   promptPath: string;
   model: string;
   effort: string;
@@ -90,7 +85,10 @@ const modelFlag = (flag: string, model: string): string =>
 // into bypassPermissions (--allow-dangerously-skip-permissions makes that mode
 // reachable). An ungated task runs unattended from the start.
 // codex: no plan mode, so it always runs unattended.
-// cursor: `cursor-agent` with --force so it can run commands unattended.
+// cursor: the Cursor CLI (`agent`) with --force so it can run commands
+// unattended.
+// Flags checked against Claude Code 2.1.280 and Codex 0.156.0 `--help`, and
+// the Cursor CLI parameter docs, on 22 Sep 2026.
 export const harnessCommand = (spec: LaunchSpec): string => {
   const prompt = `"$(cat ${shellQuote(spec.promptPath)})"`;
   const prefix = envPrefix(spec.env);
@@ -99,16 +97,16 @@ export const harnessCommand = (spec: LaunchSpec): string => {
     const effort = spec.effort
       ? `-c model_reasoning_effort=${shellQuote(spec.effort)} `
       : "";
-    agent = `${prefix}codex ${modelFlag("-m", spec.model)}${effort}--dangerously-bypass-approvals-and-sandbox ${prompt}`;
+    agent = `${prefix}${spec.bin} ${modelFlag("-m", spec.model)}${effort}--dangerously-bypass-approvals-and-sandbox ${prompt}`;
   } else if (spec.harness === "cursor") {
-    agent = `${prefix}cursor-agent ${modelFlag("--model", spec.model)}--force ${prompt}`;
+    agent = `${prefix}${spec.bin} ${modelFlag("--model", spec.model)}--force ${prompt}`;
   } else {
     const name = spec.name ? `--name ${shellQuote(spec.name)} ` : "";
     const effort = spec.effort ? `--effort ${shellQuote(spec.effort)} ` : "";
     const mode = spec.gated
       ? "--permission-mode plan --allow-dangerously-skip-permissions"
       : "--dangerously-skip-permissions";
-    agent = `${prefix}claude ${name}${modelFlag("--model", spec.model)}${effort}${mode} ${prompt}`;
+    agent = `${prefix}${spec.bin} ${name}${modelFlag("--model", spec.model)}${effort}${mode} ${prompt}`;
   }
   return spec.bootstrap ? `(${spec.bootstrap}) && ${agent}` : agent;
 };

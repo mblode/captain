@@ -195,21 +195,30 @@ describe("loadDataScope precedence", () => {
 });
 
 describe("loadHarnessDefaults", () => {
-  it("defaults workers to the cheaper tier", () => {
+  it("defaults workers to the cheaper tier, with Codex pinned to GPT-6 Sol", () => {
     const env = { CAPTAIN_CONFIG: "/no/such/captain/config.json" };
-    expect(loadHarnessDefaults("codex", env)).toEqual(DEFAULT_HARNESS.codex);
-    expect(loadHarnessDefaults("codex", env).effort).toBe("medium");
+    expect(loadHarnessDefaults("codex", env)).toEqual({
+      bin: "codex",
+      effort: "medium",
+      model: "gpt-6-sol",
+    });
     expect(loadHarnessDefaults("claude", env).model).toBe("default");
+    // the Cursor CLI's binary is `agent`
+    expect(loadHarnessDefaults("cursor", env).bin).toBe("agent");
   });
 
   it("reads a harness's model and effort from the config file", () => {
     const path = writeConfig(
-      '{"harness":{"codex":{"model":"gpt-5.6-sol","effort":"low"}}}'
+      '{"harness":{"codex":{"model":"gpt-6-luna","effort":"low"},"cursor":{"bin":"cursor-agent"}}}'
     );
     expect(loadHarnessDefaults("codex", { CAPTAIN_CONFIG: path })).toEqual({
+      bin: "codex",
       effort: "low",
-      model: "gpt-5.6-sol",
+      model: "gpt-6-luna",
     });
+    expect(loadHarnessDefaults("cursor", { CAPTAIN_CONFIG: path }).bin).toBe(
+      "cursor-agent"
+    );
     // other harnesses keep their defaults
     expect(loadHarnessDefaults("claude", { CAPTAIN_CONFIG: path })).toEqual(
       DEFAULT_HARNESS.claude
@@ -218,7 +227,7 @@ describe("loadHarnessDefaults", () => {
 
   it("ignores blank or malformed fields", () => {
     const path = writeConfig(
-      '{"harness":{"cursor":{"model":"  ","effort":3}}}'
+      '{"harness":{"cursor":{"model":"  ","effort":3,"bin":"agent; rm -rf ~"}}}'
     );
     expect(loadHarnessDefaults("cursor", { CAPTAIN_CONFIG: path })).toEqual(
       DEFAULT_HARNESS.cursor

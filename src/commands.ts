@@ -10,6 +10,7 @@ import {
   loadDataScope,
   loadHarnessDefaults,
   loadSkills,
+  REVIEW_EFFORT,
 } from "./config";
 import { CliError, EXIT } from "./errors";
 import { boardRows, reviewName } from "./evidence";
@@ -388,6 +389,7 @@ const startOne = async (
 
   const slot = String(inProgress(rows));
   const command = harnessCommand({
+    bin: defaults.bin,
     bootstrap: project.bootstrap,
     effort: task.effort,
     env: { ...loadAgentEnv(deps.env), CAPTAIN_SLOT: slot },
@@ -603,7 +605,7 @@ export const peek = (
 // worktree, running a review-only brief that writes `.captain/review.json`.
 export const review = async (
   id: string,
-  options: Common & { harness?: string; model?: string },
+  options: Common & { harness?: string; model?: string; effort?: string },
   deps: Deps
 ): Promise<void> => {
   const project = resolveProject(deps.env, options.project);
@@ -628,7 +630,8 @@ export const review = async (
   await writeFile(promptPath, renderReviewPrompt(task, row.pr.url));
   openWorkspace({
     command: harnessCommand({
-      effort: defaults.effort,
+      bin: defaults.bin,
+      effort: options.effort ?? (defaults.effort ? REVIEW_EFFORT : ""),
       env: loadAgentEnv(deps.env),
       gated: false,
       harness,

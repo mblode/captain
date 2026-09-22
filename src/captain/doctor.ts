@@ -83,7 +83,7 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
   // is installed, and the review step wants a second vendor.
   for (const [command, why] of [
     ["codex", "the default worker and Claude's reviewer"],
-    ["cursor-agent", "the Cursor harness"],
+    ["agent", "the Cursor harness (the Cursor CLI's binary)"],
   ] as const) {
     const found = deps.hasCommand(command);
     checks.push({

@@ -4,6 +4,7 @@ import { formatCmuxUnreachable, harnessCommand } from "./cmux";
 import type { LaunchSpec } from "./cmux";
 
 const spec = (over: Partial<LaunchSpec> = {}): LaunchSpec => ({
+  bin: "claude",
   effort: "high",
   env: {},
   gated: false,
@@ -36,19 +37,24 @@ describe("harnessCommand", () => {
   it("launches codex with -m, reasoning effort and no sandbox", () => {
     expect(
       harnessCommand(
-        spec({ effort: "medium", harness: "codex", model: "gpt-5.6-sol" })
+        spec({
+          bin: "codex",
+          effort: "medium",
+          harness: "codex",
+          model: "gpt-6-sol",
+        })
       )
     ).toBe(
-      `codex -m 'gpt-5.6-sol' -c model_reasoning_effort='medium' --dangerously-bypass-approvals-and-sandbox "$(cat '/tmp/p/brief.md')"`
+      `codex -m 'gpt-6-sol' -c model_reasoning_effort='medium' --dangerously-bypass-approvals-and-sandbox "$(cat '/tmp/p/brief.md')"`
     );
   });
 
-  it("launches cursor-agent with --force and no effort flag", () => {
+  it("launches the Cursor CLI with --force and no effort flag", () => {
     const command = harnessCommand(
-      spec({ harness: "cursor", model: "grok-4.7-fast" })
+      spec({ bin: "agent", harness: "cursor", model: "grok-4.7-fast" })
     );
     expect(command).toBe(
-      `cursor-agent --model 'grok-4.7-fast' --force "$(cat '/tmp/p/brief.md')"`
+      `agent --model 'grok-4.7-fast' --force "$(cat '/tmp/p/brief.md')"`
     );
   });
 

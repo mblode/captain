@@ -57,20 +57,32 @@ export const DEFAULT_AGENT_ENV: Record<string, string> = {
   VITEST_MAX_THREADS: "2",
 };
 
-// Each harness's default model and effort, used when a task leaves them blank.
-// `default` means no model flag: the harness picks its own. Workers default to
-// the cheaper tier on purpose: routine tasks are saturated at medium effort,
-// and you pick a frontier model per task in the five seconds it takes to read
-// its decision card. Override per harness in config:
-//   { "harness": { "codex": { "model": "gpt-5.6-sol", "effort": "medium" } } }
-export const DEFAULT_HARNESS: Record<
-  Harness,
-  { model: string; effort: string }
-> = {
-  claude: { effort: "high", model: "default" },
-  codex: { effort: "medium", model: "default" },
-  cursor: { effort: "", model: "default" },
+// Each harness's binary, default model and effort, used when a task leaves
+// them blank. `default` means no model flag: the harness picks its own.
+// Workers default to the cheaper tier on purpose: routine tasks are saturated
+// at medium effort, and you pick a frontier model per task in the five seconds
+// it takes to read its decision card. Codex pins GPT-6 Sol (22 Sep 2026: about
+// half its predecessor's mistakes at $2/$10 per M tokens) so a worker never
+// inherits whatever the CLI's own default happens to be. The Cursor CLI's
+// binary is `agent`; older installs call it `cursor-agent`. Override any of
+// these per harness in config:
+//   { "harness": { "codex": { "model": "gpt-6-luna", "effort": "low" },
+//                  "cursor": { "bin": "cursor-agent" } } }
+export interface HarnessDefaults {
+  bin: string;
+  model: string;
+  effort: string;
+}
+
+export const DEFAULT_HARNESS: Record<Harness, HarnessDefaults> = {
+  claude: { bin: "claude", effort: "high", model: "default" },
+  codex: { bin: "codex", effort: "medium", model: "gpt-6-sol" },
+  cursor: { bin: "agent", effort: "", model: "default" },
 };
+
+// A review reads the whole PR cold, so it runs one effort level above a
+// routine worker by default.
+export const REVIEW_EFFORT = "high";
 
 // Where the global config file lives: an explicit CAPTAIN_CONFIG wins, else the
 // XDG config dir ($XDG_CONFIG_HOME or ~/.config) under captain/. Deliberately
@@ -215,19 +227,25 @@ export const loadAgentEnv = (
   );
 };
 
-// Resolve one harness's default model and effort, fail-safe: config file
-// `.harness.<name>` fields win over DEFAULT_HARNESS; anything malformed is
+// A binary lands unquoted at the front of the launch command, so only a plain
+// command name or path is accepted; anything else falls back to the default.
+const safeBin = (value: string | null): string | null =>
+  value && /^[\w./-]+$/u.test(value) ? value : null;
+
+// Resolve one harness's binary, default model and effort, fail-safe: config
+// file `.harness.<name>` fields win over DEFAULT_HARNESS; anything malformed is
 // ignored.
 export const loadHarnessDefaults = (
   harness: Harness,
   env: NodeJS.ProcessEnv = process.env
-): { model: string; effort: string } => {
+): HarnessDefaults => {
   const section = (
     readConfig(env) as { harness?: Record<string, unknown> } | null
   )?.harness?.[harness];
+  const fallback = DEFAULT_HARNESS[harness];
   return {
-    effort:
-      parseStringField(section, "effort") ?? DEFAULT_HARNESS[harness].effort,
-    model: parseStringField(section, "model") ?? DEFAULT_HARNESS[harness].model,
+    bin: safeBin(parseStringField(section, "bin")) ?? fallback.bin,
+    effort: parseStringField(section, "effort") ?? fallback.effort,
+    model: parseStringField(section, "model") ?? fallback.model,
   };
 };

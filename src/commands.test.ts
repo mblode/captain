@@ -276,6 +276,9 @@ describe("start", () => {
     const calls = world.calls();
     expect(calls).toContain("new-workspace --name t-1-rebuild-billing");
     expect(calls).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(calls).toContain(
+      "codex -m 'gpt-6-sol' -c model_reasoning_effort='medium'"
+    );
     expect(calls).toContain("CAPTAIN_SLOT='0'");
     expect(
       readFileSync(join(world.repo, ".git", "info", "exclude"), "utf-8")
@@ -418,7 +421,9 @@ describe("the loop after start", () => {
     await review("t-1", {}, world.deps);
     const calls = world.calls();
     expect(calls).toContain(`new-workspace --name ${t.branch}:review`);
-    expect(calls).toContain("claude ");
+    // a Codex worker is reviewed by Claude, at review effort
+    expect(calls).toContain("claude --name");
+    expect(calls).toContain("--effort 'high'");
     expect(
       readFileSync(join(t.worktree, ".captain", "review-brief.md"), "utf-8")
     ).toContain("https://github.com/o/r/pull/9");

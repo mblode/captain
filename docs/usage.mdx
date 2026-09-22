@@ -20,7 +20,7 @@ captain init rebuild --repo ~/code/app --wip 4   # a project: task folder + repo
 captain add "rebuild billing settings"           # a task from a message
 captain add TIG-430                              # a task from a Linear or Done Bear ticket
 captain add "migrate users" --risk escalate      # plan approval before any code
-captain start t-1 --harness codex --model gpt-5.6-sol
+captain start t-1 --harness codex --model gpt-6-luna --effort low
 captain status                                   # the board
 captain approve t-2 --note "scoped to one table" # release a plan
 captain reject t-2 --note "reuse the invoices module"
@@ -72,13 +72,14 @@ The steps between implement and the verdict are configurable in `~/.config/capta
     "If the diff changes public API surface, run /dx-audit before opening the PR."
   ],
   "harness": {
-    "codex": { "model": "gpt-5.6-sol", "effort": "medium" },
+    "codex": { "model": "gpt-6-sol", "effort": "medium" },
+    "cursor": { "bin": "cursor-agent" },
     "claude": { "model": "claude-sonnet-5", "effort": "high" }
   }
 }
 ```
 
-`.harness` sets each harness's default model and effort. A task's own `model` and `effort` win over it.
+`.harness` sets each harness's binary, default model and effort. Codex defaults to `gpt-6-sol` at medium effort, and Cursor's binary defaults to `agent` (set `bin` to `cursor-agent` on an older install). A task's own `model` and `effort` win over it.
 
 ## How a task gets to ready
 

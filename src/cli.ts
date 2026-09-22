@@ -239,11 +239,12 @@ program
   .argument("<id>", "task id")
   .option("--harness <name>", "reviewer harness (default: the other vendor)")
   .option("--model <id>", "reviewer model")
+  .option("--effort <level>", "reviewer effort (default high)")
   .option("--json", "emit JSON")
   .action(
     async (
       id: string,
-      o: { harness?: string; model?: string; json?: boolean }
+      o: { harness?: string; model?: string; effort?: string; json?: boolean }
     ) => {
       await review(id, { ...common(), ...o }, deps);
     }
