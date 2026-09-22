@@ -2,9 +2,9 @@
 
 # [Captain](https://captain.blode.md)
 
-**Drive a fleet of [cmux](https://cmux.com) worktrees from one session, Linear ticket to open PR**
+**One chat that runs your coding agents: a task list, full harnesses in [cmux](https://cmux.com) worktrees, and only the decisions come back to you**
 
-Ask for what you want in plain language. Every ticket gets its own worktree and an agent that plans it, builds it, and opens the PR.
+Tell it what you want, or hand it a ticket. It keeps the list, starts Claude Code, Codex or Cursor on each task in its own worktree, and brings you plans to approve and PRs to merge.
 
 <p align="center">
   <a href="https://www.npmjs.com/package/cmux-captain">
@@ -19,7 +19,7 @@ Ask for what you want in plain language. Every ticket gets its own worktree and 
 
 ## Docs
 
-Setup, every command, the pipeline each agent runs, and how a worktree gets to ready.
+Setup, every command, and how a task gets from a message to a merged PR.
 
 <p>
 <a href="https://captain.blode.md">
@@ -29,43 +29,44 @@ Setup, every command, the pipeline each agent runs, and how a worktree gets to r
 
 ## Install
 
-You need [Node 22+](https://nodejs.org), with `git`, `claude`, and [cmux](https://cmux.com) on your PATH.
+You need [Node 24+](https://nodejs.org), with `git`, `gh`, `claude` and [cmux](https://cmux.com) on your PATH. `codex` and the Cursor CLI (`agent`) are optional extra harnesses.
 
 ```bash
 npm install -g cmux-captain
 captain install
 ```
 
-`captain install` adds the skills the fleet needs, then tells you what is missing.
+`captain install` adds the skills the chat and workers need, then tells you what is missing.
 
 ## Quickstart
 
 ```bash
-# One worktree, one cmux workspace, and one agent per Linear issue
-captain TIG-430 TIG-431
+# A project: a task folder tied to one repo, with a WIP limit
+captain init rebuild --repo ~/code/app --wip 4
 
-# The one view: NEEDS YOU / IN FLIGHT / READY, with the command to resolve each row
-captain status
+# Then open Claude Code in its own cmux workspace and run /captain.
+# Talk to it: "rebuild billing settings, same behaviour as the old app", "pick up TIG-430",
+# "what needs me?". It runs the commands below for you.
 
-# Release a plan so its agent starts building
-captain approve tig-430
+captain add "rebuild billing settings"   # a task from a message (or: captain add TIG-430)
+captain start t-1 --harness codex        # worktree + cmux workspace + agent
+captain status                           # NEEDS YOU / READY TO MERGE / CAPTAIN'S MOVE / WORKING
+captain review t-1                       # the other vendor reviews the PR
+captain done t-1                         # close it once merged
 ```
-
-From inside a Claude Code session, run `/captain` and steer the same fleet in plain language: fan out these tickets, what is blocked, approve all the plans, what is ready to merge.
 
 ## What you control
 
-- **The plan:** each agent presents a plan and waits. Nothing gets built until you approve it.
-- **The questions:** an agent that needs an answer shows up under NEEDS YOU with the reply command.
-- **The merge:** an agent opens the PR and stops there. Merging stays yours.
-
-Everything between those gates is fixed: plan, implement, the review skills you configured, then a fresh-context verifier that has to pass the worktree's definition of done before the run counts as ready.
+- **What gets started:** the chat shows you a card for every batch of tasks, with the harness and model it picked. Nothing starts before your yes.
+- **Risky plans:** tasks touching auth, billing, data migrations or releases run in Claude Code plan mode and wait for `captain approve`.
+- **How much is in flight:** `start` refuses past the WIP limit, because every started task is a PR you have to review.
+- **The merge:** a task is READY TO MERGE only when CI is green, a fresh-context verifier passed its definition of done, and a model from the other vendor reviewed the PR. Merging stays yours.
 
 ## Notes
 
-- Set `LINEAR_API_KEY` to pull ticket details into each brief, or `DONEBEAR_TOKEN` to drive [Done Bear](https://donebear.com) tasks the same way.
-- Pick the agent per run with `--agent claude` or `--agent codex`. Codex runs without a plan gate.
-- Captain keeps no state. Every view is derived live from cmux and the worktrees, so there is no daemon to start or go stale.
+- Tasks are plain markdown files in `~/captain/<project>/tasks/`. The chat maintains them, and you can edit them.
+- Status is derived live from cmux, git and GitHub every time. There is no daemon, so there is nothing to restart or go stale.
+- Set `LINEAR_API_KEY` or `DONEBEAR_TOKEN` to add tasks from tickets.
 
 ## License
 

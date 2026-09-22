@@ -1,11 +1,11 @@
 # captain
 
-Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. The
-worktree + Linear + prompt fan-out is captain-native (`runner.ts` + `git.ts`/`linear.ts`/
-`prompt.ts`); each agent's brief carries the whole pipeline and the agent drives it itself.
-Captain keeps **no state** — `status` is derived live from cmux-native signals and the
-per-worktree `.captain/` files. (The previous watcher-daemon/state-machine architecture was
-deleted June 2026 — see `research/` for the history.)
+One chat that runs coding agents locally. The `/captain` skill turns a Claude Code session into
+the chat; the `captain` CLI is its hands. Tasks are plain markdown files in a project folder;
+each started task gets a git worktree, a cmux workspace and a full harness (Claude Code, Codex or
+Cursor). The board is derived live from cmux, git, GitHub and each worktree's `.captain/` files.
+Nothing about progress is stored, so there is no daemon. The design and its reasoning are in
+`docs/plans/captain-v3.md`; the v2 decision record is in `research/` (see `research/README.md`).
 
 ## Commands
 
@@ -25,445 +25,127 @@ npm link                    # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts            # Commander entry: install | start | status | approve [--note] | reject --note; bare-token routing via withImplicitStart
-  route.ts          # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; single non-issue word = likely typo, untouched); routes via source.ts isIssueToken
-  runner.ts         # runStart routes on the first token: runIssueWorktree (issue → worktree fan-out, any source) or runDispatch (free-form task → current dir); both share the self-drive brief; resolveAgent picks claude|codex
-  source.ts         # THE ISSUE-SOURCE SEAM: IssueSource registry (name/claims/prepare) — the one owner of "which source claims this token + how to parse/fetch it". sourceFor + isIssueToken. Adding a source touches only this file.
-  cmux.ts git.ts linear.ts donebear.ts repo.ts issue.ts images.ts launch.ts progress.ts shell.ts home.ts
-  # types.ts    : Issue (the source-neutral contract: identifier/title/description/criteria + optional Linear context) — every source maps INTO it, nothing downstream knows the source
-  # linear.ts   : fetchLinearIssue (id/URL → GraphQL) + mapLinearIssue (raw API → Issue; sub-issues → criteria)
-  # donebear.ts : isDonebearToken/parseDonebearInput (task URL or bare UUID → db-<8hex> id) + fetchDonebearTask + mapTaskToIssue (task+checklist → Issue; unchecked checklist items → criteria)
-  config.ts         # PURE-ish, all fail-safe: loadSkills, loadDataScope (CAPTAIN_DATA_SCOPE > .dataScope > DEFAULT_DATA_SCOPE)
-  prompt.ts         # issue context + <workflow> (plan/implement + the configured skills + finish) + <data-scope> guardrail + <finishing-protocol> + <fleet-memory>
-  rubric.ts         # PURE: renderRubric -> per-worktree .captain/rubric.md (definition of done) + rubricHash
-  memory.ts         # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
+  cli.ts          # Commander entry: init | add | start | status | approve | reject | send | peek | review | done | drop | gain | install
+  commands.ts     # every command, taking its world as Deps (env, stdout, ports) so tests run the real code
+  task.ts         # PURE: the task file (frontmatter + contract body), parse/render, criteria, ids, otherVendor
+  board.ts        # PURE: the grouping rule. rowOf(task, evidence) -> group + why + next command; WIP count. Start here.
+  gate.ts         # PURE: pendingGate (the cmux feed -> a plan or question gate for a worktree)
+  stats.ts        # PURE: computeGain over the task files + the log
+  evidence.ts     # the fs/cmux/GitHub edge: gathers each active task's evidence, then board.ts decides
+  project.ts      # the project folder: project.json, tasks/*.md, learnings.md, log.jsonl, its own git history
+  github.ts       # the GithubPort: `gh pr list --head <branch>` -> PR state + CI rollup (rollup is pure)
+  cmux.ts         # harnessCommand (claude | codex | Cursor `agent` launch lines), openWorkspace, cmux reachability
+  prompt.ts       # the worker brief (<workflow>, <data-scope>, <finishing-protocol>, <fleet-memory>) and the review brief
+  rubric.ts       # PURE: renderRubric -> .captain/rubric.md (definition of done) + rubricHash; the .captain/ paths
+  memory.ts       # learnings.md (Rules + tail-capped Inbox) excerpt for briefs
+  config.ts       # fail-safe config: skills pipeline, data scope, agent env, per-harness model/effort
+  git.ts          # ensureWorktree (lock, prune, reuse), gitCommonDir
+  source.ts       # THE TICKET-SOURCE SEAM: Linear and Done Bear registry used by `captain add`
+  linear.ts donebear.ts issue.ts types.ts shell.ts errors.ts format.ts
   captain/
-    view.ts         # 100% PURE (lint-enforced): identity, pendingGate (feed → gate), rowOf (the grouping rule), mergeOrderHints. Start here.
-    verdict.ts      # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
-    surface.ts      # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts + readRubricFacts (hash + ticket title, ONE read)
-    control.ts      # the CmuxPort seam: realCmux(env) wraps the cmux CLI (workspace.list, feed.list, exit_plan.reply, send, notify, runStates via `cmux top`); tests pass a fake port
-    commands.ts     # stateless status/approve/reject/gain + friendly-id resolution
-    gain.ts         # 100% PURE: computeGain (decisions + launch ledger + live fleet snapshot + verdict tallies → metrics incl. launch→detection latency); the gain command's fs/cmux edge lives in commands.ts
-    doctor.ts       # PURE buildChecks(deps) preflight (node/git/claude/cmux/key/skills) + missingBundles + render; the `install` command + realDeps read/mutate the world (skills add)
-    format.ts       # TTY-aware colour + the grouped status renderer + renderGain (display only)
-    log.ts          # thin audit trail: append-only ~/.claude/captain/log.jsonl (approve/reject/launch); `note` carries the reasoning on BOTH decisions; readLog feeds gain
+    control.ts    # the CmuxPort seam: realCmux(env) wraps the cmux CLI; tests pass a fake
+    verdict.ts    # PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
+    log.ts        # append-only <project>/log.jsonl: add | start | approve | reject | review | done | drop
+    doctor.ts     # `captain install`: pure buildChecks + skill install
+skills/captain/   # the chat: SKILL.md + references/heartbeat.md + references/intake.md
 ```
 
 ## How it works
 
-**Start** (`captain start`, `runStart`): routes on its first token — an **issue token** (any source
-in the `source.ts` registry claims it: a Linear id/URL or a donebear task URL/UUID) →
-`runIssueWorktree` (one worktree + cmux workspace per issue); anything else → `runDispatch` (a
-free-form task in the **current checkout**, no issue, no worktree). The routing sites all ask one
-predicate — `isIssueToken` (`source.ts`) — instead of enumerating sources, so a new source is one
-registry entry, not edits across `runStart`/`withImplicitStart`/`isFanOutInput`/`prepareIssue`.
-`prepareIssue` calls `sourceFor(token)` and drives the source's `prepare` (parse + a bound fetch);
-each source maps its native payload **into** the source-neutral `Issue` (`types.ts`:
-identifier/title/description/`criteria` + optional Linear context), so everything downstream
-(worktree, rubric, prompt, verdict) is source-agnostic — only the brief's source label differs. For
-donebear, captain's short id is `db-<first-8-hex-of-uuid>` (e.g. `db-35a2097c`), derived from the
-token without a fetch so worktree naming never waits on the network; each unchecked checklist item
-becomes one acceptance criterion (Linear sub-issues map to the same `criteria` field). The `start`
-subcommand is implicit: a bare first argument that isn't a known subcommand or a flag is treated as
-`start` (`withImplicitStart` in `route.ts` splices `start` into argv before commander parses it; the
-known-commands set is derived from the commander registry so it can't drift), so `captain tig-123`,
-`captain 35a2097c-…` (a bare task UUID) and `captain "tidy the readme"` work like `captain start …`
-— this is the `linear-worktree` invocation, subsumed. One guard: a **single** bare word that no
-source claims and has no spaces (`captain statsu`) is left alone so commander errors — it's far more
-likely a typo'd subcommand than a one-word task, and splicing would launch an agent and clobber the
-checkout's `.captain/` rubric (voiding an in-flight dispatch's verdict hash). Either way the agent
-gets the
-same brief: the `<workflow>` pipeline (plan → write the approved plan to `.captain/plan.md`
-→ implement → the configured skills → verifier finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
-`loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
-config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
-`.skills` > the default `/pr-reviewer` → `/tidy` → two conditional UI steps (`/product-design`
-+ `/ui-design`, then `/visual-qa`) → `/pr-creator` → `/pr-babysitter`); plan,
-implement, and the verdict finish stay fixed because `status` derives from them. The agent
-self-drives; nothing external types commands into it.
+**Projects.** `captain init <name> --repo <path>` makes `~/captain/<name>/` (`CAPTAIN_DIR`
+overrides the root): `project.json` (`repo`, `wip`, optional `bootstrap`), `tasks/`,
+`learnings.md`, `log.jsonl`, and a git repo that `commit()` updates after each write.
+Commands pick the project from `--project`, then `CAPTAIN_PROJECT`, then the only one there is;
+anything ambiguous is an error. The project's `repo` is the only repo its worktrees branch from,
+which removes v2's wrong-repo launches by construction.
 
-Every launch pins the agent's **model + effort** so it never inherits the driver's ambient tier
-(a driver on a cheap/fast model would otherwise fan the whole fleet onto it). Both launch paths —
-`claudeCommand` (`cmux.ts`, the fan-out `--command`) and `launchPlanMode` (`launch.ts`, the inline
-fallback) — pass `--model`/`--effort` from `loadModel`/`loadEffort` (`config.ts`: `CAPTAIN_MODEL`/
-`CAPTAIN_EFFORT` env > config `.model`/`.effort` > `DEFAULT_MODEL` `default` / `DEFAULT_EFFORT`
-`high`, fail-safe like the rest). `default` resolves to the machine's configured default model.
-`cmux.ts` shell-quotes the model because a full id can carry glob metacharacters (the `[1m]` in
-`claude-opus-4-8[1m]`); the inline path passes it as a discrete argv element, so no quoting.
+**Tasks.** One file per task (`task.ts`). The chat edits them directly; commands write through
+`writeTask`. `parseTask` is fail-safe: a bad enum value falls back to its default, never loses
+the task. Ids are lowercase ticket ids (`tig-430`, `db-35a2097c`) or `t-<n>` for a message.
+`add` copies a ticket's description, checklist and open blockers in; after that the file is the
+record and captain never writes back to a tracker.
 
-The launched **agent** is selectable: `--agent <claude|codex>` (flag) > `CAPTAIN_AGENT` env /
-`.agent` config > `DEFAULT_AGENT` `claude` (`loadAgent`/`resolveAgent`, fail-safe — any unknown
-value degrades to `claude`). `claude` (the default) is the only agent wired into the plan-gate
-flow: it launches in plan mode (`--permission-mode plan`) and its `ExitPlanMode` feed item is what
-`approve`/`reject` gate on. `codex` is **best-effort**: it has no plan mode, so it launches with
-full autonomy (`--dangerously-bypass-approvals-and-sandbox`, the analog of claude's skip-perms) and
-drives straight from the brief — no plan gate, no `approve` step. The brief's plan step is
-agent-aware (`renderPromptExtras` takes `agent`): claude is told to present the plan for approval;
-codex is told to plan then proceed, because telling it to wait for an approval that can never
-arrive would stall every codex run at step 1. The command builders branch by
-agent (`agentCommand` → `claudeCommand`/`codexCommand` in `cmux.ts`; `launchPlanMode` in
-`launch.ts`), and the launch-time binary probe checks the selected agent's binary. Codex maps
-effort to `-c model_reasoning_effort=<effort>` and omits `-m` on the `default` model sentinel (that
-sentinel is claude-only). `status` still tracks a codex workspace as IN FLIGHT — `runStates`
-(`control.ts`) fills any workspace's state from its `cmux top` tag row, so a non-`claude_code` tag
-still registers; only the plan-gate label is claude-specific.
+**Start.** Refuses a closed task, a task with a live worker, an open blocker, and a start past
+the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last two. Then:
+`ensureWorktree` (`<parent>/<repo>-<id>` on branch `<id>-<slug>`), `.captain/rubric.md`,
+`.captain/brief.md`, `.captain/` appended to `.git/info/exclude`, and `cmux new-workspace` named
+after the branch running `harnessCommand`. An `escalate` task always runs on Claude in plan mode
+(`--permission-mode plan --allow-dangerously-skip-permissions`); everything else runs unattended
+(`--dangerously-skip-permissions`, codex `--dangerously-bypass-approvals-and-sandbox`,
+Cursor `agent --force`). Binaries, default models and efforts come from `DEFAULT_HARNESS` in
+`config.ts` (Codex pins `gpt-6-sol`; Cursor's CLI binary is `agent`). The project `bootstrap` runs first in the same shell. Every launch gets
+the agent env (test pool caps) plus `CAPTAIN_SLOT`.
 
-For the free-form path, `.captain/` lands in the checkout itself (cwd = repoRoot) — one such
-dispatch per checkout at a time: a second clobbers the shared `.captain/rubric.md`/`verdict.json`.
-The rubric degrades gracefully with no issue (a coarse "implements `<name>`" criterion + the fixed
-verify procedure).
+**The board** (`status`, `evidence.ts` + `board.ts`). For each active task: the worker workspace
+(by name = branch, else by cwd), its `cmux top` run state, the newest unresolved feed gate for the
+worktree, the PR and CI via `gh`, the hash-checked verdict, the review file, and whether a
+`<branch>:review` workspace is open. `rowOf` walks one rule, first match wins: merged, then
+anything waiting on a human (plan, question, needs-input, failed verifier), then the open PR
+(red CI, no CI, pending, no verdict, no review, failed review, ready). Each row carries `next`,
+the one command that moves it forward, so the chat acts without parsing prose.
 
-**Repo selection**: `runner.ts` resolves a run's repo from `--repo-path` (`repoOverride`), else the
-cwd git toplevel (`resolveRepo`) — there is **no** config-based routing. Spanning several repos in
-one session is the `/captain` driver's job: it reads each ticket and passes `--repo-path` per repo,
-because routing can't be a static map — a Linear team _and_ a single project both span repos (see
-the `/captain` skill). worktree/rubric/memory key off the resolved `repoRoot`. (`memory.ts` keys
-per-repo by basename, now disambiguated by a path hash on collision while keeping any existing
-legacy dir.)
-
-**The frontier rule**: an issue whose blockers are still open does not launch — `captain start
-tig-1 tig-2` no longer starts dependent work against a prerequisite that hasn't landed.
-`Issue.blockedBy` (`types.ts`) is optional and
-populated per source (Linear `inverseRelations` of type `blocks` → `mapLinearIssue`; donebear
-has no dependency concept and leaves it unset); `openBlockers` (`issue.ts`) is the pure rule.
-Three properties are load-bearing. It is **read-only** — captain still writes to no tracker.
-It is **launch-time only, never in `status`**: that read derives with no network, so a blocked
-row would mean either a network call in the offline read path or persisting the graph into
-`.captain/` (the no-persisted-fleet-state boundary). And it is **fail-safe** — absent, null,
-or unfetchable relations read as *unblocked*, because refusing to launch on missing data is
-the dangerous default. `--force` launches anyway, on both paths.
-
-The two paths differ in **semantics, not in rule**, because they differ in what "the rest"
-means. Fan-out **skips** the blocked ticket and launches the others (`blocked` map →
-`launchPreparedFleet`) — one stale edge must never sink a batch. Single-issue `start`
-**throws** (`requireFrontier` in `runner.ts`: `CliError` `ISSUE_BLOCKED`, exit 1, naming the
-open blockers): there is no rest to proceed with, so skipping would be a silent zero-exit
-no-op that looks like a successful launch to a driver. Two things keep that error narrow —
-it never fires under `--print` (printing a brief is not launching; `--print` is a pinned mode),
-and it sits *after* the live-retry short-circuit, so reattaching to an already-running
-worktree never has to pass the check. See `research/wayfinder-browser-harness-audit.md`.
-
-**Surface** (`status`/`approve`/`reject`): stateless, derived fresh on every call —
-
-- membership: a cmux workspace whose cwd has a `.captain/` dir (start writes the rubric there)
-- busy/idle: `cmux top --all --flat --format tsv` run-state tags (one call, all workspaces)
-- gates: the newest **unresolved** `feed.list` item per cwd (`resolved_at` absent = pending);
-  `exitPlan` → the plan gate, `question`/`notification` → blocked
-- done: `.captain/verdict.json`, hash-checked against the rubric as it exists now
-- grouping (`rowOf` in `view.ts`): gate, failed verdict, or run-state `needs-input` → NEEDS YOU;
-  valid passing verdict → READY TO MERGE; otherwise IN FLIGHT
-
-`approve` replies to the exit-plan feed item directly; `reject` replies false **and** types the
-feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
-intent queue, no daemon to race.
-
-`status --watch [--interval <s>]` re-renders that same derivation on a timer for a human watching
-a terminal (Ctrl-C exits, default 5s). It is **not** a daemon: it persists nothing, every tick is
-an independent `statusOnce` (the `--json`/`--summary` machine paths short-circuit before the git
-merge-order cost), and it returns a `stop()` handle so the loop tears down deterministically. The
-agent _driver_ does **not** use `--watch` (a blocking foreground loop can't yield turns); its
-heartbeat is a backgrounded `sleep` whose exit re-invokes its turn — see the captain skill's
-heartbeat ladder.
-
-`gain` (alias `audit`) derives fleet telemetry the same stateless way: the gap-free `log.jsonl`
-ledger (`readLog` — approve/reject decisions plus per-launch records appended by `start`) + a
-live fleet snapshot + verdict tallies → `computeGain` (PURE), with an honesty footer (`--json`
-plain). Launch records join decisions/verdicts by the qualified `${repo}-${ticket}` name to give
-**latency to detection** (launch→decision from the ledger, launch→verdict from the live verdict
-files); `--print` never logs a launch. `--git` opt-in approximates merged-PR counts via `gh`,
-fail-soft. No counters, no event stream — operation-level throughput is not recorded, by design.
-`approve` takes an optional `--note` (the reviewer's recommendation), so the ledger records _why_
-a plan was approved and not just that it was; `gain` then reports `decisions.unexplainedApprovals`
-+ `recentApprovalReasons`. That block is **omitted wholesale** until the machine's ledger contains
-at least one noted approval — a pre-`--note` history carries no rationale by construction, and
-reporting all of it as unexplained would be a false alarm dressed as a metric (same "no sample ⇒
-omit" rule as `latency`). It measures whether the review step ran, never plan quality; the caveat
-says so.
-
-`gain.rework` is the plan-gate cycle count — the playbook's build-stage lagging indicator,
-derived from the same ledger and nothing new. Per ticket **name**, not per launch: the
-reject→relaunch cycle is what is being counted and it spans launches by construction, so a
-ticket is first-pass when every decision under its name is an approval. A `--since` window
-picks the **ticket set** (names decided inside it) and the cycles counted against them span
-the whole ledger — the same asymmetry `latency` uses for launches, and for the same reason:
-windowing the rejections too would report a ticket whose earlier rejections fell outside as a
-clean first pass, inflating the rate in the flattering direction. Omitted wholesale when
-no ticket in the window carries a decision (the same "no sample ⇒ omit" rule as `latency`), and
-its caveat says what it is not — cycles at the *gate*, not post-merge rework, and a relaunch
-that was never rejected is invisible to it.
-
-`gain.roster` is the per-ticket detail behind those tallies — the answer to "what got done and
-what's left", which nothing could answer before: `status` is live-only (a merged worktree leaves
-the view) and `gain` reported only aggregates. It reuses the join `computeGain` already performs
-for latency, keeping the rows instead of collapsing them. Driven off **launches**, not off live
-rows: the ledger is the only gap-free history, so a removed worktree still appears — degraded to
-name + `launchedAt` + decision, with `live: false` and no title/verdict/PR. That split is stated
-in its own caveat, because the entry mixes ledger truth with a live snapshot. Newest first,
-windowed by `--since`, capped at `ROSTER_MAX` with the remainder in `dropped` (no silent caps).
-The prose belongs to `/eli5`, not to captain — the roster ships material, not sentences.
-
-## The verdict gate & fleet memory (the agent-side loops)
-
-**Verifier loop**: fan-out writes a definition of done into each worktree (`.captain/rubric.md`,
-rendered by `rubric.ts` from the Linear issue — no LLM call) and the prompt's
-`<finishing-protocol>` requires a fresh-context verifier sub-agent to pass it before the agent
-writes `.captain/verdict.json`. The **agent** writes the third `.captain/` file,
-`.captain/plan.md` (`PLAN_RELPATH`): the approved plan, verbatim, before it touches code,
-with any later departure appended under a `## Deviations` heading rather than merged in —
-captain can't write it (claude presents the plan from plan mode, where it cannot write files,
-and captain only replies to the feed item, never seeing the text). One acceptance criterion
-grades the diff against it, and the verifier is handed it alongside the rubric and the diff,
-so an agent that got approval for one approach and shipped another is now visible. It is
-git-ignored with the rest of `.captain/` — deliberately unlike the SDLC playbook's *committed*
-`plan.md`, because captain's unit of work is a throwaway worktree and committing it would put
-agent scratch in every PR diff. Its job is to bind implement→verify inside the run; the durable
-record stays `approve --note` plus the PR description. See
-`research/ai-native-sdlc-playbook-audit.md`. `status` reads that file at render time: a valid pass shows
-READY TO MERGE + `✓ verified` (+ the PR's merge hint); a fail shows NEEDS YOU with the verifier's
-summary. The verdict must cite the sha256 of the rubric body _as it exists now_
-(`rubricBody`/`rubricHash`), so editing the criteria after the fact voids it. **Memory loop**:
-`memory.ts` keeps `~/.claude/captain/memory/<repo>/learnings.md` (shared by all worktrees of a
-repo, survives worktree removal); fan-out injects `## Rules` + the tail-capped `## Inbox` via
-`<fleet-memory>`, and agents append only _verified_ learnings at end of run — including, when a
-verifier run failed before eventually passing, the root cause of that failure as a preventive
-rule (the eventual pass is its verification). Curation is human-driven via the captain skill;
-approve/reject notes land in `~/.claude/captain/log.jsonl`.
+**Review.** `captain review` opens a second workspace in the same worktree running the other
+vendor (`otherVendor`) on a review-only brief that writes `.captain/review.json`. READY TO MERGE
+needs CI green, a passing verdict and a passing review.
 
 ## Gotchas
 
-- **ESM, bundler resolution**: extensionless relative imports (`./view`, not `./view.js`);
-  `tsconfig` uses `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
-- **The pure core stays pure**, and PURE has exactly ONE definition: **no filesystem, no
-  subprocess**. `node:crypto` is fine (`rubric.ts` hashes) — it is deterministic and needs no
-  I/O. Six modules are in the contract and all six are lint-enforced (`oxlint.config.ts`,
-  `no-restricted-imports`): `view.ts`, `verdict.ts`, `gain.ts` on the surface side, and
-  `rubric.ts`, `route.ts`, `issue.ts` on the launch side. **The list in `oxlint.config.ts` is
-  the contract** — adding a module here without adding it there writes a rule nobody enforces,
-  which is how `rubric.ts` sat documented-but-unenforced for months. Decisions take plain input
-  data; `surface.ts` and `commands.ts` are the fs/cmux edges that feed them.
-- **The verdict is fail-safe by construction**: a missing/garbage `.captain/verdict.json` is "no
-  verdict yet" (`parseVerdict` returns null — a malformed verdict must never read as a pass), and
-  the verdict gates the _label_ (`✓ verified`), never the merge — the human merge gate stays
-  authoritative.
-- **A criterion has three states, not two.** `na: true` (reason in `evidence`) means the criterion
-  cannot apply to this diff — it is neither a pass nor a failure, and `gain` never tallies it. It
-  exists because pass/fail alone had no honest answer for e.g. a docs-only diff facing "the repo's
-  test command passes", so agents argued those into passes, each inventing a different exemption
-  and some rewording the criterion itself. Hence the rubric pins `name` to the criterion verbatim:
-  a softened bar must show up as a rename, never as a silent pass. Don't add a fourth state — the
-  criteria array is evidence for the human, not a scoring system.
-- **The plan criterion's `na` is a FILE-EXISTENCE test, not an exemption argument.** "Mark
-  `na` only when `.captain/plan.md` does not exist" is phrased that way on purpose: the
-  failure mode recorded above for criterion 2 is agents each inventing a different
-  exemption, some rewording the criterion itself. There is nothing to argue here — either
-  the file is on disk or it is not. **Both** start paths write it: fan-out and free-form
-  dispatch share `withLoopExtras` (`runner.ts`), which passes `workflow: true`, so the only
-  ways it is absent are an agent that skipped the step or a worktree from before this
-  shipped. Don't soften it to "when a plan doesn't apply", which is the arguable form. It
-  also clears the `/security-review` bar it has to: every ticket has a plan, and the
-  verifier is already reading the worktree, so the marginal cost is one file read rather
-  than a recurring extra review pass.
-- **Plan deviations are APPENDED under `## Deviations`, never merged into the plan** — and
-  the rule must never be framed around a commit. `.captain/` is in the repo's
-  `.git/info/exclude`, so `plan.md` is in no commit and has no history: "update it in the
-  same commit that deviates" (how this shipped first) is uncheckable, and following it
-  literally erases what was approved, leaving the criterion nothing to compare against.
-  Appending keeps both halves in the one artifact the verifier is already handed.
-- **Changing `rubric.ts` voids no in-flight verdict.** `readRubricFacts`
-  (`captain/surface.ts`) recomputes the hash from each worktree's rubric file *as it exists
-  on disk*, and captain never rewrites an existing worktree's rubric — so shipping a new
-  criterion only affects rubrics rendered after it. (`research/wayfinder-browser-harness-audit.md`
-  §10 assumed the opposite; it was over-cautious.)
-- **`parseVerdict` accepts `ts` as a number OR a quoted integer.** The rubric's schema example
-  modelled it as a string for months, so most verdicts on disk carry `"1784854700"`; scoring those
-  0 silently dropped them from `gain`'s launch→verdict latency. Tolerate at the parser — don't
-  "fix" this by teaching the type in the rubric as well, that's the same bug patched twice.
-- **Fleet-memory headings are matched at LINE START** (`headingAt` in `memory.ts`), and `SKELETON`
-  must never name a heading in its prose. Both halves matter: locating `## Rules`/`## Inbox` with
-  `indexOf` matched the skeleton's own preamble, which mentioned `## Inbox` first — so
-  `slice(rulesAt, inboxAt)` was backwards and **empty**, and the curated rules were silently
-  dropped from every brief for months. The unit tests missed it because they all hand-build content
-  with no preamble; `memory.test.ts` now drives the real `SKELETON` for exactly this reason.
-- **`SKELETON` states no append policy** — `prompt.ts` is the single owner of what an agent may
-  append. `ensureMemoryFile` only writes the skeleton when the file is ABSENT, so any policy stated
-  there can never be refreshed: the old "1-3 bullets" text contradicted the brief's "zero or one"
-  forever, and agents followed the file (measured mode: 3 bullets per run).
-- **Never trust cmux's built-in workspace status glyph** (it desyncs). The trusted signals are
-  `cmux top`'s per-workspace run-state **tag** (live process accounting, `runStates` in
-  `control.ts`) and the feed's `resolved_at` field. An unreadable tag parses as "unknown" =
-  not busy.
-- **The feed is the gate inventory**: always filter `!resolved_at` and pick the newest match per
-  cwd (`pendingGate` in `view.ts`) — a stale resolved item must never read as a live gate or
-  swallow an `exit_plan.reply`.
-- **`feed.exit_plan.reply` takes `{request_id, mode}`, not `{id, approve}`.** The reply handle is
-  the feed item's `request_id` (`Gate.replyId`), a *different* value from its `id` — sending the
-  id fails with `invalid_params: feed.exit_plan.reply requires request_id`, which silently pushed
-  a whole session's approvals onto manual `cmux send` (and out of `log.jsonl`, so `gain` scored
-  them unexplained). `mode` is an enum: approve → `bypassPermissions` (the agent launches with
-  `--allow-dangerously-skip-permissions` and must self-drive unattended; `autoAccept` would strand
-  it at the first non-edit tool), reject → `deny`. Verified on cmux 0.64.17 and pinned by a wire
-  test in `control.test.ts` — re-verify there when a cmux upgrade breaks approvals.
-- **Colour only on a TTY** (`useColor`) — piped output and `--json` stay plain so the LLM/skill
-  can parse them.
-- **Friendly ids**: `approve`/`reject` resolve `tig-430` or substrings, never require a uuid.
-  When one ticket is fanned into two repos (e.g. `tig-424` → frontyard **+** ltfollowers), the
-  bare ticket is ambiguous: `resolveTargets` refuses to guess and reports the qualified
-  `${repo}-${ticket}` names (`frontyard-tig-424`, `ltfollowers-tig-424`) — pass one of those, not
-  a workspace uuid. `status` already prints the qualified handle for colliding tickets
-  (`withHandles` in `view.ts`), so the displayed approve/reject command is always resolvable.
-- **`.captain/` never reaches a diff**: `start` appends it to the repo's shared
-  `.git/info/exclude` (one append covers all linked worktrees) — don't move the rubric/verdict
-  into tracked paths. It doubles as the membership marker `surface.ts` filters by.
-- **Tests must not touch the real `$HOME`**: `home.ts` `captainHome` resolves `CAPTAIN_HOME` >
-  `~/.claude/captain` (the base for both `log.ts` and `memory.ts`; `memory.ts` also honours
-  `CAPTAIN_MEMORY_DIR`), and `config.ts` honours `CAPTAIN_CONFIG` (point it at a temp file) —
-  runner/commands/config tests set these to temp dirs and drive the real modules through a fake
-  `CmuxPort` (no mocking library).
-- **The pipeline order is a correctness property, not a preference.** `/pr-reviewer` runs
-  BEFORE `/tidy`. The reviewer is read-only and writes a report whose `Fix:` lines are
-  committable; `tidy`'s Phase 2 looks for a review that already ran and routes its confirmed
-  findings straight into its apply phase. Reversed — as `DEFAULT_SKILLS` shipped until Aug 2026
-  — the report is produced with nothing downstream to apply it and `/pr-creator` opens the PR
-  still carrying the review's own "Must fix before push" findings. Pinned by a test in
-  `config.test.ts`; the skills' own docs are the source (`pr-reviewer/SKILL.md`: "The usual
-  sequence is this skill, then that one").
-- **A pipeline step is a `/skill` token OR plain English.** An entry that doesn't start with `/`
-  renders verbatim as its own numbered step (`prompt.ts`), which is how a step becomes
-  conditional — "If the diff touches user-facing UI, run /product-design then /ui-design" — with
-  no `when` schema and no condition evaluator. Deliberate: a step the agent can honestly answer
-  "not applicable" to is the shape that survives, where unconditional ceremony on a diff with no
-  such surface teaches it to argue exemptions instead (the same reasoning behind the rubric's
-  `na` state and the `/security-review` reversal). Don't add a condition DSL.
-- **Skills config is fail-safe**: `loadSkills` (`config.ts`) never throws — a missing/garbage
-  config file or empty array degrades to `DEFAULT_SKILLS`; only a non-empty string array (or a
-  non-empty `CAPTAIN_SKILLS`) overrides. `"$defaults"` inside that array expands IN PLACE to
-  `DEFAULT_SKILLS`, so a user can extend the pipeline instead of silently replacing it (without
-  the token, a non-empty list still replaces — that is the trap it exists to remove). Any other
-  `$token` is dropped rather than passed through, and a list that expands to nothing degrades to
-  the defaults. `CAPTAIN_SKILLS` splits on commas, so a prose step containing a comma can only be
-  expressed in the config file's JSON array. The config lives at `~/.config/captain/config.json`
-  (XDG, **not** under `~/.claude`), `CAPTAIN_CONFIG` redirects the path.
-- **No daemon, ever**: there is no watcher process, no pidfile, no state.json. If you find
-  yourself adding persisted fleet state, stop — derive it from cmux + the filesystem instead.
-  This is a deliberate boundary against Builderbot-style bets: Slack/webhook ticket ingestion,
-  real-time multi-user steering, and two-way conversational control **all** require a persistent
-  listener — the exact watcher-daemon class deleted June 2026, where every live-session bug lived
-  (daemon death, fleet-wipe on a flaky RPC, gate-flap, two-writer clobber). A **one-way**
-  `notify`→external push is the only thesis-safe slice; two-way control stays a non-goal. The
-  reasoning is written up in `research/builderbot-audit.md`. (`status --watch` is **not** a
-  violation: it is a foreground, stateless re-render loop the human starts and Ctrl-Cs — it holds
-  no state, listens to nothing, and coordinates no writers. The forbidden class is a _persistent
-  background listener_, not a polling loop.)
-- **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue,
-  donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch,
-  an explicit `--repo-path`, the bare-token form (`captain tig-123` == `captain start tig-123`, via
-  `withImplicitStart`), and `--print` for each. Repo selection is `--repo-path` else cwd; spanning
-  repos in one session is the driver's job (per-ticket `--repo-path`), not config. A fan-out may
-  now skip a blocked issue (the frontier rule), so its summary line and `--json` `started` count
-  what actually launched — with nothing blocked, both are byte-identical to before. A single
-  blocked issue now *errors* instead of launching; `--print` and `--force` are unaffected on
-  every mode.
-- **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
-  gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
-  wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
-- **Claude session `--name` is the ticket slug; messaging is not a control plane.**
-  Audited Aug 2026 — see `research/cross-session-messaging-audit.md`. Captain pins
-  `claude --name <ticket>` on both launch paths so multi-session Claude UX matches the
-  fleet (cmux workspace `--name` is a different name). Do **not** build coordination,
-  approval, or driver steering on Claude Code `SendMessage`/`ListAgents` — keep
-  `cmux send` / `approve`/`reject`, and keep fleet memory as the durable cross-session
-  channel. Agent Teams stay a non-goal.
-- **The AI-native SDLC playbook: what captain took, and what it deliberately does NOT adopt.**
-  Anthropic's playbook (`claude.com/blog/the-ai-native-sdlc-playbook`) is the reference, fully
-  sorted play-by-play in `research/ai-native-sdlc-playbook-audit.md` (Aug 2026) — read that
-  before re-proposing anything from it. Captain already has its core loops under other names
-  (fresh-context verifier = independent reviewers with separate context windows, per-criterion
-  evidence = "prove the finding", fleet memory = the discovery→instructions loop, `gain` = the
-  vitals dashboard, plan+merge = humans at the leverage points). Three plays were real gaps and
-  are now built: the approved plan as `.captain/plan.md` graded by one criterion, a plan that
-  names files/work order/proof tests, and `gain.rework`. The rest are out of scope, and
-  re-proposing them is re-litigating a decided boundary:
-  - **A `/security-review` pipeline step + a graded security criterion** — built and reverted
-    Jul 2026. The step is the only control here with a **recurring** per-ticket cost (a full
-    extra review pass on every diff, forever), and grading it in the rubric is *stricter than
-    the article*: there `/security-review` is the cheap shift-left nudge and CI is the hard
-    gate. Worse, the criterion contradicted a decision already made in this file — criterion 2
-    was deliberately softened to "add tests only where the change genuinely warrants coverage"
-    because ceremony on trivial diffs teaches agents to argue exemptions, and most fleet
-    tickets are copy/label/refactor diffs with no security surface. If this comes back, it
-    needs an `na` path for surface-free diffs, and it should probably stay effort (a skill
-    step) rather than becoming enforcement (a graded criterion).
-  - **SIEM / event-stream routing** — streaming every tool call and agent message needs a
-    persistent listener, i.e. the forbidden daemon class above. The ledger stays three record
-    kinds; `gain`'s caveats already say throughput is not recorded.
-  - **Egress allowlisting and remote-VM containment** — cmux/environment concerns. Captain
-    launches agents; it does not own their network or sandbox.
-  - **`codex`'s `--dangerously-bypass-approvals-and-sandbox`** is the article's least-agency
-    anti-pattern, kept knowingly: codex has no plan mode, so a gated launch would stall every
-    codex run at step 1. This is why `claude` is the gated default.
-  - **Risk-tiering in code** — blast radius lives in the ticket contract
-    (`skills/captain/references/auto-pickup.md`) and the driver's decision card. A tier enum in
-    `src/` would be a taxonomy with no consumer.
-  - **Hooks and managed settings as the deterministic governance layer** — they live in the
-    *target* repo's `.claude/settings.json` and the machine's managed settings. Captain
-    launches agents into worktrees and owns neither their settings nor their sandbox; same
-    line as egress/containment above. Captain's equivalent is the plan gate (a hard stop no
-    agent passes itself), the rubric hash, and the `.git/info/exclude` append.
-  - **Continuous evals in CI gating agent config** — the surface it would gate
-    (`prompt.ts`, `rubric.ts`, `DEFAULT_SKILLS` order) is already pinned by deterministic
-    unit tests in `prompt.test.ts` / `rubric.test.ts` / `config.test.ts`. An LLM eval suite
-    over the same files buys nondeterminism, API keys in CI and a per-PR cost for a weaker
-    signal. Revisit only on a regression the unit tests structurally cannot catch — a brief
-    that renders exactly as pinned and still drives agents badly.
-  - **Deployment: CI/CD tiers, MCP deploy/status/rollback tools, per-environment autonomy** —
-    past captain's boundary by definition. Its output is a PR-ready worktree; the human merge
-    gate is the last thing it participates in.
-  - **Control-band breach detection as a captain feature** — the *need* is fine and the
-    playbook's own version is stateless in CI, so it is a cron job shelling out to
-    `captain "<task>"` with zero captain code. A captain-owned trigger layer is the forbidden
-    daemon class, and the return leg ("findings re-enter as `intent.md`") is a tracker write,
-    which the agent does, not captain.
-  - **Hosted recurring codebase scans / Claude on call in Slack** — an external product and a
-    persistent chat listener respectively; the latter was already decided in
-    `research/builderbot-audit.md`.
-
-- **Captain reads trackers; it never writes them.** Audited Aug 2026 against Matt Pocock's
-  `wayfinder` and rejected — see `research/wayfinder-browser-harness-audit.md`. The read side
-  landed (the frontier rule above); the write side is the non-goal. Wayfinder's map issue is a
-  read-modify-write of one shared body (Decisions-so-far, fog graduation), i.e. the two-writer
-  `state.json` clobber moved onto a remote tracker, and its claim-by-assignment is an advisory
-  lock with **no CAS** in a system that expects concurrent writers — a worktree plus its
-  `.captain/` marker is a stronger, local, derived claim. If plan→ticket decomposition is ever
-  wanted, the **agent** writes the tracker (as it already opens PRs); `IssueSource` gains no
-  write verb.
-- **No browser daemon, and no graded UI criterion.** `browser-use/browser-harness` was audited
-  Aug 2026 and rejected as a dependency: default-on telemetry that ships the agent's code and
-  page output unredacted (`capture_cli_event` never calls `_safe_properties`), a local path that
-  blocks waiting for a human to click Allow, one shared Chrome that N worktrees fight over, full
-  logged-in-profile access with no origin gate, and a daemon nothing reaps. The real need — an
-  agent looking at the running app — is a per-worktree throwaway headless Chromium, driven by an
-  **opt-in `.skills` entry** (zero captain code, since only plan/implement/finish are fixed).
-  Keep it out of `DEFAULT_SKILLS`, and don't grade it in the rubric: that is the
-  `/security-review` case again.
+- **ESM, bundler resolution**: extensionless relative imports; `tsconfig` uses
+  `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
+- **PURE means no filesystem and no subprocess** (`node:crypto` is fine). The list in
+  `oxlint.config.ts` is the contract: `task.ts`, `board.ts`, `gate.ts`, `stats.ts`,
+  `captain/verdict.ts`, `rubric.ts`, `issue.ts`. A module documented as pure but missing there
+  is a rule nobody enforces.
+- **Status comes from evidence, never from an agent's word.** Don't add a path where a worker
+  can mark itself done. A verdict counts only when its `rubricHash` matches the rubric as it is
+  on disk now; a missing or garbage verdict or review reads as "none", never as a pass.
+- **A PR with no CI checks is NEEDS YOU, not green** (`rollup` returns `none`). CI is part of
+  done; a repo without it must never read as ready.
+- **A criterion has three states.** `na: true` means it cannot apply to this diff, with the
+  reason in `evidence`. It is neither a pass nor a failure. Don't add a fourth.
+- **Plan deviations are APPENDED under `## Deviations` in `.captain/plan.md`**, never merged in.
+  `.captain/` is excluded from git, so there is no history; rewriting would erase what was
+  approved.
+- **Memory headings are matched at LINE START** (`headingAt`), and `SKELETON` names no heading
+  in its prose and states no append policy (`prompt.ts` owns that). Both were real bugs.
+- **Never trust cmux's workspace status glyph.** The trusted signals are `cmux top` run-state
+  tags (`runStates`) and the feed's `resolved_at`.
+- **`feed.exit_plan.reply` takes `{request_id, mode}`**, where `request_id` is NOT the feed
+  item's `id`. Approve is `bypassPermissions` (the gated launch allows it), reject is `deny`.
+  Pinned by a wire test in `control.test.ts`; re-verify there after a cmux upgrade.
+- **The review workspace shares the worker's cwd**, so worker lookup is by workspace name
+  (the branch) first. Keep the `<branch>:review` naming in `reviewName`.
+- **Tests never touch real `$HOME`**: set `CAPTAIN_DIR` and `CAPTAIN_CONFIG` to temp paths.
+  `commands.test.ts` runs the real commands against a temp repo with an origin, a fake `cmux`
+  binary on PATH, and in-memory CmuxPort and GithubPort. No mocking library.
+- **The pipeline order is a correctness property.** `/tidy` (review plus fixes) runs before
+  `/pr-creator`, so the PR carries fixes, not findings. Pinned in `config.test.ts`.
+- **A pipeline step is a `/skill` token OR plain English.** Prose renders verbatim, which is
+  how a step becomes conditional. Don't add a condition DSL.
+- **Config is fail-safe**: `loadSkills`, `loadHarnessDefaults` and friends never throw. A bad
+  file degrades to defaults. `"$defaults"` expands in place inside `.skills`.
+- **No daemon.** The chat wakes itself (the skill's heartbeat) and every wake re-derives the
+  board. If you find yourself persisting progress, derive it instead. The only persisted state
+  is what a human or the chat decided: the task files and the log.
+- **Trackers are read-only.** `add` reads Linear or Done Bear; nothing writes back. If a
+  tracker needs updating, the chat or a worker does it with its own tools.
+- **Messaging between sessions is not a control plane.** Workers are steered with
+  `captain send` and gated with `approve`/`reject`, never Claude Code `SendMessage`.
+- **Harness flags are checked, not live-run.** Every flag `harnessCommand` emits was checked on
+  22 Sep 2026 against Claude Code 2.1.280 `--help`, Codex 0.156.0 `--help` and the Cursor CLI
+  parameter docs. After a harness upgrade, re-check its `--help` and update `cmux.test.ts`.
+- **A config `bin` is a plain command name or path only** (`safeBin`): it lands unquoted at the
+  front of the launch line, so anything with spaces or shell characters falls back to the default.
 
 ## Env knobs
 
-`LINEAR_API_KEY` (Linear issue fetch + screenshots — the image download is gated on the issue's
-**source**, not just the key's presence, so a donebear task never routes through the Linear
-download path) · `DONEBEAR_TOKEN` (donebear task fetch — a
-`db_` API key from `donebear api-key create`; read scope is enough, captain never writes back) ·
-`CAPTAIN_MEMORY_DIR` (fleet memory override) ·
-`CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
-pipeline steps, `$defaults` to keep the built-in ones; overrides the config file — prose steps
-with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
-`CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default
-`high`) · `CAPTAIN_AGENT` (which agent to launch, `claude` | `codex`, default `claude`) ·
-`CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
+`CAPTAIN_DIR` (projects root, default `~/captain`) · `CAPTAIN_PROJECT` (default project) ·
+`CAPTAIN_CONFIG` (config.json path; default `$XDG_CONFIG_HOME/captain/config.json`) ·
+`CAPTAIN_SKILLS` (comma-separated pipeline, `$defaults` keeps the built-in steps) ·
+`CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) · `LINEAR_API_KEY` · `DONEBEAR_TOKEN` ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
-`~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[] — each entry a
-`/skill` token, a plain-English instruction, or `"$defaults"`), `.dataScope` (string),
-`.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`), `.agentEnv`
-(string→string map merged over `DEFAULT_AGENT_ENV` — `VITEST_MAX_FORKS`/`VITEST_MAX_THREADS`
-capped at 2, because N agents each spawning an uncapped worker pool has jetsam-killed a whole
-fleet; set a key to `""` to drop a default).
+`config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string), `.agentEnv`
+(string map merged over the `VITEST_MAX_FORKS/THREADS=2` defaults; `""` drops a key),
+`.harness.<claude|codex|cursor>.model` / `.effort` / `.bin` (each harness's defaults; a task's own
+values win).

@@ -7,15 +7,15 @@ import { isLinearToken, parseIssueInput } from "./issue";
 import { fetchLinearIssue } from "./linear";
 import type { Issue, ParsedIssue } from "./types";
 
-// One issue source (Linear, donebear). The single owner of "which source claims
-// this token, and how do I parse + fetch it" — so routing files (route.ts,
-// runner.ts, cmux.ts) ask the registry instead of enumerating sources, and
+// One ticket source (Linear, donebear). The single owner of "which source claims
+// this token, and how do I parse + fetch it" — so `captain add` asks the
+// registry instead of enumerating sources, and
 // adding a source touches only this file.
 interface IssueSource {
   // the brief/rubric label ("Linear" | "donebear")
   name: string;
   // environment variable required to fetch this source; diagnostics stay at
-  // the source seam so adding a source does not add a runner branch.
+  // the source seam so adding a source does not add a command branch.
   credential: string;
   // does this source claim the token? (a bare id/URL/UUID, no trailing words)
   claims(token: string): boolean;
@@ -52,12 +52,6 @@ const donebearSource: IssueSource = {
 // (a Linear id/URL can't be a donebear UUID/URL), so order is not load-bearing.
 const SOURCES: IssueSource[] = [linearSource, donebearSource];
 
-// The source that claims a token, else undefined (a free-form task token).
+// The source that claims a token, else undefined (the input is a message).
 export const sourceFor = (token: string): IssueSource | undefined =>
   SOURCES.find((source) => source.claims(token));
-
-// Is this token issue work (any source claims it) vs a free-form dispatch task?
-// The single predicate the routing sites share, replacing scattered
-// `isLinearToken(t) || isDonebearToken(t)` chains.
-export const isIssueToken = (token: string): boolean =>
-  SOURCES.some((source) => source.claims(token));

@@ -1,25 +1,32 @@
 ---
 title: Captain
-description: Captain a fleet of cmux worktrees from one Claude Code session.
+description: One chat that runs your coding agents locally, in cmux worktrees.
 ---
 
-Captain a fleet of [cmux](https://cmux.com/) worktrees from one Claude Code session, one worktree per Linear ticket.
+Captain is one chat that runs your coding agents. You tell it what you want, or hand it a ticket. It keeps a task list, starts a full harness (Claude Code, Codex or Cursor) on each task in its own git worktree and [cmux](https://cmux.com/) workspace, and comes back to you only with decisions: plans to approve, questions to answer, PRs to merge.
 
-Each worktree runs its own agent on a brief covering the whole job: plan, implement, review, open a PR. From your captain session you watch them with `captain status`, approve their plans, and answer what they're blocked on.
+The chat is a Claude Code session running the `/captain` skill. Everything it does goes through the `captain` CLI, and every task is a plain markdown file, so you can read, edit or drive any of it by hand.
 
 ## Requirements
 
-- Node.js >= 22
-- `git`, `claude` ([Claude Code](https://claude.com/claude-code)), and [`cmux`](https://cmux.com/) on your PATH
-- `LINEAR_API_KEY` (optional, pulls ticket details and screenshots into each brief)
+- Node.js >= 24
+- `git`, `gh` ([GitHub CLI](https://cli.github.com/)), `claude` ([Claude Code](https://claude.com/claude-code)) and [`cmux`](https://cmux.com/) on your PATH
+- Optional harnesses: `codex` and the Cursor CLI (`agent`)
+- Optional: `LINEAR_API_KEY` or `DONEBEAR_TOKEN`, to add tasks from tickets
 
 ## Install
 
 ```bash
 npm i -g cmux-captain   # the CLI
-captain install         # add the skills the fleet needs, then check your setup
+captain install         # add the skills, then check your setup
 ```
 
-`captain install` adds the `/captain` skill you drive plus the pipeline skills each brief invokes (`/pr-reviewer`, `/pr-creator`, `/pr-babysitter`), then verifies node, git, claude, cmux, and `LINEAR_API_KEY`. Re-run it any time to re-check.
+`captain install` adds the `/captain` skill plus the pipeline skills each worker's brief runs (`/tidy`, `/pr-creator`, `/pr-babysitter`), then checks node, git, gh, claude, codex, agent, cmux and `LINEAR_API_KEY`. Re-run it any time.
 
-See [Usage](/usage) for the commands and how a worktree reaches "ready to merge".
+Then create a project and start the chat:
+
+```bash
+captain init rebuild --repo ~/code/app --wip 4
+```
+
+Open Claude Code in its own cmux workspace and run `/captain`. See [Usage](/usage) for how a task gets from a message to a merged PR.

@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
+import { style } from "../format";
 import {
   buildChecks,
   install,
@@ -14,11 +15,10 @@ import {
   renderDoctor,
 } from "./doctor";
 import type { DoctorDeps } from "./doctor";
-import { style } from "./format";
 
 const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   cmuxReachable: () => true,
-  configuredSkills: ["pr-reviewer", "pr-creator", "pr-babysitter"],
+  configuredSkills: ["tidy", "pr-creator", "pr-babysitter"],
   env: { LINEAR_API_KEY: "k" },
   hasCommand: () => true,
   installBundle: () => true,
@@ -91,19 +91,19 @@ describe("buildChecks", () => {
   });
 
   it("only probes the installable skills the configured pipeline runs", () => {
-    // A custom pipeline that runs only pr-reviewer isn't nagged about the other
+    // A custom pipeline that runs only tidy isn't nagged about the other
     // two — even though they're globally missing.
     const skills = buildChecks(
-      deps({ configuredSkills: ["pr-reviewer"], skillInstalled: () => false })
+      deps({ configuredSkills: ["tidy"], skillInstalled: () => false })
     ).find((c) => c.label === "pipeline skills");
-    expect(skills?.detail).toContain("pr-reviewer");
+    expect(skills?.detail).toContain("tidy");
     expect(skills?.detail).not.toContain("pr-creator");
   });
 
   it("omits the pipeline-skills check when the pipeline runs none", () => {
-    // /tidy isn't fetched through the pipeline bundle, so a tidy-only pipeline
-    // has no installable skills to probe — the check is dropped, not shown as ok.
-    const checks = buildChecks(deps({ configuredSkills: ["tidy"] }));
+    // A pipeline of only prose or unbundled skills has no installable skills
+    // to probe — the check is dropped, not shown as ok.
+    const checks = buildChecks(deps({ configuredSkills: ["my-own-skill"] }));
     expect(checks.map((c) => c.label)).not.toContain("pipeline skills");
   });
 });

@@ -1,11 +1,14 @@
 {
   "name": "cmux-captain",
   "version": "2.1.0",
-  "description": "Drive a fleet of cmux worktrees through the SDLC, live — from Linear ticket to PR-ready",
+  "description": "One chat that runs your coding agents locally: a task list, full harnesses in cmux worktrees, and only the decisions come back to you",
   "keywords": [
+    "agents",
     "captain",
+    "claude-code",
     "cli",
     "cmux",
+    "codex",
     "git",
     "linear",
     "orchestration",

@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { explainCmuxUnreachable } from "../cmux";
 import { loadSkills } from "../config";
+import { msg, style, useColor } from "../format";
+import type { Style } from "../format";
 import { commandExists, run } from "../shell";
-import { msg, style, useColor } from "./format";
-import type { Style } from "./format";
 
 // One preflight line: a label, whether it's a hard requirement, the live state,
 // a short detail, and the fix to run when it's missing. `skillBundle` names the
@@ -21,7 +21,7 @@ interface Check {
 }
 
 // Everything `buildChecks` needs to read the world, injected so the check list
-// stays pure (and testable) — mirrors the surface.ts/CmuxPort seam.
+// stays pure (and testable) — mirrors the CmuxPort seam.
 export interface DoctorDeps {
   cmuxReachable: () => boolean;
   // When cmux is down, the ping-derived fix. Tests inject it; realDeps uses
@@ -44,8 +44,7 @@ export interface DoctorDeps {
 // The skills `captain install` can fetch from mblode/agent-skills. The doctor
 // only nags about the ones the configured brief actually runs, so a custom
 // pipeline (CAPTAIN_SKILLS / config) isn't warned about skills it doesn't use.
-// (/tidy runs first but isn't fetched through this bundle, so it's not here.)
-const INSTALLABLE_SKILLS = ["pr-reviewer", "pr-creator", "pr-babysitter"];
+const INSTALLABLE_SKILLS = ["tidy", "pr-creator", "pr-babysitter"];
 
 const PIPELINE_BUNDLE = "mblode/agent-skills";
 const CAPTAIN_BUNDLE = "mblode/captain";
@@ -69,13 +68,29 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
     },
   ];
 
-  for (const command of ["git", "claude"]) {
+  for (const command of ["git", "gh", "claude"]) {
     const found = deps.hasCommand(command);
     checks.push({
       detail: found ? "on PATH" : "not found",
       hint: `install ${command} and ensure it's on your PATH`,
       label: command,
       level: "required",
+      ok: found,
+    });
+  }
+
+  // The other two harnesses are optional: a task can only start on one that
+  // is installed, and the review step wants a second vendor.
+  for (const [command, why] of [
+    ["codex", "the default worker and Claude's reviewer"],
+    ["agent", "the Cursor harness (the Cursor CLI's binary)"],
+  ] as const) {
+    const found = deps.hasCommand(command);
+    checks.push({
+      detail: found ? "on PATH" : "not found",
+      hint: `install ${command} for ${why}`,
+      label: command,
+      level: "recommended",
       ok: found,
     });
   }
@@ -205,7 +220,9 @@ export const renderDoctor = (
       msg.warn(s, "ready, with optional gaps — captain will still run.")
     );
   } else {
-    lines.push(msg.ok(s, "all set — captain TIG-430 to begin."));
+    lines.push(
+      msg.ok(s, "all set — captain init <name> --repo <path> to begin.")
+    );
   }
   return {
     exitCode: requiredMissing > 0 ? 1 : 0,

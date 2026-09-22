@@ -40,14 +40,14 @@ export default defineConfig({
   overrides: [
     {
       files: [
-        // the fleet-surface decisions
-        "src/captain/view.ts",
+        // the task file, the board's grouping rule, gates and the numbers
+        "src/task.ts",
+        "src/board.ts",
+        "src/gate.ts",
+        "src/stats.ts",
         "src/captain/verdict.ts",
-        "src/captain/gain.ts",
-        // the launch-side decisions: the rubric text, argv routing, the
-        // frontier rule. Documented as pure in AGENTS.md, unenforced until now.
+        // the launch-side decisions: the rubric text and the ticket parsing
         "src/rubric.ts",
-        "src/route.ts",
         "src/issue.ts",
       ],
       rules: { "no-restricted-imports": PURE_DOMAIN_BAN },

@@ -2,16 +2,16 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { Harness } from "./task";
+
 // The post-implementation steps the self-drive brief runs between *implement*
 // and the *verifier/verdict finish*. Configurable so a setup can run its own
 // review/ship pipeline; this is the fallback when no config is present.
 //
-// ORDER IS LOAD-BEARING: /pr-reviewer runs BEFORE /tidy. Both skills document
-// the handoff — pr-reviewer is read-only and writes a report whose `Fix:` lines
-// are committable, and tidy's Phase 2 looks for a review that already ran and
-// routes its confirmed findings straight into its own apply phase. Running the
-// fixer first strands the report: nothing downstream applies it, and the PR
-// /pr-creator opens carries the review's "Must fix before push" findings.
+// ORDER IS LOAD-BEARING: /tidy runs BEFORE /pr-creator. /tidy is the review
+// and the fix in one pass (it absorbed the retired /pr-reviewer: see
+// agent-skills maintenance/retired-names.tsv), so the PR /pr-creator opens
+// already carries the fixes rather than the findings.
 //
 // An entry is either a `/skill` token (rendered as "Run /skill.") or a plain
 // English instruction rendered verbatim as its own step. Prose is what makes a
@@ -20,10 +20,9 @@ import { join } from "node:path";
 // cannot be skipped teaches agents to argue exemptions instead (the same reason
 // the rubric has an `na` state and /security-review was reverted).
 export const DEFAULT_SKILLS = [
-  "/pr-reviewer",
   "/tidy",
   "If the diff touches user-facing UI, run /product-design then /ui-design, and iterate between them until both the states and the visual are right.",
-  "If the diff changes a rendered page or component, run /visual-qa before finishing.",
+  "If the diff changes a rendered page or component, run /ui-verification before finishing.",
   "/pr-creator",
   "/pr-babysitter",
 ];
@@ -58,21 +57,32 @@ export const DEFAULT_AGENT_ENV: Record<string, string> = {
   VITEST_MAX_THREADS: "2",
 };
 
-// The model + effort every fleet agent launches on (claude `--model`/`--effort`).
-// Pinned so an agent never inherits the driver's ambient model/effort (a driver on
-// a cheap/fast model would silently spawn the whole fleet on it). `default` resolves
-// to the machine's configured default model; `high` is the standard fleet effort.
-// Override per setup via config (`.model`/`.effort`) or env (`CAPTAIN_MODEL`/
-// `CAPTAIN_EFFORT`).
-export const DEFAULT_MODEL = "default";
-export const DEFAULT_EFFORT = "high";
+// Each harness's binary, default model and effort, used when a task leaves
+// them blank. `default` means no model flag: the harness picks its own.
+// Workers default to the cheaper tier on purpose: routine tasks are saturated
+// at medium effort, and you pick a frontier model per task in the five seconds
+// it takes to read its decision card. Codex pins GPT-6 Sol (22 Sep 2026: about
+// half its predecessor's mistakes at $2/$10 per M tokens) so a worker never
+// inherits whatever the CLI's own default happens to be. The Cursor CLI's
+// binary is `agent`; older installs call it `cursor-agent`. Override any of
+// these per harness in config:
+//   { "harness": { "codex": { "model": "gpt-6-luna", "effort": "low" },
+//                  "cursor": { "bin": "cursor-agent" } } }
+export interface HarnessDefaults {
+  bin: string;
+  model: string;
+  effort: string;
+}
 
-// The coding agent every fleet launch runs. `claude` (Claude Code) is the
-// default and the only one wired into the plan-gate/approve flow; `codex` is a
-// best-effort alternative (no plan mode, so no approve step — the agent drives
-// straight from the brief). Override via config (`.agent`) or env
-// (`CAPTAIN_AGENT`), or per-invocation with `start --agent <name>`.
-export const DEFAULT_AGENT = "claude";
+export const DEFAULT_HARNESS: Record<Harness, HarnessDefaults> = {
+  claude: { bin: "claude", effort: "high", model: "default" },
+  codex: { bin: "codex", effort: "medium", model: "gpt-6-sol" },
+  cursor: { bin: "agent", effort: "", model: "default" },
+};
+
+// A review reads the whole PR cold, so it runs one effort level above a
+// routine worker by default.
+export const REVIEW_EFFORT = "high";
 
 // Where the global config file lives: an explicit CAPTAIN_CONFIG wins, else the
 // XDG config dir ($XDG_CONFIG_HOME or ~/.config) under captain/. Deliberately
@@ -217,26 +227,25 @@ export const loadAgentEnv = (
   );
 };
 
-// Resolve the fleet model, fail-safe: env override (CAPTAIN_MODEL, trimmed) >
-// config file `.model` > DEFAULT_MODEL. Passed to claude as `--model`.
-export const loadModel = (env: NodeJS.ProcessEnv = process.env): string =>
-  loadStringSetting(env, "CAPTAIN_MODEL", "model", DEFAULT_MODEL);
+// A binary lands unquoted at the front of the launch command, so only a plain
+// command name or path is accepted; anything else falls back to the default.
+const safeBin = (value: string | null): string | null =>
+  value && /^[\w./-]+$/u.test(value) ? value : null;
 
-// Resolve the fleet effort, fail-safe: env override (CAPTAIN_EFFORT, trimmed) >
-// config file `.effort` > DEFAULT_EFFORT. Passed to claude as `--effort`.
-export const loadEffort = (env: NodeJS.ProcessEnv = process.env): string =>
-  loadStringSetting(env, "CAPTAIN_EFFORT", "effort", DEFAULT_EFFORT);
-
-// Collapse any user-supplied agent name (flag, env, or config) to a launchable
-// one: anything but `codex` degrades to the default `claude`, so a typo never
-// silently launches an unknown binary. The ONE place the rule lives — the
-// config loader below and the runner's --agent flag path both call it.
-export const normalizeAgent = (value: string): string =>
-  value.trim().toLowerCase() === "codex" ? "codex" : DEFAULT_AGENT;
-
-// Resolve the fleet agent, fail-safe: env override (CAPTAIN_AGENT) > config file
-// `.agent` > DEFAULT_AGENT, normalised via normalizeAgent.
-export const loadAgent = (env: NodeJS.ProcessEnv = process.env): string =>
-  normalizeAgent(
-    loadStringSetting(env, "CAPTAIN_AGENT", "agent", DEFAULT_AGENT)
-  );
+// Resolve one harness's binary, default model and effort, fail-safe: config
+// file `.harness.<name>` fields win over DEFAULT_HARNESS; anything malformed is
+// ignored.
+export const loadHarnessDefaults = (
+  harness: Harness,
+  env: NodeJS.ProcessEnv = process.env
+): HarnessDefaults => {
+  const section = (
+    readConfig(env) as { harness?: Record<string, unknown> } | null
+  )?.harness?.[harness];
+  const fallback = DEFAULT_HARNESS[harness];
+  return {
+    bin: safeBin(parseStringField(section, "bin")) ?? fallback.bin,
+    effort: parseStringField(section, "effort") ?? fallback.effort,
+    model: parseStringField(section, "model") ?? fallback.model,
+  };
+};

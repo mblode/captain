@@ -1,43 +1,35 @@
 import { DEFAULT_SKILLS } from "./config";
-import { PLAN_RELPATH, RUBRIC_RELPATH } from "./rubric";
-import type { Issue } from "./types";
+import { PLAN_RELPATH, REVIEW_RELPATH, RUBRIC_RELPATH } from "./rubric";
+import type { Harness, Task } from "./task";
 
-export const renderPrompt = (
-  issue: Issue | undefined,
-  displayId: string,
-  // the issue source, for the brief's opening line (Linear or donebear). The
-  // rest of the context is source-agnostic — every source maps into the neutral
-  // Issue shape upstream (linear.ts / donebear.ts).
-  source = "Linear"
-): string => {
-  const identifier = issue?.identifier ?? displayId;
-  const title = issue?.title ? `: ${issue.title}` : "";
-  return (
-    `Work on ${source} issue ${identifier}${title}.\n\n` +
-    `Read \`${RUBRIC_RELPATH}\` before planning: it is the complete authoritative ` +
-    "issue contract and your definition of done. Do not edit it."
-  );
-};
+// The brief's opening: which task, and where its contract lives.
+export const renderPrompt = (task: Pick<Task, "id" | "title">): string =>
+  `Work on task ${task.id.toUpperCase()}${task.title ? `: ${task.title}` : ""}.\n\n` +
+  `Read \`${RUBRIC_RELPATH}\` before planning: it is the complete authoritative ` +
+  "task contract and your definition of done. Do not edit it.";
 
 interface PromptExtras {
-  // include the self-drive workflow section (fan-out briefs set this; Captain
-  // has no watcher — the agent drives its own pipeline end to end)
+  // include the self-drive workflow section (every worker brief sets this;
+  // there is no watcher — the agent drives its own pipeline end to end)
   workflow?: boolean;
   // the configured skills run between *implement* and the verifier/verdict
   // finish (empty/undefined → DEFAULT_SKILLS)
   skills?: string[];
-  // worktree-relative path to the rubric written at fan-out
+  // worktree-relative path to the rubric `captain start` writes
   rubricPath?: string;
-  // the injected excerpt of the per-repo memory file (empty → section omitted)
+  // the injected excerpt of the project's memory file (empty → section omitted)
   memory?: string;
   // absolute path agents append end-of-run learnings to
   memoryPath?: string;
   // the data-scope guardrail (empty/undefined → section omitted)
   dataScope?: string;
-  // which agent the brief launches on. claude (default) is gated: it starts in
-  // plan mode and waits for plan approval. codex has no plan mode/gate, so its
-  // plan step must NOT tell it to wait for an approval that can never arrive.
-  agent?: string;
+  // which harness runs the brief. Only claude has AskUserQuestion; codex and
+  // cursor print a blocking question and stop instead.
+  harness?: Harness;
+  // started in plan mode, waiting for a human to approve the plan (claude only).
+  // An ungated brief must NOT tell the agent to wait for an approval that can
+  // never arrive.
+  gated?: boolean;
 }
 
 // The sections appended after the issue context: the self-drive workflow (the
@@ -89,32 +81,32 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       'deviating from it, append what changed and why under a "## Deviations" heading ' +
       "in that same file rather than rewriting the plan — the plan above it is the " +
       "record of what was approved, and a verifier grades the diff against both.";
-    // Agent-aware, same as the plan steps: codex has no AskUserQuestion, and
-    // naming a tool it cannot call while forbidding its only fallback leaves it
-    // no legal move. A stopped codex agent is what captain reads as needing a
-    // human anyway, so stopping IS the instruction there.
-    const blockedSteps =
-      extras.agent === "codex"
-        ? [
-            "If you are ever blocked on a decision only a human can make, print the question and",
-            "stop. Never guess and never continue past it — captain surfaces a stopped agent as",
-            "needing input. Otherwise keep moving to the next step on your own.",
-          ]
-        : [
-            "If you are ever blocked on a decision only a human can make, surface it via the",
-            "AskUserQuestion tool and wait for the answer — never guess, and never just print the",
-            "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
-          ];
-    const planSteps =
-      extras.agent === "codex"
-        ? [
-            `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
-            `2. Before you touch code, ${planStep} (This session has no plan-approval gate — do not stop to wait for one.)`,
-          ]
-        : [
-            `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
-            `2. Once the plan is approved, ${planStep}`,
-          ];
+    // Harness-aware: only claude has AskUserQuestion, and naming a tool the
+    // agent cannot call while forbidding its only fallback leaves it no legal
+    // move. A stopped agent is what captain reads as needing a human anyway, so
+    // stopping IS the instruction for codex and cursor.
+    const canAsk = (extras.harness ?? "claude") === "claude";
+    const gated = canAsk && extras.gated === true;
+    const blockedSteps = canAsk
+      ? [
+          "If you are ever blocked on a decision only a human can make, surface it via the",
+          "AskUserQuestion tool and wait for the answer — never guess, and never just print the",
+          "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
+        ]
+      : [
+          "If you are ever blocked on a decision only a human can make, print the question and",
+          "stop. Never guess and never continue past it — captain surfaces a stopped agent as",
+          "needing input. Otherwise keep moving to the next step on your own.",
+        ];
+    const planSteps = gated
+      ? [
+          `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
+          `2. Once the plan is approved, ${planStep}`,
+        ]
+      : [
+          `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
+          `2. Before you touch code, ${planStep} (This session has no plan-approval gate — do not stop to wait for one.)`,
+        ];
     out += "\n<workflow>\n";
     out += [
       "You own this ticket end to end: drive every step yourself, in order. The only",
@@ -150,9 +142,10 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       'rubric\'s "Verdict" section specifies. Captain will not mark this worktree ' +
       "PR-ready without a passing verdict.\n";
     out +=
-      "Once the verdict is written your work on this ticket is complete — stop and wait; the " +
-      "captain driver sees the verdict on its next `captain status` and owns the merge decision. " +
-      "Do not merge or open further work yourself.\n";
+      "Once the verdict is written, stop and wait. Captain sees the verdict on its next " +
+      "`captain status`, has another vendor review the PR, and may send you review findings " +
+      "or CI failures to fix: fix them, re-verify, and rewrite the verdict. Never merge the " +
+      "PR or start other work yourself.\n";
     out += "</finishing-protocol>\n";
   }
 
@@ -180,3 +173,28 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
 
   return out;
 };
+
+// The brief for the cross-vendor reviewer: a different model family reads the
+// PR cold and writes a pass/fail file the board reads. It never edits code, so
+// a review can't quietly become a second implementation.
+export const renderReviewPrompt = (
+  task: Pick<Task, "id" | "title">,
+  prUrl: string
+): string =>
+  [
+    `Review the pull request for task ${task.id.toUpperCase()}${task.title ? `: ${task.title}` : ""}: ${prUrl}`,
+    "",
+    `You are the second reviewer, from a different model vendor than the author. Read \`${RUBRIC_RELPATH}\` (the contract) and \`${PLAN_RELPATH}\` if it exists, then the full diff (\`gh pr diff\`).`,
+    "",
+    "Do not edit, commit, or push anything. Your job is judgment, not implementation.",
+    "",
+    "Look for what would make you block the merge:",
+    "- the diff does not do what the contract asks, or does more than it asks",
+    "- a bug, a missing error path, a test that cannot fail, an invented API",
+    "- a security or data-handling problem",
+    "Ignore style nits a linter would catch.",
+    "",
+    `Then write \`${REVIEW_RELPATH}\` as JSON: {"verdict": "pass" | "fail", "summary": "<one line>", "findings": ["<file:line> <problem>", ...]}.`,
+    "Fail only for findings that should block the merge. Also post the findings as one PR comment with `gh pr comment`.",
+    "Then stop.",
+  ].join("\n");

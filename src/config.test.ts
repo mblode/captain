@@ -5,17 +5,13 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_AGENT,
   DEFAULT_AGENT_ENV,
   DEFAULT_DATA_SCOPE,
-  DEFAULT_EFFORT,
-  DEFAULT_MODEL,
+  DEFAULT_HARNESS,
   DEFAULT_SKILLS,
-  loadAgent,
   loadAgentEnv,
   loadDataScope,
-  loadEffort,
-  loadModel,
+  loadHarnessDefaults,
   loadSkills,
   parseAgentEnv,
   parseDataScope,
@@ -52,14 +48,11 @@ describe("parseSkills", () => {
 const stepAt = (step: string): number => DEFAULT_SKILLS.indexOf(step);
 
 describe("DEFAULT_SKILLS order", () => {
-  // The pipeline order is a correctness property, not a preference. pr-reviewer
-  // is read-only and writes a report whose `Fix:` lines are committable; tidy's
-  // Phase 2 picks that report up and applies its confirmed findings. Reversed,
-  // the report is produced with nothing downstream to apply it and pr-creator
-  // opens the PR carrying the review's own "Must fix before push" findings.
-  it("runs /pr-reviewer before /tidy, and both before /pr-creator", () => {
-    expect(stepAt("/pr-reviewer")).toBeGreaterThanOrEqual(0);
-    expect(stepAt("/pr-reviewer")).toBeLessThan(stepAt("/tidy"));
+  // The pipeline order is a correctness property, not a preference. /tidy
+  // reviews and applies its fixes in one pass, so it must land before
+  // pr-creator opens the PR; otherwise the PR carries findings, not fixes.
+  it("runs /tidy before /pr-creator, and /pr-creator before /pr-babysitter", () => {
+    expect(stepAt("/tidy")).toBeGreaterThanOrEqual(0);
     expect(stepAt("/tidy")).toBeLessThan(stepAt("/pr-creator"));
     expect(stepAt("/pr-creator")).toBeLessThan(stepAt("/pr-babysitter"));
   });
@@ -201,73 +194,43 @@ describe("loadDataScope precedence", () => {
   });
 });
 
-describe("loadModel precedence", () => {
-  it("prefers CAPTAIN_MODEL over the config file", () => {
-    const path = writeConfig('{"model":"sonnet"}');
-    expect(loadModel({ CAPTAIN_CONFIG: path, CAPTAIN_MODEL: "  opus  " })).toBe(
-      "opus"
+describe("loadHarnessDefaults", () => {
+  it("defaults workers to the cheaper tier, with Codex pinned to GPT-6 Sol", () => {
+    const env = { CAPTAIN_CONFIG: "/no/such/captain/config.json" };
+    expect(loadHarnessDefaults("codex", env)).toEqual({
+      bin: "codex",
+      effort: "medium",
+      model: "gpt-6-sol",
+    });
+    expect(loadHarnessDefaults("claude", env).model).toBe("default");
+    // the Cursor CLI's binary is `agent`
+    expect(loadHarnessDefaults("cursor", env).bin).toBe("agent");
+  });
+
+  it("reads a harness's model and effort from the config file", () => {
+    const path = writeConfig(
+      '{"harness":{"codex":{"model":"gpt-6-luna","effort":"low"},"cursor":{"bin":"cursor-agent"}}}'
+    );
+    expect(loadHarnessDefaults("codex", { CAPTAIN_CONFIG: path })).toEqual({
+      bin: "codex",
+      effort: "low",
+      model: "gpt-6-luna",
+    });
+    expect(loadHarnessDefaults("cursor", { CAPTAIN_CONFIG: path }).bin).toBe(
+      "cursor-agent"
+    );
+    // other harnesses keep their defaults
+    expect(loadHarnessDefaults("claude", { CAPTAIN_CONFIG: path })).toEqual(
+      DEFAULT_HARNESS.claude
     );
   });
 
-  it("reads the config file when no env override is set", () => {
-    const path = writeConfig('{"model":"claude-opus-4-8[1m]"}');
-    expect(loadModel({ CAPTAIN_CONFIG: path })).toBe("claude-opus-4-8[1m]");
-  });
-
-  it("falls back to the default on an empty or missing model", () => {
-    expect(loadModel({ CAPTAIN_CONFIG: writeConfig('{"model":"  "}') })).toBe(
-      DEFAULT_MODEL
+  it("ignores blank or malformed fields", () => {
+    const path = writeConfig(
+      '{"harness":{"cursor":{"model":"  ","effort":3,"bin":"agent; rm -rf ~"}}}'
     );
-    expect(loadModel({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
-      DEFAULT_MODEL
-    );
-  });
-});
-
-describe("loadEffort precedence", () => {
-  it("prefers CAPTAIN_EFFORT over the config file", () => {
-    const path = writeConfig('{"effort":"medium"}');
-    expect(
-      loadEffort({ CAPTAIN_CONFIG: path, CAPTAIN_EFFORT: "  xhigh  " })
-    ).toBe("xhigh");
-  });
-
-  it("reads the config file when no env override is set", () => {
-    const path = writeConfig('{"effort":"max"}');
-    expect(loadEffort({ CAPTAIN_CONFIG: path })).toBe("max");
-  });
-
-  it("falls back to the default on an empty or missing effort", () => {
-    expect(loadEffort({ CAPTAIN_CONFIG: writeConfig('{"effort":""}') })).toBe(
-      DEFAULT_EFFORT
-    );
-    expect(loadEffort({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
-      DEFAULT_EFFORT
-    );
-  });
-});
-
-describe("loadAgent precedence", () => {
-  it("prefers CAPTAIN_AGENT over the config file", () => {
-    const path = writeConfig('{"agent":"claude"}');
-    expect(
-      loadAgent({ CAPTAIN_AGENT: "  CODEX  ", CAPTAIN_CONFIG: path })
-    ).toBe("codex");
-  });
-
-  it("reads the config file when no env override is set", () => {
-    const path = writeConfig('{"agent":"codex"}');
-    expect(loadAgent({ CAPTAIN_CONFIG: path })).toBe("codex");
-  });
-
-  it("degrades an unknown/typo agent to claude", () => {
-    const path = writeConfig('{"agent":"cursor"}');
-    expect(loadAgent({ CAPTAIN_CONFIG: path })).toBe(DEFAULT_AGENT);
-  });
-
-  it("falls back to the default when the file is missing", () => {
-    expect(loadAgent({ CAPTAIN_CONFIG: "/no/such/captain/config.json" })).toBe(
-      DEFAULT_AGENT
+    expect(loadHarnessDefaults("cursor", { CAPTAIN_CONFIG: path })).toEqual(
+      DEFAULT_HARNESS.cursor
     );
   });
 });

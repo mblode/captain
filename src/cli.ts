@@ -1,25 +1,30 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 
-import { Command, CommanderError, Option } from "commander";
+import { Command, CommanderError } from "commander";
 
-import {
-  approve,
-  gain,
-  parseInterval,
-  reject,
-  status,
-} from "./captain/commands";
+import { realCmux } from "./captain/control";
 import { install } from "./captain/doctor";
-import { msg, style, useColor } from "./captain/format";
+import {
+  add,
+  approve,
+  close,
+  gain,
+  init,
+  peek,
+  reject,
+  review,
+  send,
+  start,
+  status,
+} from "./commands";
+import type { Deps } from "./commands";
 import { CliError, EXIT } from "./errors";
-import { withImplicitStart } from "./route";
-import { runStart } from "./runner";
+import { msg, style, useColor } from "./format";
+import { realGithub } from "./github";
 
-// The bin runs under whatever node is first in PATH, and fnm repo pins are
-// often 18 — which lacks ES2023's toSorted. Patch it rather than ban it: the
-// codebase targets node >=24 and lints toward toSorted (unicorn/no-array-sort).
-// Safe below the imports: nothing calls toSorted at module-eval time.
+// The bin runs under whatever node is first in PATH, and repo pins are often
+// older than ES2023's toSorted. Patch it rather than ban it.
 /* eslint-disable no-extend-native, unicorn/consistent-function-scoping, unicorn/no-array-sort -- toSorted polyfill for node <20 */
 if (typeof Array.prototype.toSorted !== "function") {
   Array.prototype.toSorted = function toSorted<T>(
@@ -32,310 +37,302 @@ if (typeof Array.prototype.toSorted !== "function") {
 /* eslint-enable no-extend-native, unicorn/consistent-function-scoping, unicorn/no-array-sort */
 
 // new URL over import.meta.dirname: the latter is undefined before node 20.11,
-// and this binary regularly runs under whatever node is first in PATH.
+// and this binary runs under whatever node is first in PATH.
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf-8")
 ) as { version: string };
 
+const deps: Deps = {
+  color: useColor(process.stdout),
+  env: process.env,
+  ports: () => ({
+    cmux: realCmux(process.env),
+    github: realGithub(process.env),
+  }),
+  stdout: process.stdout,
+};
+
 const program = new Command();
 
 // MUST be called before any .command(): subcommands copy inherited settings at
-// creation time, so one registered earlier never gets the callback and keeps
-// calling process.exit() itself.
-//
-// Without this, commander's own parse failures (unknown command, unknown
-// option, missing argument) never reach an action handler and bypassed the JSON
-// contract below entirely: `captain approve --json` wrote prose to stderr and
-// left a driver's JSON.parse with an empty stdout.
+// creation time. Without it commander's own parse failures bypass the JSON
+// error contract below.
 program.exitOverride();
 
 program
   .name("captain")
-  .description("Dispatch a fleet of cmux worktrees and surface what needs you")
+  .description(
+    "One chat, a task list, and full coding harnesses in cmux worktrees"
+  )
   .version(packageJson.version)
+  .option(
+    "--project <name>",
+    "which project (default: $CAPTAIN_PROJECT, or the only one)"
+  )
   .addHelpText(
     "after",
     `
-Workflow:
-  $ captain install                      install the /captain + pipeline skills, then check setup
-  $ captain TIG-430 TIG-431              Linear issues → worktrees + agents (bare = start)
-  $ captain start TIG-430 TIG-431        the same, explicit
-  $ captain "tidy the README"            a free-form task in the current dir (no Linear)
-  $ captain TIG-430 --agent codex        launch codex instead of Claude Code (best-effort)
-  $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
-  $ captain status TIG-430 --json        one ticket/workspace, compact JSON
-  $ captain status --summary             compact: counts + only what needs you
-  $ captain status --summary --json      compact poll + reusable snapshot token
-  $ captain status --repo linkiq         one repo's worktrees only
-  $ captain approve tig-430              approve plan(s)  (or a repo, or: all)
-  $ captain approve tig-430 --note "…"   approve and record why in the ledger
-  $ captain reject tig-430 --note "…"    send a plan back with feedback
+The /captain chat runs these for you. By hand:
+  $ captain init rebuild --repo ~/code/app       a project: task list + repo + WIP limit
+  $ captain add "rebuild billing settings"       a task from a message
+  $ captain add TIG-430                          a task from a Linear or Done Bear ticket
+  $ captain start t-1 --harness codex            worktree + cmux workspace + agent
+  $ captain status                               the board: what needs you, what's ready
+  $ captain approve t-2 --note "..."             release a plan (escalate tasks)
+  $ captain send t-1 "use the existing helper"   steer a worker
+  $ captain peek t-1                             the worker's screen
+  $ captain review t-1                           the other vendor reviews the PR
+  $ captain done t-1                             close it once merged
 
-A bare first argument (a Linear issue id/URL, or a free-form task) is treated as
-"captain start …"; start then routes on it: a Linear id/URL fans out worktrees,
-anything else is a free-form task run in the current checkout. Each agent's brief
-carries the whole pipeline (plan → implement → the configured skills → verifier
-verdict); Captain keeps no state — status is derived live from cmux and the
-worktrees. You only make the gated decisions: approve plans, answer questions,
-merge. Configure the skills in ~/.config/captain/config.json (.skills) or with
-CAPTAIN_SKILLS=/tidy,/pr-creator; pick the agent with --agent / CAPTAIN_AGENT.
-Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
+Tasks live in ~/captain/<project>/tasks/*.md: plain files the chat maintains.
+Status is derived live from cmux, git, GitHub and each worktree's .captain/.`
   );
 
-// Start agents on work. A Linear issue id/URL fans out worktrees (one per
-// issue); anything else is a free-form task run in the current checkout. Both
-// hand the agent the same self-drive brief.
-program
-  .command("start")
-  .description(
-    "start agents: Linear issue id(s)/URL → worktrees, or a free-form task"
-  )
-  .argument(
-    "[input...]",
-    "Linear issue id(s)/URL, or a free-form task description"
-  )
-  .option(
-    "--print",
-    "prepare the task and print its brief without launching (not a dry-run)"
-  )
-  .option("--json", "emit JSON: { started: [...] }")
-  .option(
-    "--repo-path <path>",
-    "force the git repo (filesystem path) this start runs against"
-  )
-  // Back-compat alias for the old name; hidden so help only shows --repo-path.
-  // (status's --repo is a label FILTER, not a path — different meaning, hence
-  // the rename to keep the two unambiguous for an unattended driver.)
-  .addOption(new Option("--repo <path>", "alias for --repo-path").hideHelp())
-  .option(
-    "--name <slug>",
-    "free-form task only: workspace label (default: a slug of the task)"
-  )
-  .option(
-    "--base <ref>",
-    "Linear only: branch new worktrees off this ref instead of origin's default"
-  )
-  .option(
-    "--agent <name>",
-    "which agent to launch: claude (default) or codex (best-effort: no plan gate)"
-  )
-  .option(
-    "--force",
-    "launch issues whose blockers are still open (default: fan-out skips them, a single issue errors)"
-  )
-  .action(
-    async (
-      input: string[],
-      options: {
-        print?: boolean;
-        json?: boolean;
-        repoPath?: string;
-        repo?: string;
-        name?: string;
-        base?: string;
-        agent?: string;
-        force?: boolean;
-      }
-    ) => {
-      process.exitCode = await runStart({
-        agent: options.agent,
-        base: options.base,
-        force: Boolean(options.force),
-        json: Boolean(options.json),
-        name: options.name,
-        print: Boolean(options.print),
-        // --repo-path is canonical; --repo is the hidden legacy alias.
-        repoOverride: options.repoPath ?? options.repo,
-        tokens: input,
-      });
-    }
-  );
+const common = (): { project?: string } => ({
+  project: program.opts<{ project?: string }>().project,
+});
 
 program
-  .command("install")
-  .description(
-    "install the /captain + pipeline skills the fleet needs, then check setup"
-  )
-  .action(() => {
-    process.exitCode = install(process.stdout);
-  });
-
-program
-  .command("status")
-  .description(
-    "the one view: NEEDS YOU / IN FLIGHT / READY, with resolve commands"
-  )
-  .argument(
-    "[refs...]",
-    "ticket/workspace refs to show (space- or comma-separated)"
+  .command("init")
+  .description("create a project: a task folder tied to one repo")
+  .argument("<name>", "project name")
+  .requiredOption("--repo <path>", "the product repo worktrees branch from")
+  .option("--wip <n>", "max tasks in progress at once (default 4)")
+  .option(
+    "--bootstrap <cmd>",
+    "shell command run in each new worktree before the agent"
   )
   .option("--json", "emit JSON")
-  .option(
-    "--repo <name>",
-    "filter to one repo by LABEL, e.g. linkiq (not a path; cf. start --repo-path)"
-  )
-  .option("--needs", "only the NEEDS YOU group")
-  .option("--ready", "only the READY group")
-  .option(
-    "--summary",
-    "compact: group counts + NEEDS YOU detail only (a cheap poll)"
-  )
-  .option(
-    "--since <snapshot>",
-    "with --summary --json: return only changed:false when unchanged"
-  )
-  .option(
-    "--watch",
-    "live foreground view: re-render every --interval seconds (Ctrl-C to exit). Stateless — every tick re-derives the fleet fresh, no daemon"
-  )
-  .option(
-    "--interval <seconds>",
-    "--watch poll interval in seconds (default 5)",
-    "5"
-  )
   .action(
     (
-      refs: string[],
-      options: {
-        json?: boolean;
-        repo?: string;
-        needs?: boolean;
-        ready?: boolean;
-        summary?: boolean;
-        since?: string;
-        watch?: boolean;
-        interval?: string;
-      }
+      name: string,
+      o: { repo: string; wip?: string; bootstrap?: string; json?: boolean }
     ) => {
-      status(
+      init(
         {
-          ...options,
-          interval: parseInterval(options.interval),
-          refs: refs.length > 0 ? refs.join(",") : undefined,
+          bootstrap: o.bootstrap,
+          json: o.json,
+          name,
+          repo: o.repo,
+          wip: o.wip ? Number.parseInt(o.wip, 10) : undefined,
         },
-        process.stdout
+        deps
       );
     }
   );
 
 program
-  .command("gain")
-  .alias("audit")
-  .description(
-    "fleet telemetry, derived live: decisions ledger + fleet/verdict snapshot"
-  )
+  .command("add")
+  .description("add a task from a message or a ticket")
+  .argument("<input...>", "a message, or a Linear/Done Bear id or URL")
+  .option("--title <text>", "override the title")
+  .option("--risk <level>", "low (default) or escalate (plan approval first)")
+  .option("--harness <name>", "claude, codex (default) or cursor")
+  .option("--model <id>", "pin a model for this task")
+  .option("--effort <level>", "pin an effort for this task")
+  .option("--blocked-by <ids>", "comma-separated task ids")
   .option("--json", "emit JSON")
-  .option(
-    "--since <when>",
-    "window the decision metrics: 7d / 24h / an ISO date"
-  )
-  .option("--git", "also approximate merged-PR counts per repo via gh (opt-in)")
-  .action((options: { json?: boolean; since?: string; git?: boolean }) => {
-    gain(options, process.stdout);
+  .action(
+    async (
+      input: string[],
+      o: {
+        title?: string;
+        risk?: string;
+        harness?: string;
+        model?: string;
+        effort?: string;
+        blockedBy?: string;
+        json?: boolean;
+      }
+    ) => {
+      await add(input.join(" "), { ...common(), ...o }, deps);
+    }
+  );
+
+program
+  .command("start")
+  .description("start task(s): worktree, brief, and a harness in cmux")
+  .argument("<ids...>", "task ids")
+  .option("--harness <name>", "claude, codex or cursor (overrides the task)")
+  .option("--model <id>", "model (overrides the task)")
+  .option("--effort <level>", "effort (overrides the task)")
+  .option("--force", "start even if blocked or over the WIP limit")
+  .option("--print", "print the brief without launching anything")
+  .option("--json", "emit JSON")
+  .action(
+    async (
+      ids: string[],
+      o: {
+        harness?: string;
+        model?: string;
+        effort?: string;
+        force?: boolean;
+        print?: boolean;
+        json?: boolean;
+      }
+    ) => {
+      await start(ids, { ...common(), ...o }, deps);
+    }
+  );
+
+program
+  .command("status")
+  .description("the board, derived live")
+  .argument("[ids...]", "only these tasks")
+  .option("--all", "include closed tasks")
+  .option("--json", "emit JSON")
+  .action((ids: string[], o: { all?: boolean; json?: boolean }) => {
+    status(ids, { ...common(), ...o }, deps);
   });
 
 program
   .command("approve")
-  .description("approve plan(s): all, or comma-separated ticket names")
-  .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
-  .option(
-    "--note <text>",
-    "why: the reviewer's recommendation, recorded in the ledger"
-  )
-  .option("--json", "emit JSON: { approved, unknown, note }")
-  .action((refs: string, options: { json?: boolean; note?: string }) => {
-    approve(refs, process.stdout, undefined, {
-      json: options.json,
-      note: options.note,
-    });
+  .description("approve a task's plan")
+  .argument("<id>", "task id")
+  .option("--note <text>", "why it is safe to proceed (goes in the log)")
+  .option("--json", "emit JSON")
+  .action((id: string, o: { note?: string; json?: boolean }) => {
+    approve(id, { ...common(), ...o }, deps);
   });
 
 program
   .command("reject")
-  .description("send a plan back to planning with feedback")
-  .argument("<refs>", 'ticket name(s), comma-separated, or "all"')
+  .description("send a task's plan back with feedback")
+  .argument("<id>", "task id")
   .requiredOption("--note <text>", "what to change")
-  .option("--json", "emit JSON: { rejected, note } or { ambiguous, unknown }")
-  .action((ref: string, options: { note: string; json?: boolean }) => {
-    reject(ref, options.note, process.stdout, undefined, {
-      json: options.json,
-    });
+  .option("--json", "emit JSON")
+  .action((id: string, o: { note: string; json?: boolean }) => {
+    reject(id, { ...common(), ...o }, deps);
   });
 
-// The JSON contract on failure: when the command was invoked with --json, the
-// ONE value on stdout must be {error:{type,message}} — never prose on stderr
-// (that would leave a driver's JSON.parse with nothing). We read --json off
-// argv since the parsed options aren't in scope here.
+program
+  .command("send")
+  .description("type a message into a task's worker")
+  .argument("<id>", "task id")
+  .argument("<message...>", "what to say")
+  .option("--json", "emit JSON")
+  .action((id: string, message: string[], o: { json?: boolean }) => {
+    send(id, message.join(" "), { ...common(), ...o }, deps);
+  });
+
+program
+  .command("peek")
+  .description("show the end of a task's worker screen")
+  .argument("<id>", "task id")
+  .option("--lines <n>", "how many lines (default 40)")
+  .option("--json", "emit JSON")
+  .action((id: string, o: { lines?: string; json?: boolean }) => {
+    peek(
+      id,
+      {
+        ...common(),
+        json: o.json,
+        lines: o.lines ? Number.parseInt(o.lines, 10) : undefined,
+      },
+      deps
+    );
+  });
+
+program
+  .command("review")
+  .description("have the other vendor review a task's PR")
+  .argument("<id>", "task id")
+  .option("--harness <name>", "reviewer harness (default: the other vendor)")
+  .option("--model <id>", "reviewer model")
+  .option("--effort <level>", "reviewer effort (default high)")
+  .option("--json", "emit JSON")
+  .action(
+    async (
+      id: string,
+      o: { harness?: string; model?: string; effort?: string; json?: boolean }
+    ) => {
+      await review(id, { ...common(), ...o }, deps);
+    }
+  );
+
+program
+  .command("done")
+  .description("close a merged task")
+  .argument("<id>", "task id")
+  .option("--note <text>", "anything worth keeping")
+  .option("--json", "emit JSON")
+  .action((id: string, o: { note?: string; json?: boolean }) => {
+    close(id, "done", { ...common(), ...o }, deps);
+  });
+
+program
+  .command("drop")
+  .description("close an abandoned task")
+  .argument("<id>", "task id")
+  .option("--note <text>", "why")
+  .option("--json", "emit JSON")
+  .action((id: string, o: { note?: string; json?: boolean }) => {
+    close(id, "dropped", { ...common(), ...o }, deps);
+  });
+
+program
+  .command("gain")
+  .description("the weekly numbers: flow, decisions, cycle time")
+  .option("--since <when>", "7d / 24h / an ISO date")
+  .option("--json", "emit JSON")
+  .action((o: { since?: string; json?: boolean }) => {
+    gain({ ...common(), ...o }, deps);
+  });
+
+program
+  .command("install")
+  .description("install the /captain and pipeline skills, then check setup")
+  .action(() => {
+    process.exitCode = install(process.stdout);
+  });
+
+// The JSON contract on failure: with --json, stdout carries exactly one value,
+// {error:{type,message}}, never prose on stderr.
 const wantsJson = (): boolean => process.argv.includes("--json");
 
-// Every registered subcommand name + alias (plus commander's implicit `help`),
-// read from the registry itself so the implicit-start splice can never swallow
-// a subcommand added later.
-const knownCommands = (): ReadonlySet<string> =>
-  new Set([
-    "help",
-    ...program.commands.flatMap((c) => [c.name(), ...c.aliases()]),
-  ]);
-
-// Commander already printed help/version to stdout, or its error to stderr;
-// these carry no failure for us to report.
 const isCommanderOutput = (code: string): boolean =>
   code === "commander.helpDisplayed" ||
   code === "commander.help" ||
   code === "commander.version";
 
+const fail = (type: string, message: string, exitCode: number): void => {
+  if (wantsJson()) {
+    process.stdout.write(`${JSON.stringify({ error: { message, type } })}\n`);
+  } else {
+    process.stderr.write(
+      `${msg.err(style(useColor(process.stderr)), message)}\n`
+    );
+  }
+  process.exitCode = exitCode;
+};
+
 const main = async (): Promise<void> => {
   try {
-    await program.parseAsync(withImplicitStart(process.argv, knownCommands()));
+    await program.parseAsync(process.argv);
   } catch (error) {
-    const json = wantsJson();
-    const s = style(useColor(process.stderr));
     if (error instanceof CommanderError) {
-      if (!isCommanderOutput(error.code)) {
-        // the human hint is already on stderr; --json still owes stdout one
-        // parseable value, so a driver never gets an empty parse.
-        if (json) {
-          process.stdout.write(
-            `${JSON.stringify({ error: { message: error.message, type: error.code } })}\n`
-          );
-        }
-        // a parse failure IS a usage error; commander defaults to 1, which
-        // would give a driver two different codes for one class.
+      if (isCommanderOutput(error.code)) {
+        process.exitCode = error.exitCode;
+      } else if (wantsJson()) {
+        // commander already printed its hint to stderr
+        process.stdout.write(
+          `${JSON.stringify({ error: { message: error.message, type: error.code } })}\n`
+        );
         process.exitCode = EXIT.USAGE;
-        return;
+      } else {
+        process.exitCode = EXIT.USAGE;
       }
-      process.exitCode = error.exitCode;
       return;
     }
     if (error instanceof CliError) {
-      if (json) {
-        process.stdout.write(
-          `${JSON.stringify({ error: { message: error.message, type: error.errorType ?? "ERROR" } })}\n`
-        );
-      } else {
-        process.stderr.write(`${msg.err(s, error.message)}\n`);
-      }
-      process.exitCode = error.exitCode;
+      fail(error.errorType ?? "ERROR", error.message, error.exitCode);
       return;
     }
-    // An unexpected failure: one readable line, never a raw stack — unless
-    // CAPTAIN_DEBUG=1 asks for it.
     const detail = error instanceof Error ? error.message : String(error);
-    if (json) {
-      process.stdout.write(
-        `${JSON.stringify({ error: { message: detail, type: "UNEXPECTED" } })}\n`
-      );
-    } else {
-      process.stderr.write(`${msg.err(s, `unexpected error: ${detail}`)}\n`);
-    }
+    fail("UNEXPECTED", `unexpected error: ${detail}`, 1);
     if (process.env.CAPTAIN_DEBUG) {
       process.stderr.write(`${error instanceof Error ? error.stack : ""}\n`);
-    } else if (!json) {
-      process.stderr.write(
-        `${msg.hint(s, "set CAPTAIN_DEBUG=1 for the stack")}\n`
-      );
     }
-    process.exitCode = 1;
   }
 };
 

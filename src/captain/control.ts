@@ -35,9 +35,9 @@ export interface CmuxFeedItem {
 }
 
 // What `feed.exit_plan.reply` does with the plan, in cmux's own vocabulary.
-// Captain launches claude with --allow-dangerously-skip-permissions so the
-// agent can self-drive its whole brief unattended — "bypassPermissions" is the
-// approval that preserves that (autoAccept still stops the agent on the first
+// Captain launches gated claude with --allow-dangerously-skip-permissions so the
+// agent can self-drive its whole brief unattended once approved —
+// "bypassPermissions" is the approval that preserves that (autoAccept still stops the agent on the first
 // non-edit tool, which would strand the workspace at a prompt nobody is
 // watching). "deny" sends it back to planning, where reject's feedback lands.
 const REPLY_MODE = { approve: "bypassPermissions", reject: "deny" } as const;
@@ -68,6 +68,8 @@ export interface CmuxPort {
   replyExitPlan(requestId: string, approve: boolean): void;
   // every workspace's agent run state, keyed by workspace id (one `cmux top`)
   runStates(): Record<string, RunState>;
+  // the visible text of a workspace's terminal (what `captain peek` shows)
+  readScreen(workspaceId: string): string;
 }
 
 // What a tag row's title says → our RunState.
@@ -160,6 +162,13 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
 
   // Is cmux up? Reuses the shared reachability probe (commandExists + `ping`).
   reachable: (): boolean => cmuxReachable(env),
+
+  readScreen: (workspaceId: string): string => {
+    const raw = run("cmux", ["read-screen", "--workspace", workspaceId], {
+      env,
+    });
+    return raw.status === 0 ? raw.stdout : "";
+  },
 
   replyExitPlan: (requestId: string, approve: boolean): void => {
     if (!requestId) {
