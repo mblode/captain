@@ -1,6 +1,6 @@
 {
   "name": "cmux-captain",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "One chat that runs your coding agents locally: a task list, full harnesses in cmux worktrees, and only the decisions come back to you",
   "keywords": [
     "agents",
