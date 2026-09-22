@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
+import { style } from "../format";
 import {
   buildChecks,
   install,
@@ -14,7 +15,6 @@ import {
   renderDoctor,
 } from "./doctor";
 import type { DoctorDeps } from "./doctor";
-import { style } from "./format";
 
 const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   cmuxReachable: () => true,

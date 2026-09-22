@@ -104,7 +104,7 @@ export const mapTaskToIssue = (
 
 // Fetch a donebear task and map it into the neutral Issue. Fail-safe to
 // undefined on any failure (missing token, non-OK, GraphQL error, throw), using
-// the same source-level contract as fetchLinearIssue. The runner treats
+// the same source-level contract as fetchLinearIssue. `captain add` treats
 // undefined for a recognized issue token as a failed launch precondition.
 export const fetchDonebearTask = async (
   uuid: string,

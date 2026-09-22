@@ -1,50 +1,27 @@
 # Heartbeat
 
-How the driver re-invokes itself on a timer. Read this once per session, when a fleet
-starts running. There is no daemon and no foreground pane — each wake re-derives status
-fresh.
+How you wake yourself while workers run. There is no daemon. Each wake re-reads the
+board from scratch, so a missed wake loses nothing.
 
 ## The rung ladder
 
-Take the first available rung. **Never** skip a missing rung to "ask the human to ping me".
+Take the first rung available. Never hand polling back to the human.
 
-1. **Backgrounded sleep (default, universal).** `Bash` `sleep 210` with
-   `run_in_background: true` — the exit delivers a new turn, re-invoking the driver. No
-   gate, no expiry, survives `--resume`; proven at fleet scale. Re-fire each wake.
-2. **`CronCreate`** (if present): a `*/4 * * * *` re-prompt, but ±jitter, 7-day expiry,
-   and fresh context each tick — prefer rung 1 for anything durable.
-3. **`/loop`** (only when already inside one): the only place `ScheduleWakeup` is
-   ungated — outside it that tool hard-fails "dynamic runtime gate is off".
+1. **Backgrounded sleep (default).** `Bash` `sleep 240` with `run_in_background: true`.
+   Its exit starts a new turn. Re-arm on every wake.
+2. **`CronCreate`** (if present): `*/5 * * * *`. Each tick starts with fresh context, which
+   is fine: the board holds the state.
+3. **`/loop`** (only when already inside one).
 
-`send_later` is one-shot, not a heartbeat.
+## Each wake
 
-## What to poll
+1. `captain status --json`.
+2. Act on every `captain` row's `next` without asking.
+3. Collect `needs-you` and `ready` rows. Tell the human only when that set changed since
+   your last message. Silence is the right answer when nothing changed.
+4. If WIP freed up and there are `queued` rows the human already said yes to, start them.
+5. Re-arm.
 
-For an ordinary fleet, retain the `started[].name` refs and poll only those.
-
-- First session-preserving wake: `captain status <refs…> --summary --json`; retain its
-  opaque `snapshot`. The payload also has `counts`, `needsYou`, and `ready` — relay those
-  as returned.
-- Later wakes: the same command with `--since <snapshot>`.
-  - `changed:false` → no new fleet action; re-arm immediately.
-  - `changed:true` → returns the current `counts`, `needsYou`, and `ready` (identities of
-    rows that are verified). Relay those three fields as returned — do not compose a
-    story from them. Act, replace the snapshot, then re-arm.
-
-Plan gates in `needsYou` go through `captain approve <handle> --note "…"` (or reject).
-If that CLI errors, read the screen and report; do not click the plan menu with
-`cmux send-key` as the default. That path never writes `log.jsonl`.
-
-Captain persists nothing — the snapshot belongs to this driver session. A `CronCreate`
-wake cannot retain it, so that rung uses the first form every time.
-
-Retain any intentionally deferred plan-review overflow and drain the next bounded batch
-even when the fleet is otherwise unchanged.
-
-Omit `<refs…>` only for an explicitly fleet-wide request. Use full `--json` when every
-row is required — including the auto-pickup loop, which forbids `--summary`/`--since`
-entirely (see `auto-pickup.md`).
-
-~200–260s lets transitions accumulate. (A human watching a terminal can use
-`captain status --watch` instead; the driver cannot — a blocking foreground loop can't
-yield turns.)
+A `working` row that hasn't changed for an hour: `captain peek` it. Stuck on a menu or a
+prompt means `captain send`. An empty shell means the worker died. Its row turns
+`captain` with `next: captain start <id>`, which re-launches in the same worktree.

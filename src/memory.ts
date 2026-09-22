@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname } from "node:path";
 
-import { captainHome } from "./home";
-
-// Cross-session fleet memory: one markdown file per repo that fan-out prompts
-// consult and agents append verified learnings to. `## Rules` is the curated,
+// Cross-session fleet memory: one markdown file per project that every brief
+// consults and agents append verified learnings to. `## Rules` is the curated,
 // always-injected section (promoted by the captain skill's distill workflow);
 // `## Inbox` is where agents append raw learnings, and only its tail is injected
 // — uncurated entries age out of the window automatically, so unreviewed slop
@@ -43,32 +40,9 @@ ${RULES_HEADING}
 ${INBOX_HEADING}
 `;
 
-// Scoped per repo (worktrees of one repo share it; repos never cross-contaminate)
-// and kept OUTSIDE the worktrees so it survives `git worktree remove`.
-// CAPTAIN_MEMORY_DIR overrides the root — tests use it to stay out of real $HOME.
-//
-// Multi-repo disambiguation: keying on `basename(repoRoot)` alone collides when
-// two repos share a basename under different parents. We disambiguate with a
-// short hash of the full repoRoot, but keep returning the LEGACY bare-basename
-// path when it already exists, so existing users' memory keeps working untouched.
-export const memoryPath = (
-  repoRoot: string,
-  env: NodeJS.ProcessEnv = process.env
-): string => {
-  const base = env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory");
-  const legacy = join(base, basename(repoRoot), "learnings.md");
-  if (existsSync(legacy)) {
-    return legacy;
-  }
-  const hash = createHash("sha256").update(repoRoot).digest("hex").slice(0, 8);
-  return join(base, `${basename(repoRoot)}-${hash}`, "learnings.md");
-};
-
-export const ensureMemoryFile = (
-  repoRoot: string,
-  env: NodeJS.ProcessEnv = process.env
-): string => {
-  const path = memoryPath(repoRoot, env);
+// Create the file with its skeleton when it is absent. It lives in the project
+// folder, outside every worktree, so it survives `git worktree remove`.
+export const ensureMemoryFile = (path: string): string => {
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, SKELETON);
@@ -183,11 +157,7 @@ export const memoryExcerptOf = (content: string): string => {
 
 // The injectable excerpt; empty string when the file is missing or has nothing
 // beyond the skeleton (so the prompt section is simply omitted).
-export const readMemoryExcerpt = (
-  repoRoot: string,
-  env: NodeJS.ProcessEnv = process.env
-): string => {
-  const path = memoryPath(repoRoot, env);
+export const readMemoryExcerpt = (path: string): string => {
   if (!existsSync(path)) {
     return "";
   }

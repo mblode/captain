@@ -101,9 +101,8 @@ export const fetchOrigin = (repoRoot: string, env: NodeJS.ProcessEnv): void => {
   }
 };
 
-// Captain's issue worktree location is derivable from the repo and parsed issue
-// id alone. Keeping this formula in one place lets the runner identify a live
-// retry before fetching the issue or touching the worktree.
+// A task's worktree location is derivable from the repo and the task id alone,
+// so re-starting a task finds its existing worktree.
 export const worktreePathFor = (repoRoot: string, issueId: string): string =>
   join(dirname(repoRoot), `${basename(repoRoot)}-${issueId}`);
 
@@ -139,16 +138,6 @@ const reuseExistingWorktree = (
     worktreePath,
   };
 };
-
-// Read an already-materialized issue worktree without fetching, pruning, or
-// creating anything. Used by the runner's early retry path after cmux proves an
-// agent is actively attached to the exact derived cwd.
-export const existingIssueWorktree = (
-  repoRoot: string,
-  issueId: string,
-  env: NodeJS.ProcessEnv
-): WorktreeResult | undefined =>
-  reuseExistingWorktree(worktreePathFor(repoRoot, issueId), issueId, env);
 
 const refExists = (
   repoRoot: string,

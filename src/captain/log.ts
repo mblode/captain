@@ -1,36 +1,38 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { captainHome } from "../home";
+// The thin audit trail: one JSON line per human decision or task transition,
+// appended to <project>/log.jsonl. Append-only from any process (a truncated
+// tail line is just a bad last line; there is no reader to corrupt), greppable
+// by hand.
 
-// The thin audit trail: one JSON line per human decision or launch,
-// appended to ~/.claude/captain/log.jsonl. Append-only from any process (a
-// truncated tail line is just a bad last line; there is no reader to corrupt),
-// greppable by hand — captain keeps no other history.
+export const LOG_KINDS = [
+  "add",
+  "start",
+  "approve",
+  "reject",
+  "review",
+  "done",
+  "drop",
+] as const;
+export type LogKind = (typeof LOG_KINDS)[number];
 
 export interface LogRecord {
   ts: number;
-  kind: "approve" | "reject" | "launch";
+  kind: LogKind;
   name: string;
-  // The decision's reasoning, keyed by `kind`: on a reject, what to change (it
-  // is also delivered to the agent); on an approve, why it was safe to proceed.
-  // Optional on both — an approval carrying none is what `gain` counts as
-  // unexplained. Every reader already switches on `kind`, so one note key
-  // serves both; a second field would buy nothing (kind, note) doesn't carry.
+  // Why: on a reject, what to change (also delivered to the agent); on an
+  // approve, why it was safe to proceed; on a start, the harness and model.
   note?: string;
 }
 
 export const now = (): number => Math.floor(Date.now() / 1000);
 
-const logPath = (env: NodeJS.ProcessEnv = process.env): string =>
-  join(captainHome(env), "log.jsonl");
+const logPath = (dir: string): string => join(dir, "log.jsonl");
 
-export const appendLog = (
-  rec: LogRecord,
-  env: NodeJS.ProcessEnv = process.env
-): void => {
-  mkdirSync(captainHome(env), { recursive: true });
-  appendFileSync(logPath(env), `${JSON.stringify(rec)}\n`);
+export const appendLog = (rec: LogRecord, dir: string): void => {
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(logPath(dir), `${JSON.stringify(rec)}\n`);
 };
 
 // One LogRecord per non-empty line if its shape checks out, else skipped — the
@@ -40,19 +42,16 @@ const isLogRecord = (raw: unknown): raw is LogRecord =>
   typeof raw === "object" &&
   raw !== null &&
   typeof (raw as { ts?: unknown }).ts === "number" &&
-  ((raw as { kind?: unknown }).kind === "approve" ||
-    (raw as { kind?: unknown }).kind === "reject" ||
-    (raw as { kind?: unknown }).kind === "launch") &&
+  (LOG_KINDS as readonly unknown[]).includes(
+    (raw as { kind?: unknown }).kind
+  ) &&
   typeof (raw as { name?: unknown }).name === "string";
 
-// Read the full audit trail. This is captain's ONE gap-free history: every
-// approve/reject — and every launch, the other half of gain's launch→decision
-// latency join — was appended here, so ledger metrics are true history (the
-// fleet/verdict signals, by contrast, are a live snapshot — see gain.ts).
-export const readLog = (env: NodeJS.ProcessEnv = process.env): LogRecord[] => {
+// Read the full audit trail: the gap-free history `captain gain` counts from.
+export const readLog = (dir: string): LogRecord[] => {
   let text: string;
   try {
-    text = readFileSync(logPath(env), "utf-8");
+    text = readFileSync(logPath(dir), "utf-8");
   } catch {
     return [];
   }

@@ -1,106 +1,74 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  agentCommand,
-  claudeCommand,
-  codexCommand,
-  formatCmuxUnreachable,
-} from "./cmux";
+import { formatCmuxUnreachable, harnessCommand } from "./cmux";
+import type { LaunchSpec } from "./cmux";
 
-describe("claudeCommand", () => {
-  it("renders the pinned model/effort launch with no env prefix by default", () => {
-    const command = claudeCommand("/tmp/p/prompt.txt", "default", "high");
-    expect(command).toBe(
-      `claude --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
-    );
-  });
-
-  it("pins --name so the Claude session matches the ticket slug", () => {
-    const command = claudeCommand(
-      "/tmp/p/prompt.txt",
-      "default",
-      "high",
-      {},
-      "tst-1"
-    );
-    expect(command).toBe(
-      `claude --name 'tst-1' --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
-    );
-  });
-
-  it("prefixes the agent env so every tool the agent runs inherits it", () => {
-    const command = claudeCommand("/tmp/p/prompt.txt", "default", "high", {
-      NODE_OPTIONS: "--max-old-space-size=3072",
-      VITEST_MAX_THREADS: "2",
-    });
-    expect(command.startsWith("env ")).toBe(true);
-    expect(command).toContain("NODE_OPTIONS='--max-old-space-size=3072'");
-    expect(command).toContain("VITEST_MAX_THREADS='2'");
-    expect(command).toContain(" claude --model 'default'");
-  });
-
-  it("shell-quotes env values that carry spaces or metacharacters", () => {
-    const command = claudeCommand("/tmp/p/prompt.txt", "default", "high", {
-      NODE_OPTIONS: "--max-old-space-size=3072 --no-warnings",
-    });
-    expect(command).toContain(
-      "NODE_OPTIONS='--max-old-space-size=3072 --no-warnings'"
-    );
-  });
+const spec = (over: Partial<LaunchSpec> = {}): LaunchSpec => ({
+  effort: "high",
+  env: {},
+  gated: false,
+  harness: "claude",
+  model: "default",
+  promptPath: "/tmp/p/brief.md",
+  ...over,
 });
 
-describe("codexCommand", () => {
-  it("omits -m on the 'default' model sentinel (codex uses its own default)", () => {
-    const command = codexCommand("/tmp/p/prompt.txt", "default", "high");
-    expect(command).toBe(
-      `codex -c model_reasoning_effort='high' --dangerously-bypass-approvals-and-sandbox "$(cat '/tmp/p/prompt.txt')"`
+describe("harnessCommand", () => {
+  it("starts a gated claude task in plan mode, bypass reachable after approval", () => {
+    expect(harnessCommand(spec({ gated: true, name: "t-1-billing" }))).toBe(
+      `claude --name 't-1-billing' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/brief.md')"`
     );
   });
 
-  it("passes -m when a concrete model is configured", () => {
-    const command = codexCommand("/tmp/p/prompt.txt", "gpt-5.4", "high");
-    expect(command).toContain(
-      "codex -m 'gpt-5.4' -c model_reasoning_effort='high'"
+  it("runs an ungated claude task unattended from the start", () => {
+    const command = harnessCommand(spec());
+    expect(command).toContain("--dangerously-skip-permissions");
+    expect(command).not.toContain("--permission-mode plan");
+  });
+
+  it("passes a concrete model and omits the 'default' sentinel", () => {
+    expect(harnessCommand(spec({ model: "claude-opus-5-5[1m]" }))).toContain(
+      "--model 'claude-opus-5-5[1m]'"
     );
+    expect(harnessCommand(spec())).not.toContain("--model");
   });
 
-  it("prefixes the agent env like the claude path", () => {
-    const command = codexCommand("/tmp/p/prompt.txt", "default", "high", {
-      VITEST_MAX_THREADS: "2",
-    });
-    expect(command.startsWith("env ")).toBe(true);
-    expect(command).toContain("VITEST_MAX_THREADS='2'");
-    expect(command).toContain(" codex -c model_reasoning_effort='high'");
-  });
-});
-
-describe("agentCommand", () => {
-  it("dispatches codex to codexCommand", () => {
-    expect(agentCommand("codex", "/tmp/p/prompt.txt", "default", "high")).toBe(
-      codexCommand("/tmp/p/prompt.txt", "default", "high")
-    );
-  });
-
-  it("dispatches anything else (incl. claude) to claudeCommand", () => {
-    expect(agentCommand("claude", "/tmp/p/prompt.txt", "default", "high")).toBe(
-      claudeCommand("/tmp/p/prompt.txt", "default", "high")
-    );
-  });
-
-  it("forwards the session name to claude and leaves codex unchanged", () => {
+  it("launches codex with -m, reasoning effort and no sandbox", () => {
     expect(
-      agentCommand(
-        "claude",
-        "/tmp/p/prompt.txt",
-        "default",
-        "high",
-        {},
-        "tig-1"
+      harnessCommand(
+        spec({ effort: "medium", harness: "codex", model: "gpt-5.6-sol" })
       )
-    ).toBe(claudeCommand("/tmp/p/prompt.txt", "default", "high", {}, "tig-1"));
-    expect(
-      agentCommand("codex", "/tmp/p/prompt.txt", "default", "high", {}, "tig-1")
-    ).toBe(codexCommand("/tmp/p/prompt.txt", "default", "high"));
+    ).toBe(
+      `codex -m 'gpt-5.6-sol' -c model_reasoning_effort='medium' --dangerously-bypass-approvals-and-sandbox "$(cat '/tmp/p/brief.md')"`
+    );
+  });
+
+  it("launches cursor-agent with --force and no effort flag", () => {
+    const command = harnessCommand(
+      spec({ harness: "cursor", model: "grok-4.7-fast" })
+    );
+    expect(command).toBe(
+      `cursor-agent --model 'grok-4.7-fast' --force "$(cat '/tmp/p/brief.md')"`
+    );
+  });
+
+  it("prefixes the agent env, shell-quoted, so every tool inherits it", () => {
+    const command = harnessCommand(
+      spec({
+        env: {
+          CAPTAIN_SLOT: "2",
+          NODE_OPTIONS: "--max-old-space-size=3072 --x",
+        },
+      })
+    );
+    expect(command.startsWith("env ")).toBe(true);
+    expect(command).toContain("CAPTAIN_SLOT='2'");
+    expect(command).toContain("NODE_OPTIONS='--max-old-space-size=3072 --x'");
+  });
+
+  it("runs the project bootstrap first and only starts the agent if it passes", () => {
+    const command = harnessCommand(spec({ bootstrap: "npm ci" }));
+    expect(command.startsWith("(npm ci) && ")).toBe(true);
   });
 });
 

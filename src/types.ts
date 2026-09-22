@@ -17,19 +17,14 @@ export interface ParsedIssue {
   slug: string;
 }
 
-export interface ResolvedRepo {
-  repoRoot: string;
-}
-
 export interface WorktreeResult {
   branch: string;
   worktreePath: string;
 }
 
-// The source-neutral issue contract the whole pipeline consumes (worktree
-// naming, rubric, prompt). Linear issues and donebear tasks both map INTO this
-// (see linear.ts / donebear.ts); nothing downstream knows which source it came
-// from — only the brief's source label differs.
+// The source-neutral issue contract a ticket is fetched into. Both
+// Linear issues and donebear tasks map INTO this (see linear.ts /
+// donebear.ts); `captain add` turns it into a task file.
 export interface Issue {
   identifier: string;
   title?: string | null;
@@ -124,42 +119,4 @@ export interface DonebearGraphqlResponse {
     task?: DonebearTask | null;
     taskChecklistItems?: { nodes?: DonebearChecklistItem[] | null } | null;
   };
-}
-
-export interface CliOptions {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  print?: boolean;
-  repoOverride?: string;
-  // branch new worktrees off this ref instead of origin's default branch
-  base?: string;
-  // launch even when an issue's blockers are still open (without it, fan-out
-  // skips the blocked ticket and a single-issue start errors)
-  force?: boolean;
-  // machine output: emit a single {started:[...]} JSON value, suppress hints
-  json?: boolean;
-  stdout?: NodeJS.WritableStream;
-  stderr?: NodeJS.WritableStream;
-  // which coding agent to launch: claude (default) or codex; overrides config
-  agent?: string;
-  tokens: string[];
-}
-
-// `captain dispatch` — a free-form task with no Linear issue and no worktree,
-// run in the current checkout.
-export interface DispatchOptions {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  print?: boolean;
-  repoOverride?: string;
-  // machine output: emit a single {started:[...]} JSON value, suppress hints
-  json?: boolean;
-  stdout?: NodeJS.WritableStream;
-  stderr?: NodeJS.WritableStream;
-  // the plain-text task the agent should drive to PR-ready
-  task: string;
-  // workspace label (slugified); defaults to a slug of the task
-  name?: string;
-  // which coding agent to launch: claude (default) or codex; overrides config
-  agent?: string;
 }

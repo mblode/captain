@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { Harness } from "./task";
+
 // The post-implementation steps the self-drive brief runs between *implement*
 // and the *verifier/verdict finish*. Configurable so a setup can run its own
 // review/ship pipeline; this is the fallback when no config is present.
@@ -55,21 +57,20 @@ export const DEFAULT_AGENT_ENV: Record<string, string> = {
   VITEST_MAX_THREADS: "2",
 };
 
-// The model + effort every fleet agent launches on (claude `--model`/`--effort`).
-// Pinned so an agent never inherits the driver's ambient model/effort (a driver on
-// a cheap/fast model would silently spawn the whole fleet on it). `default` resolves
-// to the machine's configured default model; `high` is the standard fleet effort.
-// Override per setup via config (`.model`/`.effort`) or env (`CAPTAIN_MODEL`/
-// `CAPTAIN_EFFORT`).
-export const DEFAULT_MODEL = "default";
-export const DEFAULT_EFFORT = "high";
-
-// The coding agent every fleet launch runs. `claude` (Claude Code) is the
-// default and the only one wired into the plan-gate/approve flow; `codex` is a
-// best-effort alternative (no plan mode, so no approve step — the agent drives
-// straight from the brief). Override via config (`.agent`) or env
-// (`CAPTAIN_AGENT`), or per-invocation with `start --agent <name>`.
-export const DEFAULT_AGENT = "claude";
+// Each harness's default model and effort, used when a task leaves them blank.
+// `default` means no model flag: the harness picks its own. Workers default to
+// the cheaper tier on purpose: routine tasks are saturated at medium effort,
+// and you pick a frontier model per task in the five seconds it takes to read
+// its decision card. Override per harness in config:
+//   { "harness": { "codex": { "model": "gpt-5.6-sol", "effort": "medium" } } }
+export const DEFAULT_HARNESS: Record<
+  Harness,
+  { model: string; effort: string }
+> = {
+  claude: { effort: "high", model: "default" },
+  codex: { effort: "medium", model: "default" },
+  cursor: { effort: "", model: "default" },
+};
 
 // Where the global config file lives: an explicit CAPTAIN_CONFIG wins, else the
 // XDG config dir ($XDG_CONFIG_HOME or ~/.config) under captain/. Deliberately
@@ -214,26 +215,19 @@ export const loadAgentEnv = (
   );
 };
 
-// Resolve the fleet model, fail-safe: env override (CAPTAIN_MODEL, trimmed) >
-// config file `.model` > DEFAULT_MODEL. Passed to claude as `--model`.
-export const loadModel = (env: NodeJS.ProcessEnv = process.env): string =>
-  loadStringSetting(env, "CAPTAIN_MODEL", "model", DEFAULT_MODEL);
-
-// Resolve the fleet effort, fail-safe: env override (CAPTAIN_EFFORT, trimmed) >
-// config file `.effort` > DEFAULT_EFFORT. Passed to claude as `--effort`.
-export const loadEffort = (env: NodeJS.ProcessEnv = process.env): string =>
-  loadStringSetting(env, "CAPTAIN_EFFORT", "effort", DEFAULT_EFFORT);
-
-// Collapse any user-supplied agent name (flag, env, or config) to a launchable
-// one: anything but `codex` degrades to the default `claude`, so a typo never
-// silently launches an unknown binary. The ONE place the rule lives — the
-// config loader below and the runner's --agent flag path both call it.
-export const normalizeAgent = (value: string): string =>
-  value.trim().toLowerCase() === "codex" ? "codex" : DEFAULT_AGENT;
-
-// Resolve the fleet agent, fail-safe: env override (CAPTAIN_AGENT) > config file
-// `.agent` > DEFAULT_AGENT, normalised via normalizeAgent.
-export const loadAgent = (env: NodeJS.ProcessEnv = process.env): string =>
-  normalizeAgent(
-    loadStringSetting(env, "CAPTAIN_AGENT", "agent", DEFAULT_AGENT)
-  );
+// Resolve one harness's default model and effort, fail-safe: config file
+// `.harness.<name>` fields win over DEFAULT_HARNESS; anything malformed is
+// ignored.
+export const loadHarnessDefaults = (
+  harness: Harness,
+  env: NodeJS.ProcessEnv = process.env
+): { model: string; effort: string } => {
+  const section = (
+    readConfig(env) as { harness?: Record<string, unknown> } | null
+  )?.harness?.[harness];
+  return {
+    effort:
+      parseStringField(section, "effort") ?? DEFAULT_HARNESS[harness].effort,
+    model: parseStringField(section, "model") ?? DEFAULT_HARNESS[harness].model,
+  };
+};

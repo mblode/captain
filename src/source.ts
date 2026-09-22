@@ -8,14 +8,14 @@ import { fetchLinearIssue } from "./linear";
 import type { Issue, ParsedIssue } from "./types";
 
 // One issue source (Linear, donebear). The single owner of "which source claims
-// this token, and how do I parse + fetch it" — so routing files (route.ts,
-// runner.ts, cmux.ts) ask the registry instead of enumerating sources, and
+// this token, and how do I parse + fetch it" — so `captain add` asks the
+// registry instead of enumerating sources, and
 // adding a source touches only this file.
 interface IssueSource {
   // the brief/rubric label ("Linear" | "donebear")
   name: string;
   // environment variable required to fetch this source; diagnostics stay at
-  // the source seam so adding a source does not add a runner branch.
+  // the source seam so adding a source does not add a command branch.
   credential: string;
   // does this source claim the token? (a bare id/URL/UUID, no trailing words)
   claims(token: string): boolean;

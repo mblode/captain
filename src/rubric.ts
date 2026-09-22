@@ -6,6 +6,10 @@ import type { Issue } from "./types";
 // the worktree root. The watcher polls this exact path (see captain/verdict.ts).
 export const VERDICT_RELPATH = ".captain/verdict.json";
 export const RUBRIC_RELPATH = ".captain/rubric.md";
+// The cross-vendor reviewer's pass/fail, written by `captain review`'s agent.
+export const REVIEW_RELPATH = ".captain/review.json";
+// The brief each worker was launched with, kept for `captain` to re-read.
+export const BRIEF_RELPATH = ".captain/brief.md";
 // The approved plan, written by the AGENT once the plan gate clears (captain
 // never sees the plan text — claude presents it in plan mode, where it cannot
 // write files, and captain only replies to the feed item). Git-ignored with the
