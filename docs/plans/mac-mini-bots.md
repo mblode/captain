@@ -45,7 +45,7 @@ Why this split:
 | Webhook triggers | Yes, HMAC, GitHub native | Yes, bearer only (relay for GitHub); Gmail Pub/Sub | Custom webhook channel (research preview) | Yes, bearer `crsr_` key, no signature |
 | Computer use on the Mac | `computer_use` via cua-driver, background, no cursor steal | `computer` tool via Peekaboo or CUA in OpenClaw.app | Claude Code computer use (Pro/Max, preview) | Its own cloud Linux VM |
 | Coding in cmux | Custom skill (Captain) | Custom skill (Captain); ACP spawns headless, not in cmux | Captain, already | Cursor Cloud Agents, not your Mac |
-| Model for the bot's own brain | Any; ChatGPT OAuth supported; Claude OAuth only as Max extra usage | Any; API key, Claude CLI login, setup-token | Your Max plan, first-party | Undisclosed |
+| Model for the bot's own brain | Any; ChatGPT OAuth; your Claude plan through the official `claude` CLI (DirectSDK plugin, experimental) | Any; API key, Claude CLI login, setup-token | Your Max plan, first-party | Undisclosed |
 | Security record in 2026 | 5 CVEs, fixed; deny-by-default, HMAC required, smart approvals | ClawBleed (CVSS 8.8, exploited), a 9.9 auth bypass, 341+ malicious ClawHub skills; sandbox off by default | Smallest surface | Cursor's |
 | Churn | High (patch releases roll up hundreds of PRs) | Higher: 2.0 broke gateways and automations | Low | n/a |
 
@@ -115,8 +115,22 @@ To take over a worker yourself, open it from the Claude app: run `claude remote-
 ### Which plan pays for what
 
 - **Workers** run the official `claude`, `codex` and `agent` CLIs, logged in with Claude Max, ChatGPT Pro and Cursor Ultra. That is first-party use, the same as Captain today.
-- **The bots' own brain** should not be Claude OAuth: in Hermes it only works on Max and bills as extra usage. Use ChatGPT OAuth (`hermes auth add openai-codex`, supported) or an Anthropic API key. Give each bot its own login; Hermes does not copy OAuth between bots.
-- Anthropic's third-party harness policy moved four times this year (blocked 4 Apr, credits announced 13 May, paused 15 Jun, still paused as of mid-September). Check it again before relying on subscription auth in anything but the official CLIs. ([VentureBeat](https://venturebeat.com/technology/anthropic-reinstates-openclaw-and-third-party-agent-usage-on-claude-subscriptions-with-a-catch), [The New Stack](https://thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/))
+- **The bots' own brain can run on your Claude plan** through the `claude-subscription-directsdk` plugin (v0.3.0, 23 Sep 2026, experimental). It spawns the official `claude` CLI per request, so Hermes never holds the OAuth token and usage draws on the plan's Agent SDK allowance at the same rate as `claude -p`. Hermes's own tools, approvals and compaction still apply; Claude Code's native tools are disabled. ([plugin docs](https://hermes-agent.nousresearch.com/docs/plugins/claude-subscription-directsdk))
+
+  ```bash
+  hermes plugins install claude-subscription-directsdk   # Hermes 0.21.4+
+  claude auth login
+  hermes model   # choose "Claude Subscription DirectSDK (Experimental)"
+  ```
+
+  What it costs you:
+  - **No parallel tool calls and no streaming.** Tool batches arrive only after the whole turn finishes, so a bot answers in one lump.
+  - **Per-turn history replay.** There is no parked native session, and the docs measured it using more allowance than the interactive TUI for the same task. The page says both "about 1.7x" and 2.36 vs 2.22 list-price units, so treat the exact overhead as **[unverified]**.
+  - **One Claude login for every bot.** The plugin uses whichever account `claude` is logged into, with no isolation per bot, and your coding workers share the same weekly limits.
+  - **Turn off extra usage** on the Claude account, or overage bills silently. The plugin has no API-key fallback.
+
+  So: put the **Captain** bot on it (it mostly runs `captain` commands, which suits one-lump replies), keep workers on the same plan, and watch the weekly limit in `captain status`. Put **Ops** on ChatGPT OAuth (`hermes auth add openai-codex`) or an API key if the shared Claude limit gets tight. Hermes does not copy provider OAuth logins such as ChatGPT's between bots, so each of those bots logs in separately.
+- Anthropic's third-party harness policy moved four times this year (blocked 4 Apr, credits announced 13 May, paused 15 Jun, still paused as of mid-September). The DirectSDK plugin is exactly the case that policy is about: a third-party harness spending the subscription through the official CLI. If Anthropic revives the separate Agent SDK credit, the Captain bot's brain moves onto that credit or an API key; workers are unaffected. ([VentureBeat](https://venturebeat.com/technology/anthropic-reinstates-openclaw-and-third-party-agent-usage-on-claude-subscriptions-with-a-catch), [The New Stack](https://thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/))
 
 ## Phases
 
@@ -134,6 +148,7 @@ Done when: from the phone on cellular you can see the screen, and start and stee
 **Phase 1: one bot on Telegram.**
 - [ ] Install Hermes, `hermes gateway install`, `hermes doctor`. Dashboard bound to loopback or the tailnet IP with auth.
 - [ ] Create the **Captain** bot (Bot Mode), a BotFather token, your Telegram user ID as the only allowed user, approvals `manual` to start.
+- [ ] Install `claude-subscription-directsdk`, turn off extra usage on the Claude account, and set the Captain bot's model to it.
 - [ ] Write the `captain` skill; test add, start, status, approve end to end from Telegram.
 - [ ] cmux automation on `agent.needs_input` → Hermes webhook → Telegram card.
 
