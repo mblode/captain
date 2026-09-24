@@ -69,7 +69,7 @@ Sources: [Hermes docs](https://hermes-agent.nousresearch.com/docs/), [OpenClaw d
 ### Tailscale
 
 - Standalone macOS variant, MagicDNS on, the Mac tagged `tag:macmini`, grants so only your devices reach ports 22 (SSH), 21118 (RustDesk direct IP) and the Hermes dashboard on 9119.
-- **Funnel exactly one path** to the Hermes webhook listener (port 8644), for GitHub: `tailscale funnel --bg --set-path /hooks/github http://127.0.0.1:8644` (check the flags with `tailscale funnel --help`). Never funnel the dashboard, the API server or a shell. Funnel needs the `funnel` node attribute scoped to the tag. ([Funnel](https://tailscale.com/docs/features/tailscale-funnel))
+- **Funnel exactly one path** to the Hermes webhook listener (port 8644), for GitHub. One host gateway serves every profile and routes bound to a profile live at `/p/<profile>/webhooks/<route>`, so: `tailscale funnel --bg --set-path /p/captain-bot/webhooks/github http://127.0.0.1:8644/p/captain-bot/webhooks/github`. Never funnel the dashboard, the API server or a shell. Funnel needs the `funnel` node attribute scoped to the tag. ([Funnel](https://tailscale.com/docs/features/tailscale-funnel))
 
 ### The screen
 
@@ -102,7 +102,7 @@ The Hermes skill is short because Captain holds the logic. It teaches the bot th
 
 1. A message or webhook arrives. `captain add "<task>"` (or `captain add TIG-430`). Reply with one decision card: the tasks, harness and model per task, which are `escalate`.
 2. On yes, `captain start <id> --harness claude|codex|cursor`. This opens the cmux workspace with the real CLI logged into your plan. Reply with a card like Grok Bot's Cursor card: title, branch, status, and a link to the session.
-3. The board is `captain status --json`, never the bot's memory. A cron routine every 15 minutes, `wakeAgent:false` unless the board changed, costs nothing when nothing moved.
+3. The board is `captain status --json`, never the bot's memory. A cron routine every 15 minutes with a monitor script (the actionable rows; Hermes runs the bot only when that output changes) costs nothing when nothing moved.
 4. Plan gates: `captain approve|reject <id> --note` from the Slack Approve/Reject buttons in the task's thread. Steering: `captain send <id> "<msg>"`.
 5. `ready` rows go to you with the PR link. You merge.
 

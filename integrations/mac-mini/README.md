@@ -5,12 +5,12 @@ A Grok Bot–style setup on your own Mac mini. A Hermes bot named Captain lives 
 ```
 Slack #captain ─ Socket Mode ─┐
                               ▼
-Mac mini ─ Hermes gateway (profile captain-bot, brain on your Claude plan)
+Mac mini ─ Hermes host gateway ─ profile captain-bot (brain on your Claude plan)
              ├─ skill captain ── captain add/start/status/approve/send ── cmux + worktree + claude|codex
              ├─ routine every 15m (board-watch monitor: no tokens when the board is unchanged)
              ├─ routines: weekday morning summary, Friday numbers
-             ├─ webhook /webhooks/cmux   ◄── cmux automation: a worker needs input
-             └─ webhook /webhooks/github ◄── Tailscale Funnel ◄── GitHub (HMAC)
+             ├─ /p/captain-bot/webhooks/cmux   ◄── cmux automation: a worker needs input
+             └─ /p/captain-bot/webhooks/github ◄── Tailscale Funnel ◄── GitHub (HMAC)
 Phone ─ Claude app (Remote Control) · RustDesk over Tailscale · Slack
 ```
 
@@ -35,13 +35,13 @@ Re-run a single step with `./setup.sh <step>`. After you create the Slack app, `
 | `logins` | Checks `claude`, `codex` and `gh` are logged in (workers use your plans) |
 | `captain` | `npm i -g cmux-captain`, `captain install` |
 | `secrets` | One random HMAC secret per webhook route in `~/.config/captain-bot/secrets.env` (mode 600) |
-| `hermes` | Installs Hermes and the `claude-subscription-directsdk` plugin |
-| `bot` | Creates the `captain-bot` profile in Bot Mode: `SOUL.md`, the `captain` skill with Captain's playbook, the Slack tokens you paste, and config (Claude plan model, manual approvals, Slack threads, the two routes) |
+| `hermes` | Installs Hermes |
+| `bot` | Creates the `captain-bot` profile in Bot Mode and installs the Claude plan plugin into it (plugins are per profile): `SOUL.md`, the `captain` skill with Captain's playbook, the Slack tokens you paste, and profile config (Claude plan model, manual approvals, Slack threads). Adds the `github` and `cmux` routes to the host gateway's config, bound to `captain-bot` |
 | `cmux` | Adds a rule to `~/.cmuxterm/automations.json`: when a Captain worker (`t-…` workspace) needs input, sign the event and post it to the bot |
-| `remote-control` | A LaunchAgent running `claude remote-control --spawn worktree` in `~/code`, and Remote Control on for every session |
+| `remote-control` | A LaunchAgent running `claude remote-control --spawn session` in `~/code`, with the absolute `claude` path and a shim-free PATH baked in (launchd's PATH is minimal), and Remote Control on for every session |
 | `routines` | Board check every 15 min, weekday 8:45 summary, Friday 4:45 numbers |
-| `gateway` | `hermes gateway install` for the profile (launchd), then `hermes doctor` |
-| `funnel` | Publishes only `/webhooks/github` through Tailscale Funnel (asks first) |
+| `gateway` | `hermes gateway install` from the default profile: one host gateway (launchd) serves every profile. Then `hermes doctor` |
+| `funnel` | Publishes only `/p/captain-bot/webhooks/github` through Tailscale Funnel (asks first) |
 
 The profile is `captain-bot`, not `captain`: Hermes makes a shell alias per profile, and `captain` would shadow the Captain CLI.
 
@@ -52,6 +52,7 @@ The profile is `captain-bot`, not `captain`: Hermes makes a shell alias per prof
 | `hermes/captain-bot/SOUL.md` | `~/.hermes/profiles/captain-bot/SOUL.md` |
 | `hermes/captain-bot/skills/captain/SKILL.md` | `…/captain-bot/skills/captain/` (plus Captain's own skill as `references/captain-chat.md`) |
 | `hermes/captain-bot/config.overlay.yaml` | Deep-merged into `…/captain-bot/config.yaml` |
+| `hermes/webhooks.overlay.yaml` | Deep-merged into `~/.hermes/config.yaml` (the host gateway), each route with `profile: captain-bot` |
 | `bin/hermes-notify` | `~/.local/share/captain-bot/bin/`; signs a body with Hermes's generic V2 HMAC and posts it to a local route |
 | `bin/board-watch.sh` | `~/.hermes/profiles/captain-bot/scripts/`; the board routine's monitor script. Prints the actionable rows; Hermes runs the bot only when that output changes |
 | `cmux/automations.json` | Merged into `~/.cmuxterm/automations.json` |
@@ -65,12 +66,20 @@ The profile is `captain-bot`, not `captain`: Hermes makes a shell alias per prof
 4. From the Claude app on your phone, open the worker's session through Remote Control.
 5. After `./setup.sh github-hook owner/repo`, GitHub's ping should show a green tick in the repo's webhook settings.
 
-## What was not verified
+## What the first run on the Mac mini changed
 
-This kit was written and tested off the Mac: shellcheck clean, the webhook signature checked against a verifier implementing Hermes's documented V2 scheme, the board pre-check run against sample boards, and the config and cmux merges run with yq v4 and jq. It has not run against a live Hermes, cmux or Slack. Check these on the first run:
+The first live run (Hermes 0.21.5, cmux, 24 Sep) found five gaps, now fixed in the kit:
 
-- Hermes config keys `approvals.mode` and `skills.write_approval`, and the profile skills folder (`hermes -p captain-bot doctor`, `hermes -p captain-bot skills list`).
-- `hermes cron create` accepting `--script` with an absolute path, and `--deliver slack` using `SLACK_HOME_CHANNEL`.
+- cmux puts `claude`, `codex` and `hermes` shims on PATH even when the real tool is missing, so `tools` now checks that `--version` answers instead of trusting `command -v`.
+- Plugins are per profile: the Claude plan plugin is installed into `captain-bot`, not the default profile.
+- One host gateway serves every profile. It is installed from the default profile, and webhook routes live in its config with `profile: captain-bot`, served at `/p/captain-bot/webhooks/<route>`. `hermes-notify`, Funnel and `github-hook` use that path.
+- Routine scripts must sit in the profile's `scripts/` folder. The board check is a `--monitor-script` whose output Hermes hashes each tick, so the bot runs only when the actionable rows change. Schedules are cron expressions.
+- launchd starts with a minimal PATH, so the Remote Control LaunchAgent carries the absolute `claude` path and a shim-free PATH, and spawns one session per request (worktree mode needs the folder itself to be a repo).
+
+## Still to confirm
+
+- Slack end to end: a DM, a task card, the Approve and Reject buttons on an escalate plan.
+- Hermes config keys `approvals.mode` and `skills.write_approval` (`hermes -p captain-bot doctor`).
 - The cmux event carrying `workspace.title` for the `t-` filter (`cmux automation test captain-bot-needs-input --event @sample.json`).
 - The `remoteControlAtStartup` settings key.
-- Whether `platforms.webhook.extra.port` is honoured (Hermes issue #10206 says no; the kit sets `WEBHOOK_PORT` in the profile `.env` for that reason).
+- A GitHub ping through Funnel reaching the route (green tick in the repo's webhook settings).
