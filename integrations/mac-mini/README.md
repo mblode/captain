@@ -37,6 +37,7 @@ Re-run a single step with `./setup.sh <step>`. After you create the Slack app, `
 | `secrets` | One random HMAC secret per webhook route in `~/.config/captain-bot/secrets.env` (mode 600) |
 | `hermes` | Installs Hermes |
 | `bot` | Creates the `captain-bot` profile in Bot Mode and installs the Claude plan plugin into it (plugins are per profile): `SOUL.md`, the `captain` skill with Captain's playbook, the Slack tokens you paste, and profile config (Claude plan model, manual approvals, Slack threads). Adds the `github` and `cmux` routes to the host gateway's config, bound to `captain-bot` |
+| `slack-manifest` | Writes the Slack app manifest named Captain, with six slash commands (the full set pushes Slack's workspace picker off-screen) |
 | `cmux` | Adds a rule to `~/.cmuxterm/automations.json`: when a Captain worker (`t-…` workspace) needs input, sign the event and post it to the bot |
 | `remote-control` | A LaunchAgent running `claude remote-control --spawn session` in `~/code`, with the absolute `claude` path and a shim-free PATH baked in (launchd's PATH is minimal), and Remote Control on for every session |
 | `routines` | Board check every 15 min, weekday 8:45 summary, Friday 4:45 numbers |

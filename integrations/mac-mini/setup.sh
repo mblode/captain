@@ -211,6 +211,20 @@ step_bot() {
   todo "turn off extra usage on your Claude account so the bot cannot bill overage"
 }
 
+step_slack_manifest() {
+  say "Slack app manifest"
+  local m="$PROFILE_DIR/slack-manifest.json"
+  hermes -p "$PROFILE" slack manifest --agent-view --write >/dev/null
+  # Name the app Captain, and keep six slash commands: the full set makes the
+  # manifest ~400 lines, which pushes Slack's workspace picker off-screen.
+  # Every other command still works with the ! prefix.
+  jq '.display_information.name = "Captain"
+      | .features.bot_user.display_name = "Captain"
+      | .features.slash_commands |= map(select(.command | IN("/hermes","/new","/stop","/approve","/deny","/help")))' \
+    "$m" >"$m.tmp" && mv "$m.tmp" "$m"
+  ok "$m (create the app from it: https://api.slack.com/apps?new_app=1 → From a manifest)"
+}
+
 step_cmux() {
   say "cmux: tell the bot when a worker needs input"
   local dir="$HOME/.cmuxterm" file new
@@ -339,7 +353,7 @@ step_manual() {
       $(hostname -s) over Tailscale on cellular to prove it.
    6. cmux: Settings → Automation → Socket Control Mode → Automation mode.
    7. Slack app (personal workspace):
-        hermes -p $PROFILE slack manifest --agent-view --write
+        ./setup.sh slack-manifest
       Create the app at https://api.slack.com/apps from that manifest; enable Socket Mode with an
       app token (connections:write); install it; turn on the Messages tab; make #captain and
       /invite the bot. Then: ./setup.sh bot gateway  (to save the tokens and restart).
@@ -351,7 +365,7 @@ EOF
 
 # ------------------------------------------------------------------ main
 
-ALL=(preflight power tools logins captain secrets hermes bot cmux remote-control routines gateway funnel manual)
+ALL=(preflight power tools logins captain secrets hermes bot slack-manifest cmux remote-control routines gateway funnel manual)
 
 run_step() {
   case "$1" in
@@ -363,6 +377,7 @@ run_step() {
     secrets) step_secrets ;;
     hermes) step_hermes ;;
     bot) step_secrets; step_bot ;;
+    slack-manifest) step_slack_manifest ;;
     cmux) step_cmux ;;
     remote-control) step_remote_control ;;
     routines) step_routines ;;
