@@ -8,6 +8,8 @@
 # The body is the file, else $CMUX_AUTOMATION_EVENT_JSON (set by a cmux
 # automation `run` action), else stdin. The secret is HERMES_ROUTE_SECRET_<ROUTE>
 # from ~/.config/captain-bot/secrets.env; the port is WEBHOOK_PORT (default 8644).
+# The host gateway serves a profile's routes under /p/<profile>/ (HERMES_PROFILE,
+# default captain-bot).
 set -euo pipefail
 
 route="${1:?usage: hermes-notify <route> [file]}"
@@ -36,7 +38,7 @@ ts="$(date +%s)"
 sig="$({ printf '%s.' "$ts"; cat "$body"; } | openssl dgst -sha256 -hmac "$secret" -r | cut -d' ' -f1)"
 
 curl -sS --fail --max-time 10 --noproxy "*" \
-  -X POST "http://127.0.0.1:${WEBHOOK_PORT:-8644}/webhooks/${route}" \
+  -X POST "http://127.0.0.1:${WEBHOOK_PORT:-8644}/p/${HERMES_PROFILE:-captain-bot}/webhooks/${route}" \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Timestamp: ${ts}" \
   -H "X-Webhook-Signature-V2: ${sig}" \

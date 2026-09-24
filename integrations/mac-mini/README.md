@@ -7,7 +7,7 @@ Slack #captain ─ Socket Mode ─┐
                               ▼
 Mac mini ─ Hermes gateway (profile captain-bot, brain on your Claude plan)
              ├─ skill captain ── captain add/start/status/approve/send ── cmux + worktree + claude|codex
-             ├─ routine every 15m (board-changed pre-check: no tokens when idle)
+             ├─ routine every 15m (board-watch monitor: no tokens when the board is unchanged)
              ├─ routines: weekday morning summary, Friday numbers
              ├─ webhook /webhooks/cmux   ◄── cmux automation: a worker needs input
              └─ webhook /webhooks/github ◄── Tailscale Funnel ◄── GitHub (HMAC)
@@ -53,7 +53,7 @@ The profile is `captain-bot`, not `captain`: Hermes makes a shell alias per prof
 | `hermes/captain-bot/skills/captain/SKILL.md` | `…/captain-bot/skills/captain/` (plus Captain's own skill as `references/captain-chat.md`) |
 | `hermes/captain-bot/config.overlay.yaml` | Deep-merged into `…/captain-bot/config.yaml` |
 | `bin/hermes-notify` | `~/.local/share/captain-bot/bin/`; signs a body with Hermes's generic V2 HMAC and posts it to a local route |
-| `bin/board-changed` | Same folder; the routine's pre-check. Prints `{"wakeAgent": false}` unless an actionable row changed |
+| `bin/board-watch.sh` | `~/.hermes/profiles/captain-bot/scripts/`; the board routine's monitor script. Prints the actionable rows; Hermes runs the bot only when that output changes |
 | `cmux/automations.json` | Merged into `~/.cmuxterm/automations.json` |
 | `launchd/co.blode.claude-remote-control.plist` | `~/Library/LaunchAgents/` |
 
