@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "captain-bot-needs-input",
+      "when": { "event": "agent.needs_input" },
+      "where": { "workspace.title": { "prefix": "t-" } },
+      "rate_limit": { "interval_seconds": 60, "maximum": 1 },
+      "then": [
+        {
+          "action": "run",
+          "command": "__BIN__/hermes-notify cmux",
+          "timeout_seconds": 20
+        }
+      ]
+    }
+  ]
+}

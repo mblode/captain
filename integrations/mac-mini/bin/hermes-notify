@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# POST a JSON body to a Hermes webhook route on this Mac, signed with the
+# route's secret in Hermes's generic V2 format: HMAC-SHA256 hex over
+# "<timestamp>.<body>", sent as X-Webhook-Signature-V2 with X-Webhook-Timestamp.
+#
+#   hermes-notify <route> [file]
+#
+# The body is the file, else $CMUX_AUTOMATION_EVENT_JSON (set by a cmux
+# automation `run` action), else stdin. The secret is HERMES_ROUTE_SECRET_<ROUTE>
+# from ~/.config/captain-bot/secrets.env; the port is WEBHOOK_PORT (default 8644).
+set -euo pipefail
+
+route="${1:?usage: hermes-notify <route> [file]}"
+secrets="${CAPTAIN_BOT_SECRETS:-$HOME/.config/captain-bot/secrets.env}"
+# shellcheck source=/dev/null
+[[ -f "$secrets" ]] && source "$secrets"
+
+var="HERMES_ROUTE_SECRET_$(printf '%s' "$route" | tr '[:lower:]-' '[:upper:]_')"
+secret="${!var:-}"
+if [[ -z "$secret" ]]; then
+  echo "hermes-notify: no $var in $secrets" >&2
+  exit 1
+fi
+
+body="$(mktemp)"
+trap 'rm -f "$body"' EXIT
+if [[ -n "${2:-}" ]]; then
+  cat "$2" >"$body"
+elif [[ -n "${CMUX_AUTOMATION_EVENT_JSON:-}" ]]; then
+  printf '%s' "$CMUX_AUTOMATION_EVENT_JSON" >"$body"
+else
+  cat >"$body"
+fi
+
+ts="$(date +%s)"
+sig="$({ printf '%s.' "$ts"; cat "$body"; } | openssl dgst -sha256 -hmac "$secret" -r | cut -d' ' -f1)"
+
+curl -sS --fail --max-time 10 --noproxy "*" \
+  -X POST "http://127.0.0.1:${WEBHOOK_PORT:-8644}/webhooks/${route}" \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Timestamp: ${ts}" \
+  -H "X-Webhook-Signature-V2: ${sig}" \
+  --data-binary "@${body}"

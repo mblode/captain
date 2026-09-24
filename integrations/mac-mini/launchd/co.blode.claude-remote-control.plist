@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Claude Code Remote Control in server mode: start new sessions on this Mac
+     from the Claude app, each in its own worktree of __CODE_DIR__.
+     setup.sh fills the placeholders and loads it into the GUI domain. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>co.blode.claude-remote-control</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>exec claude remote-control --spawn worktree</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__CODE_DIR__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/claude-remote-control.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/claude-remote-control.log</string>
+</dict>
+</plist>

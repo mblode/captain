@@ -12,10 +12,10 @@ Research date: 24 Sep 2026. Four research passes (OpenClaw, Hermes Agent, remote
 
 ## The answer
 
-**Hermes Agent is the bot layer, Telegram is the front door, and Captain is the coding hand.** Nothing new needs to be built except one Hermes skill and one cmux automation rule.
+**Hermes Agent is the bot layer, Slack is the front door, and Captain is the coding hand.** Nothing new needs to be built except one Hermes skill and one cmux automation rule. Both, plus a setup script, are in [`integrations/mac-mini/`](../../integrations/mac-mini/README.md).
 
 ```
- iPhone ── Telegram ──────────────┐            (you talk to bots, approve cards)
+ iPhone ── Slack (Socket Mode) ───┐            (you talk to bots, approve cards)
  iPhone ── Tailscale ─┬─ RustDesk / Expert app (you watch or take the screen)
                       └─ Claude app, Remote Control (you drop into a coding session)
  GitHub ── Tailscale Funnel /hooks/github ─┐
@@ -26,7 +26,7 @@ Research date: 24 Sep 2026. Four research passes (OpenClaw, Hermes Agent, remote
               └─ skill "captain" ── captain add/start/status/approve/send
                                        └─ cmux workspace + git worktree + claude | codex | agent
               ▲
-              └──── cmux automation: agent.needs_input / idle ─► Hermes webhook ─► Telegram card
+              └──── cmux automation: agent.needs_input / idle ─► Hermes webhook ─► Slack thread
 ```
 
 Why this split:
@@ -34,7 +34,7 @@ Why this split:
 - **Hermes already is Grok Bot's shape.** Bot Mode in v0.21 (31 Aug) makes each bot a profile with its own `SOUL.md`, model, skills, memory, credentials, avatar and **routines** (cron jobs named `[bot:<name>] …`), plus group chats of 2–6 bots and bot-to-bot DMs. ([bot mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode), [v2026.8.31 release](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.8.31))
 - **Its webhooks take GitHub as it is.** Routes require HMAC and verify `X-Hub-Signature-256` natively, with debouncing, idempotency, per-route rate limits and a `github_comment` delivery target. OpenClaw's `/hooks` need a bearer header that GitHub cannot send, so OpenClaw needs a relay. ([Hermes webhooks](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks), [OpenClaw webhooks](https://docs.openclaw.ai/automation/cron-jobs/webhooks))
 - **Captain already starts cmux sessions properly.** `captain start` makes the worktree, runs the bootstrap, opens a cmux workspace and launches the full harness with pinned model and effort, gates risky plans, enforces the WIP limit, and derives status from cmux, git and `gh`. Neither Hermes nor OpenClaw has a cmux integration; both would drive raw tmux or `claude -p`. The bot should call Captain, not re-derive it.
-- **Telegram is the cheapest good chat.** One BotFather token per bot gives Grok Bot's roster of named contacts, inline Allow/Deny buttons, and long polling, so the Mac only makes outbound connections. Hermes ships Telegram approval cards (Allow once / Session / Always / Deny). An own iOS app is weeks of work for the same thing; WhatsApp needs a second SIM or an unofficial bridge; Slack is better only if other people share the bots.
+- **Slack, in a personal workspace.** Socket Mode means the Mac only makes outbound connections. Approval prompts render as Block Kit buttons (with `!approve` / `!deny` as the fallback), and a channel mention replies in a thread, so each Captain task gets its own thread, which is the closest thing to Grok Bot's task cards. One Slack app per bot, each profile holding its own tokens. Telegram is the fallback: one BotFather token per bot, the same approval cards, less setup. An own iOS app is weeks of work for the same thing; WhatsApp needs a second SIM or an unofficial bridge. ([Hermes Slack](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/slack))
 
 ## Options weighed
 
@@ -94,7 +94,7 @@ Start with two, not five:
 | **Captain** | Code: turn a message or ticket into Captain tasks, start workers, bring back plans and PRs | shell (for `captain`, `gh`, `git`), skill `captain`; no `computer_use` | GitHub webhook (PR review requested, CI failed, issue labelled `bot`); morning "what needs me"; cmux `needs_input` webhook |
 | **Ops** | Everything else: research, browser and desktop tasks, admin | `computer_use`, browser, web; shell on ask | Scheduled digests you define; no inbound webhooks from the internet |
 
-Rules shared by both (in each `SOUL.md`): never send, publish, pay or delete without an approval card; no secrets in Telegram, logins happen through the screen takeover; `skills.write_approval: true` so a bot cannot rewrite its own skills unreviewed; approval mode `smart` or `manual`, never YOLO.
+Rules shared by both (in each `SOUL.md`): never send, publish, pay or delete without an approval card; no secrets in chat, logins happen through the screen takeover; `skills.write_approval: true` so a bot cannot rewrite its own skills unreviewed; approval mode `smart` or `manual`, never YOLO.
 
 ### Coding sessions: the `captain` skill
 
@@ -103,10 +103,10 @@ The Hermes skill is short because Captain holds the logic. It teaches the bot th
 1. A message or webhook arrives. `captain add "<task>"` (or `captain add TIG-430`). Reply with one decision card: the tasks, harness and model per task, which are `escalate`.
 2. On yes, `captain start <id> --harness claude|codex|cursor`. This opens the cmux workspace with the real CLI logged into your plan. Reply with a card like Grok Bot's Cursor card: title, branch, status, and a link to the session.
 3. The board is `captain status --json`, never the bot's memory. A cron routine every 15 minutes, `wakeAgent:false` unless the board changed, costs nothing when nothing moved.
-4. Plan gates: `captain approve|reject <id> --note` from the Telegram Allow/Deny buttons. Steering: `captain send <id> "<msg>"`.
+4. Plan gates: `captain approve|reject <id> --note` from the Slack Approve/Reject buttons in the task's thread. Steering: `captain send <id> "<msg>"`.
 5. `ready` rows go to you with the PR link. You merge.
 
-The return path is cmux, not polling: an entry in `~/.cmuxterm/automations.json` on `agent.needs_input` with a `webhook` action POSTs to the Hermes webhook on loopback (signed with the route's secret), which delivers a Telegram card to Captain's chat. ([cmux automations](https://github.com/manaflow-ai/cmux/blob/main/docs/automations.md), [feed](https://github.com/manaflow-ai/cmux/blob/main/docs/feed.md) **[unverified: exact rule schema]**)
+The return path is cmux, not polling: an entry in `~/.cmuxterm/automations.json` on `agent.needs_input` with a `run` action calls `hermes-notify`, which signs the event with the route's secret (Hermes's generic V2 HMAC) and POSTs it to the Hermes webhook on loopback; the bot posts in the task's Slack thread. A `run` action rather than cmux's `webhook` action, because Hermes needs an HMAC over the body and cmux's webhook action can only add fixed headers. ([cmux automations](https://github.com/manaflow-ai/cmux/blob/main/docs/automations.md), [Hermes webhooks](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks))
 
 To take over a worker yourself, open it from the Claude app: run `claude remote-control --spawn worktree` under launchd for new sessions from the phone, and turn on "Enable Remote Control for all sessions" so Captain's workers are reachable too. For Codex workers, the ChatGPT app's "Control this Mac" does the same. The cmux iOS app (TestFlight) is a third view of the same terminals.
 
@@ -145,14 +145,14 @@ Each phase ships on its own and is usable when it lands.
 
 Done when: from the phone on cellular you can see the screen, and start and steer a Claude Code session.
 
-**Phase 1: one bot on Telegram.**
+**Phase 1: one bot in Slack.** `./setup.sh` in `integrations/mac-mini/` does the scripted part of Phases 0 to 2; `./setup.sh manual` lists the rest.
 - [ ] Install Hermes, `hermes gateway install`, `hermes doctor`. Dashboard bound to loopback or the tailnet IP with auth.
-- [ ] Create the **Captain** bot (Bot Mode), a BotFather token, your Telegram user ID as the only allowed user, approvals `manual` to start.
+- [ ] Create the **Captain** bot (Bot Mode, profile `captain-bot`: a profile named `captain` would get a shell alias that shadows the Captain CLI). A Slack app from `hermes -p captain-bot slack manifest --agent-view --write` with Socket Mode, your member ID as the only allowed user, a `#captain` home channel, approvals `manual` to start.
 - [ ] Install `claude-subscription-directsdk`, turn off extra usage on the Claude account, and set the Captain bot's model to it.
-- [ ] Write the `captain` skill; test add, start, status, approve end to end from Telegram.
-- [ ] cmux automation on `agent.needs_input` → Hermes webhook → Telegram card.
+- [ ] Write the `captain` skill; test add, start, status, approve end to end from Slack.
+- [ ] cmux automation on `agent.needs_input` → `hermes-notify` → Hermes webhook → Slack thread.
 
-Done when: "fix the flaky billing test in app" from Telegram produces a cmux workspace, a plan card, and a PR link.
+Done when: "fix the flaky billing test in app" in `#captain` produces a cmux workspace, a plan card, and a PR link.
 
 **Phase 2: triggers and routines.**
 - [ ] Tailscale Funnel on `/hooks/github` only; a Hermes GitHub route with the webhook secret; subscribe the repos you want (review requested, check failed, `bot` label).
@@ -170,7 +170,7 @@ Done when: "fix the flaky billing test in app" from Telegram produces a cmux wor
 | A third bot | A job keeps getting mis-routed between Captain and Ops |
 | Expert as the computer tool (its MCP bridge) instead of cua-driver | You need the takeover gate to bind the bot, not only the human |
 | A Lume VM for Ops | Ops starts reading email or arbitrary web pages unattended |
-| Own iOS app (in Expert) | Telegram cards cannot show what you need to approve, such as a screenshot next to the Send button |
+| Own iOS app (in Expert) | Slack threads cannot show what you need to approve, such as a screenshot next to the Send button |
 | Switch to OpenClaw | You want iMessage as the front door, and its advisories have gone quiet |
 | Drop Hermes for Claude Code Channels | Hermes upgrades break routines more than once a month |
 

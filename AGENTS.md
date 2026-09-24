@@ -48,6 +48,7 @@ src/
     log.ts        # append-only <project>/log.jsonl: add | start | approve | reject | review | done | drop
     doctor.ts     # `captain install`: pure buildChecks + skill install
 skills/captain/   # the chat: SKILL.md + references/heartbeat.md + references/intake.md
+integrations/mac-mini/  # not shipped: setup.sh + a Hermes bot (SOUL, skill, config) that drives this CLI from Slack; see its README
 ```
 
 ## How it works
