@@ -297,7 +297,7 @@ step_manual() {
    1. Hardware: an HDMI dummy plug, so the screen is never black for RustDesk or computer use.
    2. Login: System Settings → Users & Groups → automatic login as $(whoami).
       Needs FileVault off; otherwise run 'sudo fdesetup authrestart' before planned reboots.
-   3. Sharing: turn on Remote Login and Screen Sharing.
+   3. Sharing: turn on Remote Login (SSH over Tailscale). RustDesk is the screen; Screen Sharing can stay off.
    4. Tailscale: sign in, MagicDNS on, tag this Mac (tag:macmini), and limit access to your devices.
    5. RustDesk: Settings → Security → Enable direct IP access; set a permanent password;
       grant Accessibility, Screen Recording and Input Monitoring. Connect from the phone to

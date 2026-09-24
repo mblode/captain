@@ -16,7 +16,7 @@ Research date: 24 Sep 2026. Four research passes (OpenClaw, Hermes Agent, remote
 
 ```
  iPhone ── Slack (Socket Mode) ───┐            (you talk to bots, approve cards)
- iPhone ── Tailscale ─┬─ RustDesk / Expert app (you watch or take the screen)
+ iPhone ── Tailscale ─┬─ RustDesk (you watch or take the screen)
                       └─ Claude app, Remote Control (you drop into a coding session)
  GitHub ── Tailscale Funnel /hooks/github ─┐
                                            ▼
@@ -68,14 +68,14 @@ Sources: [Hermes docs](https://hermes-agent.nousresearch.com/docs/), [OpenClaw d
 
 ### Tailscale
 
-- Standalone macOS variant, MagicDNS on, the Mac tagged `tag:macmini`, grants so only your devices reach ports 22 (SSH), 5900 (Screen Sharing), 21118 (RustDesk direct IP) and the Hermes dashboard on 9119.
+- Standalone macOS variant, MagicDNS on, the Mac tagged `tag:macmini`, grants so only your devices reach ports 22 (SSH), 21118 (RustDesk direct IP) and the Hermes dashboard on 9119.
 - **Funnel exactly one path** to the Hermes webhook listener (port 8644), for GitHub: `tailscale funnel --bg --set-path /hooks/github http://127.0.0.1:8644` (check the flags with `tailscale funnel --help`). Never funnel the dashboard, the API server or a shell. Funnel needs the `funnel` node attribute scoped to the tag. ([Funnel](https://tailscale.com/docs/features/tailscale-funnel))
 
 ### The screen
 
-- **RustDesk** ("rustydeck"; no product by that name exists) with **direct IP access over Tailscale**: no hbbs/hbbr server, no public ports, WireGuard does the encryption. Set a permanent password and grant Accessibility, Screen Recording and Input Monitoring. ([Tailscale + RustDesk](https://tailscale.com/docs/solutions/access-remote-desktops-with-rustdesk))
-- From another Mac, Screen Sharing in High Performance mode is better than RustDesk. From the iPhone, RustDesk or Jump Desktop.
-- **Expert's iPhone app** is the Grok Bot "Agent Computer" view with a proper takeover gate. Keep it for watching and taking over. Do not also run Expert's Jev agent: Expert's contract is one desktop engine behind its input lease, and Hermes's cua-driver would be a second one.
+- **RustDesk is the screen, from the phone and from other computers.** ("rustydeck"/"RustDeck" is RustDesk; no product by that name exists.) with **direct IP access over Tailscale**: no hbbs/hbbr server, no public ports, WireGuard does the encryption. Set a permanent password and grant Accessibility, Screen Recording and Input Monitoring. ([Tailscale + RustDesk](https://tailscale.com/docs/solutions/access-remote-desktops-with-rustdesk))
+- RustDesk is the one remote-desktop tool, so there is one set of permissions and one thing to keep working. Its lag is the cost; macOS Screen Sharing in High Performance mode is the escape hatch from another Mac if it ever matters.
+- The takeover moment Grok Bot has (a bot hits a login, 2FA or CAPTCHA) is a RustDesk session: the bot posts "needs you on the screen" in the thread, you connect, do it, disconnect, and reply. Keep Expert's Jev agent off: Expert's contract is one desktop engine behind its input lease, and Hermes's cua-driver would be a second one.
 
 ### Computer use
 
@@ -138,7 +138,7 @@ Each phase ships on its own and is usable when it lands.
 
 **Phase 0: the box (an evening).**
 - [ ] Bot macOS user, auto-login, FileVault decision, `pmset`, dummy plug.
-- [ ] Tailscale standalone, MagicDNS, `tag:macmini`, grants; Remote Login and Screen Sharing on.
+- [ ] Tailscale standalone, MagicDNS, `tag:macmini`, grants; Remote Login on.
 - [ ] RustDesk with direct IP and a permanent password; verify from the iPhone on cellular.
 - [ ] cmux, `claude`, `codex`, `agent`, `gh` logged in; cmux socket in Automation mode with a password; `npm i -g cmux-captain && captain install`; one `captain init`.
 - [ ] `claude remote-control --spawn worktree` as a LaunchAgent; verify a new session from the Claude app.
@@ -161,7 +161,7 @@ Done when: "fix the flaky billing test in app" in `#captain` produces a cmux wor
 **Phase 3: the Ops bot and computer use.**
 - [ ] `hermes computer-use install`, grant CuaDriver.app, `hermes computer-use doctor`; standard mode.
 - [ ] Create **Ops** with `computer_use` and the browser; no inbound webhooks; approvals on anything outward-facing.
-- [ ] Pick three real tasks you would hand Grok Bot and run them while watching in RustDesk or Expert. Turn the ones that work into skills.
+- [ ] Pick three real tasks you would hand Grok Bot and run them while watching in RustDesk. Turn the ones that work into skills.
 
 **Later, only when the trigger happens.**
 
