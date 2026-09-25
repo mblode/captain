@@ -32,8 +32,16 @@ has() { command -v "$1" >/dev/null 2>&1; }
 # cmux puts shims for claude, codex and hermes on PATH that exist even when the
 # real tool is missing, so "installed" means the binary answers --version.
 works() { "$1" --version >/dev/null 2>&1; }
-# PATH without cmux's per-session shim folders, for services that outlive this shell.
-clean_path() { tr ':' '\n' <<<"$HOME/.local/bin:$PATH" | grep -v 'cmux-cli-shims' | awk '!seen[$0]++' | paste -sd: -; }
+# PATH for services that outlive this shell: drop cmux's per-session shim
+# folders, and swap fnm's per-shell folder (gone when the shell exits) for its
+# stable default alias, so launchd still finds node, captain and codex.
+clean_path() {
+  local fnm_default="$HOME/.local/share/fnm/aliases/default/bin"
+  tr ':' '\n' <<<"$HOME/.local/bin:$PATH" \
+    | grep -v 'cmux-cli-shims' \
+    | sed "s|^.*/fnm_multishells/[^/]*/bin\$|$fnm_default|" \
+    | awk '!seen[$0]++' | paste -sd: -
+}
 # The first real binary for a command, skipping cmux shims.
 real_bin() { PATH="$(clean_path)" command -v "$1" || true; }
 ask() { local reply; read -r -p "   $1 [y/N] " reply; [[ "$reply" =~ ^[Yy]$ ]]; }
@@ -301,7 +309,7 @@ step_routines() {
 step_gateway() {
   say "Hermes gateway (launchd)"
   # One host gateway (the default profile's) serves every profile on the Mac.
-  PATH="$(clean_path)" hermes gateway install
+  PATH="$(clean_path)" hermes gateway install --force
   ok "host gateway installed; re-run this step after installing new tools (it captures PATH)"
   hermes -p "$PROFILE" doctor || todo "hermes doctor reported problems (above)"
 }
