@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { inProgress, openBlockers, sortRows } from "./board";
 import type { Row } from "./board";
 import { appendLog, now, readLog } from "./captain/log";
+import type { LogRecord } from "./captain/log";
 import { explainCmuxUnreachable, harnessCommand, openWorkspace } from "./cmux";
 import {
   loadAgentEnv,
@@ -15,11 +16,17 @@ import {
 import { CliError, EXIT } from "./errors";
 import { boardRows, reviewName } from "./evidence";
 import type { Ports } from "./evidence";
-import { renderBoard, renderGain, renderTaskLine } from "./format";
+import {
+  renderBoard,
+  renderBoards,
+  renderGain,
+  renderTaskLine,
+} from "./format";
 import { ensureWorktree, gitCommonDir } from "./git";
 import { openBlockers as issueBlockers, slugify } from "./issue";
 import { readMemoryExcerpt } from "./memory";
 import {
+  allProjects,
   commit,
   findTask,
   initProject,
@@ -462,21 +469,83 @@ export const start = async (
 
 export interface StatusOptions extends Common {
   all?: boolean;
+  allProjects?: boolean;
 }
+
+const projectRows = (
+  project: Project,
+  ids: string[],
+  options: StatusOptions,
+  deps: Deps
+): Row[] => {
+  const wanted = new Set(ids.map((i) => i.toLowerCase()));
+  return sortRows(boardRows(project, listTasks(project), deps.ports())).filter(
+    (r) =>
+      (wanted.size === 0 || wanted.has(r.id)) &&
+      (options.all || wanted.size > 0 || r.group !== "closed")
+  );
+};
+
+// A row on the cross-project board.
+export type ProjectRow = Row & { project: string };
+
+// One board across every project, for a chat that runs several repos. Each
+// row carries its `project`.
+const statusAllProjects = (
+  ids: string[],
+  options: StatusOptions,
+  deps: Deps
+): ProjectRow[] => {
+  const boards = allProjects(deps.env).map((entry) =>
+    entry.project
+      ? {
+          error: undefined,
+          name: entry.name,
+          project: entry.project,
+          rows: projectRows(entry.project, ids, options, deps),
+        }
+      : { error: entry.error, name: entry.name, project: undefined, rows: [] }
+  );
+  // `next` names the project, so the chat can still run it verbatim.
+  const rows = boards.flatMap((b) =>
+    b.rows.map((r) => ({
+      ...r,
+      next: r.next.replace(/^captain /u, `captain --project ${b.name} `),
+      project: b.name,
+    }))
+  );
+  if (options.json) {
+    json(deps, {
+      inProgress: boards.reduce((n, b) => n + inProgress(b.rows), 0),
+      projects: boards.map((b) =>
+        b.project
+          ? {
+              inProgress: inProgress(b.rows),
+              project: b.name,
+              repo: b.project.repo,
+              wip: b.project.wip,
+            }
+          : { error: b.error, project: b.name }
+      ),
+      rows,
+      wip: boards.reduce((n, b) => n + (b.project?.wip ?? 0), 0),
+    });
+  } else {
+    out(deps, renderBoards(boards, deps.color));
+  }
+  return rows;
+};
 
 export const status = (
   ids: string[],
   options: StatusOptions,
   deps: Deps
-): Row[] => {
+): (Row | ProjectRow)[] => {
+  if (options.allProjects) {
+    return statusAllProjects(ids, options, deps);
+  }
   const project = resolveProject(deps.env, options.project);
-  const tasks = listTasks(project);
-  const wanted = new Set(ids.map((i) => i.toLowerCase()));
-  const rows = sortRows(boardRows(project, tasks, deps.ports())).filter(
-    (r) =>
-      (wanted.size === 0 || wanted.has(r.id)) &&
-      (options.all || wanted.size > 0 || r.group !== "closed")
-  );
+  const rows = projectRows(project, ids, options, deps);
   if (options.json) {
     json(deps, {
       inProgress: inProgress(rows),
@@ -686,20 +755,71 @@ export const close = (
 
 // ---------------------------------------------------------------- gain
 
-export const gain = (
+const gainOf = (
+  project: Project,
+  prefix = ""
+): { log: LogRecord[]; tasks: Task[] } => ({
+  log: readLog(logDir(project)).map((r) => ({
+    ...r,
+    name: `${prefix}${r.name}`,
+  })),
+  tasks: listTasks(project).map((t) => ({ ...t, id: `${prefix}${t.id}` })),
+});
+
+// Every project's numbers, plus a total over all of them. Task ids repeat
+// across projects (t-1), so the total keys each one by `<project>/<id>`.
+const gainAllProjects = (
   options: Common & { since?: string },
   deps: Deps
 ): void => {
+  const at = now();
+  const projects = allProjects(deps.env).flatMap((e) =>
+    e.project ? [e.project] : []
+  );
+  const each = projects.map((project) => ({
+    metrics: computeGain({ ...gainOf(project), now: at, since: options.since }),
+    project,
+  }));
+  const inputs = projects.map((p) => gainOf(p, `${p.name}/`));
+  const total = computeGain({
+    log: inputs.flatMap((i) => i.log),
+    now: at,
+    since: options.since,
+    tasks: inputs.flatMap((i) => i.tasks),
+  });
+  if (options.json) {
+    json(deps, {
+      projects: each.map((e) => ({ project: e.project.name, ...e.metrics })),
+      total,
+    });
+    return;
+  }
+  out(
+    deps,
+    [
+      ...each.map((e) => renderGain(e.project.name, e.metrics, deps.color)),
+      renderGain("all projects", total, deps.color),
+    ].join("\n\n")
+  );
+};
+
+export const gain = (
+  options: Common & { since?: string; allProjects?: boolean },
+  deps: Deps
+): void => {
+  if (options.allProjects) {
+    gainAllProjects(options, deps);
+    return;
+  }
   const project = resolveProject(deps.env, options.project);
   const metrics = computeGain({
-    log: readLog(logDir(project)),
+    ...gainOf(project),
     now: now(),
     since: options.since,
-    tasks: listTasks(project),
   });
   if (options.json) {
     json(deps, metrics);
   } else {
-    out(deps, renderGain(project, metrics, deps.color));
+    out(deps, renderGain(project.name, metrics, deps.color));
   }
 };

@@ -78,6 +78,7 @@ The /captain chat runs these for you. By hand:
   $ captain add TIG-430                          a task from a Linear or Done Bear ticket
   $ captain start t-1 --harness codex            worktree + cmux workspace + agent
   $ captain status                               the board: what needs you, what's ready
+  $ captain status --all-projects                every project's board at once
   $ captain approve t-2 --note "..."             release a plan (escalate tasks)
   $ captain send t-1 "use the existing helper"   steer a worker
   $ captain peek t-1                             the worker's screen
@@ -180,10 +181,19 @@ program
   .description("the board, derived live")
   .argument("[ids...]", "only these tasks")
   .option("--all", "include closed tasks")
+  .option(
+    "--all-projects",
+    "every project's board, each row tagged with its project"
+  )
   .option("--json", "emit JSON")
-  .action((ids: string[], o: { all?: boolean; json?: boolean }) => {
-    status(ids, { ...common(), ...o }, deps);
-  });
+  .action(
+    (
+      ids: string[],
+      o: { all?: boolean; allProjects?: boolean; json?: boolean }
+    ) => {
+      status(ids, { ...common(), ...o }, deps);
+    }
+  );
 
 program
   .command("approve")
@@ -274,8 +284,9 @@ program
   .command("gain")
   .description("the weekly numbers: flow, decisions, cycle time")
   .option("--since <when>", "7d / 24h / an ISO date")
+  .option("--all-projects", "every project's numbers, plus a total")
   .option("--json", "emit JSON")
-  .action((o: { since?: string; json?: boolean }) => {
+  .action((o: { since?: string; allProjects?: boolean; json?: boolean }) => {
     gain({ ...common(), ...o }, deps);
   });
 

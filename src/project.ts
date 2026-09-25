@@ -85,6 +85,31 @@ const projectNames = (root: string): string[] => {
   }
 };
 
+// Every project under the root, for the cross-project board. Fail-soft per
+// project: one broken project.json becomes an `error` entry naming the fix,
+// never a board that hides every other project.
+export interface ProjectEntry {
+  name: string;
+  project?: Project;
+  error?: string;
+}
+
+export const allProjects = (env: NodeJS.ProcessEnv): ProjectEntry[] => {
+  const root = projectsRoot(env);
+  return projectNames(root)
+    .toSorted()
+    .map((name) => {
+      try {
+        return { name, project: readProject(join(root, name), name) };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : String(error),
+          name,
+        };
+      }
+    });
+};
+
 // Which project a command runs against: --project, then $CAPTAIN_PROJECT, then
 // the only project there is. Anything ambiguous is an error that names the
 // choices, never a guess (a wrong-repo launch was v2's worst silent failure).

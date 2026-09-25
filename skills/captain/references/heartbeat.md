@@ -15,7 +15,8 @@ Take the first rung available. Never hand polling back to the human.
 
 ## Each wake
 
-1. `captain status --json`.
+1. `captain status --json` (with several projects: `captain status --all-projects --json`;
+   each row then carries `project`, and its `next` already names it).
 2. Act on every `captain` row's `next` without asking.
 3. Collect `needs-you` and `ready` rows. Tell the human only when that set changed since
    your last message. Silence is the right answer when nothing changed.

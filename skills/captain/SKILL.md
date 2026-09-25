@@ -27,7 +27,8 @@ merge, and never approve a plan the human hasn't seen.
   You maintain it. Edit the files directly to sharpen a contract, fix a blocker, or
   change a harness. Use `captain add` to create one, `captain done` / `captain drop` to
   close one.
-- **The board** is `captain status --json`. It is derived live from cmux, git, GitHub and
+- **The board** is `captain status --json` (`--all-projects` for every project at once;
+  each row then carries `project`). It is derived live from cmux, git, GitHub and
   each worktree's `.captain/`. It is the only thing you trust about progress. A worker
   saying "done" means nothing until the board says so.
 - **Memory** is `~/captain/<project>/learnings.md`. Workers append to its Inbox. Promote a

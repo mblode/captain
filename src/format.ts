@@ -120,8 +120,30 @@ export const renderBoard = (
   return [head, ...sections].join("\n\n");
 };
 
+// The cross-project board: each project's board in turn. A project with
+// nothing on it collapses to its header line, and a broken one shows its error.
+export const renderBoards = (
+  boards: { project?: Project; rows: Row[]; error?: string }[],
+  color: boolean
+): string => {
+  const s = style(color);
+  if (boards.length === 0) {
+    return "no projects yet: captain init <name> --repo <path>";
+  }
+  return boards
+    .map((b) => {
+      if (!b.project) {
+        return msg.err(s, b.error ?? "unreadable project");
+      }
+      return b.rows.length === 0
+        ? `${s.bold(b.project.name)}  ${s.dim(`0/${b.project.wip} in progress, no open tasks`)}`
+        : renderBoard(b.project, b.rows, color);
+    })
+    .join("\n\n");
+};
+
 export const renderGain = (
-  project: Project,
+  name: string,
   m: GainMetrics,
   color: boolean
 ): string => {
@@ -130,7 +152,7 @@ export const renderGain = (
     ? `since ${new Date(m.window.since * 1000).toISOString().slice(0, 10)}`
     : "all time";
   const lines = [
-    `${s.bold(project.name)}  ${s.dim(window)}`,
+    `${s.bold(name)}  ${s.dim(window)}`,
     "",
     `tasks      ${m.tasks.todo} todo, ${m.tasks.active} active, ${m.tasks.done} done, ${m.tasks.dropped} dropped`,
     `flow       ${m.started} started, ${m.done} done, ${m.dropped} dropped`,

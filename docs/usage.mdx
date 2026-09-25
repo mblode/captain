@@ -22,6 +22,7 @@ captain add TIG-430                              # a task from a Linear or Done 
 captain add "migrate users" --risk escalate      # plan approval before any code
 captain start t-1 --harness codex --model gpt-6-luna --effort low
 captain status                                   # the board
+captain status --all-projects                    # every project's board, rows tagged by project
 captain approve t-2 --note "scoped to one table" # release a plan
 captain reject t-2 --note "reuse the invoices module"
 captain send t-1 "use the existing date helper"  # steer a worker
@@ -29,6 +30,7 @@ captain peek t-1                                 # the end of its screen
 captain review t-1                               # the other vendor reviews the PR
 captain done t-1                                 # close it once merged (or: drop)
 captain gain --since 7d                          # flow, decisions, cycle time
+captain gain --all-projects --since 7d           # per project, plus a total
 ```
 
 ## Tasks

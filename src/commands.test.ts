@@ -473,6 +473,73 @@ describe("the loop after start", () => {
   });
 });
 
+describe("across projects", () => {
+  const lastJson = (): Record<string, unknown> => {
+    const text = world.output();
+    return JSON.parse(text.slice(text.lastIndexOf("\n{") + 1)) as Record<
+      string,
+      unknown
+    >;
+  };
+
+  beforeEach(async () => {
+    init({ name: "site", repo: makeRepo(), wip: 3 }, world.deps);
+    await add("rebuild billing", { project: "rebuild" }, world.deps);
+    await start(["t-1"], { project: "rebuild" }, world.deps);
+    await add("fix the footer", { project: "site" }, world.deps);
+  });
+
+  it("shows every project's board with each row tagged by project", () => {
+    world.env.CAPTAIN_PROJECT = "rebuild";
+    attach("t-1");
+    world.env.CAPTAIN_PROJECT = "";
+    const broken = join(world.env.CAPTAIN_DIR ?? "", "zombie");
+    mkdirSync(broken);
+    writeFileSync(join(broken, "project.json"), "{}");
+
+    const rows = status([], { allProjects: true, json: true }, world.deps);
+    expect(rows.map((r) => [r.project, r.id, r.group])).toEqual([
+      ["rebuild", "t-1", "working"],
+      ["site", "t-1", "queued"],
+    ]);
+    expect(rows[1].next).toBe("captain --project site start t-1");
+    expect(lastJson()).toMatchObject({
+      inProgress: 1,
+      projects: [
+        { inProgress: 1, project: "rebuild", wip: 2 },
+        { inProgress: 0, project: "site", wip: 3 },
+        { error: expect.stringContaining('no "repo"'), project: "zombie" },
+      ],
+      wip: 5,
+    });
+
+    status([], { allProjects: true }, world.deps);
+    expect(world.output()).toMatch(
+      /rebuild {2}1\/2 in progress[\s\S]*site {2}0\/3/u
+    );
+  });
+
+  it("totals gain across projects without merging same-named tasks", async () => {
+    await start(["t-1"], { project: "site" }, world.deps);
+    close("t-1", "done", { project: "rebuild" }, world.deps);
+    close("t-1", "done", { project: "site" }, world.deps);
+    gain({ allProjects: true, json: true }, world.deps);
+    const out = lastJson() as {
+      projects: { project: string; done: number }[];
+      total: { started: number; done: number; tasks: { done: number } };
+    };
+    expect(out.projects.map((p) => [p.project, p.done])).toEqual([
+      ["rebuild", 1],
+      ["site", 1],
+    ]);
+    expect(out.total).toMatchObject({
+      done: 2,
+      started: 2,
+      tasks: { done: 2 },
+    });
+  });
+});
+
 describe("evidence readers", () => {
   it("voids a verdict once the rubric is edited", () => {
     const dir = tmp("captain-wt-");

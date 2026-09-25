@@ -56,7 +56,9 @@ skills/captain/   # the chat: SKILL.md + references/heartbeat.md + references/in
 overrides the root): `project.json` (`repo`, `wip`, optional `bootstrap`), `tasks/`,
 `learnings.md`, `log.jsonl`, and a git repo that `commit()` updates after each write.
 Commands pick the project from `--project`, then `CAPTAIN_PROJECT`, then the only one there is;
-anything ambiguous is an error. The project's `repo` is the only repo its worktrees branch from,
+anything ambiguous is an error. `status --all-projects` and `gain --all-projects` are the one
+exception: they read every project (`allProjects`, fail-soft per project), tag each row with its
+`project`, and rewrite `next` to `captain --project <name> ...` so it still runs verbatim. The project's `repo` is the only repo its worktrees branch from,
 which removes v2's wrong-repo launches by construction.
 
 **Tasks.** One file per task (`task.ts`). The chat edits them directly; commands write through
