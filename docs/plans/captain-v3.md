@@ -45,16 +45,18 @@ Three parts, all local, all files and CLIs:
   - makes a worktree plus bootstrap (deps, env, port offset);
   - opens a cmux workspace;
   - launches the full harness with the brief;
-  - uses the branch `t/<id>-<slug>`.
+  - uses the branch `<id>-<slug>`.
 - `captain status [--json]`: each task's live state, built fresh from cmux (busy/idle, plan waiting), git and `gh` (PR, CI, review). This is v2's derived view, so it can't drift from reality.
 - `captain approve|reject <task> --note`: the plan gate for risky tasks, through the cmux feed. Every decision is logged.
-- `captain send <task> "<msg>"`: steer a worker.
+- `captain send <task> "<msg>"`: steer a worker. `captain peek <task>` reads the end of its screen first.
+- `captain review <task>`: opens `<branch>:review` running the other vendor on a review-only brief that writes `.captain/review.json`. READY TO MERGE requires it.
+- `captain done|drop <task>`: close a task. The v2 fan-out, dispatch and bare-token routing are deleted, not ported.
 
 **What code guarantees, because a model shouldn't be trusted with it:**
 1. **One worktree per task.** Isolation plus bootstrap, which fixes v2's gaps with missing `node_modules`, OOM from parallel test pools and wrong-repo launches.
 2. **Status from evidence, not claims.** A worker saying "done" means nothing. Done means a PR exists, CI is green and the cross-vendor review has passed. `captain status` reads these directly.
 3. **A plan stop for risky work.** Auth, billing, data migrations, deletes, public contracts and build or release config start in Claude Code plan mode, and you approve before any code gets written.
-4. **WIP limit = your review capacity.** `captain start` refuses once the number of PRs waiting on you reaches the limit (starting at 4: "4 Claudes at a time is my max ability"). This matters most, because review is the ceiling: AI PRs wait about 5x longer (LinearB), and past capacity the wait grows as 1/(1−ρ).
+4. **WIP limit = your review capacity.** `captain start` refuses once the number of started, unmerged tasks (each one a PR you'll review) reaches the limit (starting at 4: "4 Claudes at a time is my max ability"). This matters most, because review is the ceiling: AI PRs wait about 5x longer (LinearB), and past capacity the wait grows as 1/(1−ρ).
 5. **You merge.** Every time at first. Only a tier the ledger shows is safe gets auto-merged later.
 
 **Kept from v2 as-is:** `source.ts`, `linear.ts`, `donebear.ts`, `issue.ts` (blockers), `git.ts` (worktree and lock), `cmux.ts` + `captain/control.ts` (cmux port, approve/reject), `prompt.ts` (brief), `memory.ts`, `captain/log.ts`, `captain/gain.ts`, `errors.ts`, `config.ts`. Also kept: the rubric and verdict (`rubric.ts`, `captain/verdict.ts`), as the reviewer's checklist.
@@ -69,7 +71,7 @@ Three parts, all local, all files and CLIs:
 | Stall detector in code | The chat misses a Codex "next step is… and stops" more than once a week |
 | Main-red brake in code | Main breaks with agents still dispatching (the 21 Aug failure) |
 | Jev for triage only (never model routing) | Intake volume outgrows your 5-second read of each decision card |
-| Slack or WhatsApp inbox (Slack Code channels, or your eve template) | Remote Control isn't enough on your phone |
+| Slack front door (lives in the private `mblode/bots` repo) | Remote Control isn't enough on your phone |
 | Pi as the chat harness | You need two vendors inside one task loop, with non-Claude-subscription auth |
 
 ## What Dave Slutzkin's posts (OpenAI's "agentic software factory", 16–17 Sep) change
@@ -129,9 +131,9 @@ You route each task in 5 seconds on its decision card; the chat only suggests a 
 ## Phases and todos
 
 ### Phase 0: Captain v3, minimal (3–5 days)
-- [x] Copy this plan to `captain/docs/plans/captain-v3.md`, with a `.notes.md` beside it (Deviations, How it ended).
+- [x] Copy this plan to `captain/docs/plans/captain-v3.md`; deviations are folded in above.
 - [x] Task folder format: add `captain init <project>` and `captain add` (from a message or a ticket id). Reuse `source.ts` and `issue.ts`.
-- [x] `captain start --harness claude|codex|cursor`: worktree, bootstrap script, cmux workspace, branch `t/<id>-<slug>`. Reuse `git.ts`, `cmux.ts`, `prompt.ts`.
+- [x] `captain start --harness claude|codex|cursor`: worktree, bootstrap script, cmux workspace, branch `<id>-<slug>`. Reuse `git.ts`, `cmux.ts`, `prompt.ts`.
 - [x] `captain status`: rows from the task folder plus cmux, git and `gh`. The grouping rule is now `board.ts` `rowOf`, fed through `control.ts`.
 - [x] WIP limit check in `start`, one config number.
 - [x] Fix the stale skill names (`config.ts:23,26`, `doctor.ts:48`).
