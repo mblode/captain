@@ -47,7 +47,7 @@
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
-    "format:check": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "check": "ultracite check",
     "fix": "ultracite fix",
     "prepare": "lefthook install"
