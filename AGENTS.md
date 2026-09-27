@@ -10,13 +10,14 @@ Nothing about progress is stored, so there is no daemon. The design and its reas
 ## Commands
 
 ```bash
-npm install                 # setup (requires Node >= 24, per package.json engines)
+npm ci                      # setup (Node >= 24); `npm install` rewrites the lockfile's stale version field
 npm run build               # tsdown -> dist/
 npm run dev                 # tsdown --watch
 npm run test                # vitest run
+npm run test -- src/board.test.ts --reporter=dot   # one file, quiet
 npm run typecheck           # tsc --noEmit
 npm run lint                # oxlint .
-npm run check               # ultracite check (lint + format, CI-equivalent)
+npm run check               # ultracite check (lint + format); read-only, unlike `format:check` (`oxfmt .` writes)
 npm run fix                 # ultracite fix (format + lint autofix)
 npm link                    # install `captain` globally from this checkout
 ```
@@ -134,6 +135,9 @@ needs CI green, a passing verdict and a passing review.
 - **Harness flags are checked, not live-run.** Every flag `harnessCommand` emits was checked on
   22 Sep 2026 against Claude Code 2.1.280 `--help`, Codex 0.156.0 `--help` and the Cursor CLI
   parameter docs. After a harness upgrade, re-check its `--help` and update `cmux.test.ts`.
+- **Changesets gate PRs**: CI runs `npx changeset status --since origin/main`, and this is a
+  single-package repo, so every PR needs `npx changeset` (or `npx changeset add --empty` when
+  nothing ships).
 - **A config `bin` is a plain command name or path only** (`safeBin`): it lands unquoted at the
   front of the launch line, so anything with spaces or shell characters falls back to the default.
 
@@ -149,3 +153,19 @@ needs CI green, a passing verdict and a passing review.
 (string map merged over the `VITEST_MAX_FORKS/THREADS=2` defaults; `""` drops a key),
 `.harness.<claude|codex|cursor>.model` / `.effort` / `.bin` (each harness's defaults; a task's own
 values win).
+
+## Verification
+
+CI runs changeset status, `lint`, `typecheck`, `test` and `build`; all pass on `main` (27 Sep 2026,
+202 tests), as does `check`. For a command or board change, also run the built CLI against a
+throwaway project so nothing touches `~/captain`:
+
+```bash
+T=$(mktemp -d); export CAPTAIN_DIR=$T/p CAPTAIN_CONFIG=$T/c.json
+node dist/cli.js init smoke --repo "$PWD" && node dist/cli.js add "Smoke" && node dist/cli.js status
+```
+
+`start`, `review`, `approve` and `send` need a live cmux, so `commands.test.ts` is their proof.
+`captain install` is a preflight for a user's machine, not this repo. There is no `npm run doctor`,
+`npm run verify`, or feature map. Gap: nothing live-runs a harness launch line or the cmux wire
+protocol, so an upgrade of either is caught only by the harness-flags gotcha above.
