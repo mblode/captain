@@ -38,12 +38,12 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "start": "node dist/cli.js",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "pnpm build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "changeset": "changeset",
     "changeset:version": "changeset version",
-    "release": "npm run build && changeset publish",
+    "release": "pnpm build && changeset publish",
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
@@ -68,5 +68,6 @@
   },
   "engines": {
     "node": ">=24"
-  }
+  },
+  "packageManager": "pnpm@12.8.1"
 }
