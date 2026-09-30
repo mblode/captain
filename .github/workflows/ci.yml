@@ -29,7 +29,7 @@ jobs:
 
       - name: Changeset Status
         if: github.event_name == 'pull_request' && github.head_ref != 'changeset-release/main' && github.event.pull_request.user.login != 'dependabot[bot]'
-        run: pnpm dlx changeset status --since origin/main
+        run: pnpm exec changeset status --since origin/main
 
       - name: Lint
         run: pnpm run lint

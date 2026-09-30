@@ -135,7 +135,7 @@ needs CI green, a passing verdict and a passing review.
 - **Harness flags are checked, not live-run.** Every flag `harnessCommand` emits was checked on
   22 Sep 2026 against Claude Code 2.1.280 `--help`, Codex 0.156.0 `--help` and the Cursor CLI
   parameter docs. After a harness upgrade, re-check its `--help` and update `cmux.test.ts`.
-- **Changesets gate PRs**: CI runs `pnpm dlx changeset status --since origin/main`, and this is a
+- **Changesets gate PRs**: CI runs `pnpm exec changeset status --since origin/main`, and this is a
   single-package repo, so every PR needs `pnpm changeset` (or `pnpm changeset add --empty` when
   nothing ships).
 - **A config `bin` is a plain command name or path only** (`safeBin`): it lands unquoted at the
