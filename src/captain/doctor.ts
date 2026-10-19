@@ -92,6 +92,18 @@ export const buildChecks = (deps: DoctorDeps): Check[] => {
     ok: cmuxOk,
   });
 
+  // `captain spec` reads the change Markdown itself; the CLI scaffolds,
+  // validates and archives changes (archive merges spec deltas into
+  // openspec/specs/, which a plain `git mv` skips).
+  const openspecOk = deps.hasCommand("openspec");
+  checks.push({
+    detail: openspecOk ? "on PATH" : "not found",
+    hint: "npm install -g @fission-ai/openspec@latest (or brew install openspec), then `openspec init` in the repo",
+    label: "openspec",
+    level: "recommended",
+    ok: openspecOk,
+  });
+
   const hasKey = Boolean(deps.env.LINEAR_API_KEY);
   checks.push({
     detail: hasKey ? "set" : "unset",

@@ -43,35 +43,42 @@ Captain keeps **no state**. `status` derives from cmux + `.captain/changes/<id>/
 
 ## Writing a change ("add this to the list")
 
-Run from the target repo (or pass `--repo-path`). Write the files directly — the
-`openspec` CLI is optional; captain reads the Markdown itself.
+Run from the target repo (or pass `--repo-path`). Use the OpenSpec CLI to scaffold and
+check changes. Captain reads the Markdown itself, so the CLI is not needed to launch.
+
+Setup, once per machine and once per repo: Node >= 20.19, then
+`npm install -g @fission-ai/openspec@latest` (or `brew install openspec`), then
+`openspec init --tools claude` in the repo. Run `openspec update` in the repo after
+upgrading the CLI. `captain install` flags a missing CLI.
 
 1. Pick a kebab-case verb-led id: `add-dark-mode`, `fix-login-redirect`.
-2. `openspec/changes/<id>/proposal.md`:
-   ```markdown
-   # Change: <title>
+2. `openspec new change <id>` creates `openspec/changes/<id>/`. Fill its artifacts
+   in the current template's shape; `openspec instructions <artifact> --change <id>`
+   prints the template and rules for each one (`proposal`, `specs`, `design`, `tasks`).
+   - `proposal.md`: `## Why` (at least 50 characters, or validate warns), `## What Changes`, `## Capabilities` (the new or
+     modified capability paths), and `## Impact` (the code paths the agent should
+     touch). Keep the template's bare `# Proposal` heading; captain titles the
+     change by its id.
+   - `specs/<capability>/spec.md`: one delta per capability listed in the proposal
+     (`## ADDED Requirements` / `### Requirement:` / `#### Scenario:` with
+     `- **WHEN**` / `- **THEN**`). For a pure refactor, tooling, or docs change with
+     no capability, set `skip_specs: true` in the change's `.openspec.yaml` instead
+     of inventing a requirement.
+   - `tasks.md`: each unchecked box becomes one rubric criterion, so make every box
+     verifiable:
+     ```markdown
+     # Tasks
 
-   ## Why
-   <1–3 sentences: the problem or goal>
+     ## 1. Implementation
 
-   ## What changes
-   - <concrete behaviour change>
-
-   ## Impact
-   - Code: <paths/areas the agent should touch>
-   ```
-3. `openspec/changes/<id>/tasks.md` — each unchecked box becomes one rubric criterion,
-   so make every box verifiable:
-   ```markdown
-   ## 1. Implementation
-   - [ ] 1.1 <observable outcome>
-   - [ ] 1.2 Tests cover <behaviour>
-   ```
-4. Optional: `design.md` for decisions, `specs/<capability>/spec.md` deltas
-   (`## ADDED Requirements` / `### Requirement:` / `#### Scenario:`).
-5. Keep changes that will run together on disjoint files. Say so if two overlap and
+     - [ ] 1.1 <observable outcome>
+     - [ ] 1.2 Tests cover <behaviour>
+     ```
+   - `design.md` is optional, for decisions and trade-offs.
+3. `openspec validate <id>` must pass before you launch the change.
+4. Keep changes that will run together on disjoint files. Say so if two overlap and
    offer to run them one after the other.
-6. Do not launch unless asked. "Add to the list" means write it.
+5. Do not launch unless asked. "Add to the list" means write it.
 
 ## Launch
 
@@ -82,8 +89,10 @@ Run from the target repo (or pass `--repo-path`). Write the files directly — t
 - `--repo-path <abs>` from a driver session whose cwd is not the repo. `--agent codex`
   is ungated. `--print` writes the brief without launching.
 - Agents tick their boxes in `tasks.md` as they go. When a change is done and you are
-  asked to archive it, `git mv openspec/changes/<id> openspec/changes/archive/<date>-<id>`
-  (or `openspec archive <id>` if the CLI is installed) and commit.
+  asked to archive it, run `openspec archive <id> --yes` and commit the result. Archive
+  validates the change, merges its spec deltas into `openspec/specs/`, and moves the
+  folder to `openspec/changes/archive/`. Do not `git mv` it by hand: that skips the
+  spec merge. A `skip_specs: true` change archives with no spec merge and needs no extra flag.
 
 ## The loop
 

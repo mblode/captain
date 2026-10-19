@@ -5,6 +5,7 @@ import {
   claudeCommand,
   codexCommand,
   formatCmuxUnreachable,
+  groupContaining,
 } from "./cmux";
 
 describe("claudeCommand", () => {
@@ -135,5 +136,23 @@ describe("formatCmuxUnreachable", () => {
         pingStdout: "",
       })
     ).toMatch(/Socket Control Mode to Automation mode/u);
+  });
+});
+
+describe("groupContaining", () => {
+  const list = JSON.stringify({
+    groups: [
+      { id: "G-1", member_workspace_ids: ["AAA"] },
+      { id: "G-2", member_workspace_ids: ["BBB", "CCC"] },
+    ],
+  });
+
+  it("returns the group holding the driver workspace, ignoring case", () => {
+    expect(groupContaining(list, "ccc")).toBe("G-2");
+  });
+
+  it("reads an ungrouped driver or malformed output as no group", () => {
+    expect(groupContaining(list, "DDD")).toBeUndefined();
+    expect(groupContaining("not json", "AAA")).toBeUndefined();
   });
 });

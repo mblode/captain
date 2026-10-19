@@ -47,4 +47,16 @@ describe("OpenSpec changes", () => {
       "openspec/changes/add-dark-mode/specs/theme/spec.md"
     );
   });
+
+  it("titles a change by its id when the proposal uses the template's bare # Proposal", async () => {
+    const root = await repoWith({
+      "add-dark-mode": {
+        "proposal.md": "# Proposal\n\n## Why\nEyes.\n",
+        "tasks.md": "# Tasks\n\n## 1. Theme\n\n- [ ] 1.1 Add toggle\n",
+      },
+    });
+    const issue = readOpenspecChange(root, "add-dark-mode");
+    expect(issue.title).toBe("add-dark-mode");
+    expect(issue.criteria).toEqual([{ title: "1.1 Add toggle" }]);
+  });
 });

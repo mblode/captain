@@ -131,7 +131,87 @@ export const agentCommand = (
     ? codexCommand(promptPath, model, effort, agentEnv)
     : claudeCommand(promptPath, model, effort, agentEnv, name, sessionId);
 
+// The id of the sidebar group holding `workspaceId`, from
+// `workspace-group list --json --id-format both`. Garbage reads as "no group"
+// so launch never fails on cosmetics.
+export const groupContaining = (
+  listJson: string,
+  workspaceId: string
+): string | undefined => {
+  try {
+    const parsed = JSON.parse(listJson) as {
+      groups?: { id?: string; member_workspace_ids?: string[] }[];
+    };
+    const target = workspaceId.toUpperCase();
+    return parsed.groups?.find((group) =>
+      group.member_workspace_ids?.some((id) => id.toUpperCase() === target)
+    )?.id;
+  } catch {
+    return undefined;
+  }
+};
+
+const workspaceTitle = (
+  workspaceId: string,
+  env: NodeJS.ProcessEnv
+): string | undefined => {
+  const raw = run("cmux", ["rpc", "workspace.list"], { env });
+  try {
+    const parsed = JSON.parse(raw.stdout) as {
+      workspaces?: { id?: string; title?: string }[];
+    };
+    return parsed.workspaces?.find(
+      (w) => w.id?.toUpperCase() === workspaceId.toUpperCase()
+    )?.title;
+  } catch {
+    return undefined;
+  }
+};
+
+// Launched agents join the driver's sidebar group, so a fleet collapses under
+// the session that started it. An ungrouped driver becomes the anchor of a new
+// group named after it. Outside cmux (no CMUX_WORKSPACE_ID) nothing is grouped.
+// Best-effort: any failure still launches the workspace, just ungrouped.
+const driverGroup = (env: NodeJS.ProcessEnv): string | undefined => {
+  const driver = env.CMUX_WORKSPACE_ID;
+  if (!driver) {
+    return undefined;
+  }
+  const list = run(
+    "cmux",
+    ["workspace-group", "list", "--json", "--id-format", "both"],
+    { env }
+  );
+  const existing =
+    list.status === 0 ? groupContaining(list.stdout, driver) : undefined;
+  if (existing) {
+    return existing;
+  }
+  const title = workspaceTitle(driver, env);
+  const created = run(
+    "cmux",
+    [
+      "workspace-group",
+      "create",
+      "--from",
+      driver,
+      ...(title ? ["--name", title] : []),
+      "--json",
+      "--id-format",
+      "both",
+    ],
+    { env }
+  );
+  try {
+    return (JSON.parse(created.stdout) as { group?: { id?: string } }).group
+      ?.id;
+  } catch {
+    return undefined;
+  }
+};
+
 export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
+  const group = driverGroup(options.env);
   runRequired(
     "cmux",
     [
@@ -153,6 +233,7 @@ export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
       "--focus",
       options.focus ? "true" : "false",
       ...(options.description ? ["--description", options.description] : []),
+      ...(group ? ["--group", group] : []),
     ],
     { env: options.env }
   );

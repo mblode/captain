@@ -49,9 +49,13 @@ export const openTasks = (tasks: string): IssueCriterion[] =>
     title: m[1].trim(),
   }));
 
-// The proposal's first heading, minus OpenSpec's conventional "Change:" lead.
-export const proposalTitle = (proposal: string): string | undefined =>
-  /^#\s+(?:Change:\s*)?(.+)$/mu.exec(proposal)?.[1].trim() || undefined;
+// The proposal's first heading, minus the legacy "Change:" lead. The current
+// template's heading is a bare "# Proposal" (OpenSpec titles a change by its
+// id), which names nothing, so it falls back to the id too.
+export const proposalTitle = (proposal: string): string | undefined => {
+  const title = /^#\s+(?:Change:\s*)?(.+)$/mu.exec(proposal)?.[1].trim();
+  return title && title.toLowerCase() !== "proposal" ? title : undefined;
+};
 
 const specFiles = (dir: string): string[] => {
   try {
