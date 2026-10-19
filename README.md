@@ -51,6 +51,15 @@ captain status
 captain approve tig-430
 ```
 
+### OpenSpec on one branch
+
+No tracker and no worktrees: write each piece of work as an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change (`openspec/changes/<id>/proposal.md` + `tasks.md`), then launch one agent per change in the current checkout. Each agent commits `[<id>] …` with only its own paths and pushes to the current branch; no PR is opened. The open `tasks.md` boxes become the definition of done.
+
+```bash
+captain spec add-dark-mode fix-login-redirect   # or: captain spec --all
+captain status
+```
+
 From inside a Claude Code session, run `/captain` and steer the same fleet in plain language: fan out these tickets, what is blocked, approve all the plans, what is ready to merge.
 
 ## What you control

@@ -402,7 +402,7 @@ const targetOf = (
 // worktrees share the main checkout's `.git/info/exclude` (a linked worktree's
 // own `.git` is a FILE, so we resolve the common git dir rather than assume a
 // `.git` directory), so one append covers the whole fleet; nothing is committed.
-const excludeCaptainDir = async (
+export const excludeCaptainDir = async (
   repoRoot: string,
   env: NodeJS.ProcessEnv
 ): Promise<void> => {

@@ -15,6 +15,7 @@ import { msg, style, useColor } from "./captain/format";
 import { CliError, EXIT } from "./errors";
 import { withImplicitStart } from "./route";
 import { runStart } from "./runner";
+import { runSpec } from "./spec";
 
 // The bin runs under whatever node is first in PATH, and fnm repo pins are
 // often 18 — which lacks ES2023's toSorted. Patch it rather than ban it: the
@@ -58,6 +59,8 @@ program
     `
 Workflow:
   $ captain install                      install the /captain + pipeline skills, then check setup
+  $ captain spec add-dark-mode fix-auth  OpenSpec changes → agents on the current branch
+  $ captain spec --all                   every active OpenSpec change not already running
   $ captain TIG-430 TIG-431              Linear issues → worktrees + agents (bare = start)
   $ captain start TIG-430 TIG-431        the same, explicit
   $ captain "tidy the README"            a free-form task in the current dir (no Linear)
@@ -147,6 +150,40 @@ program
         // --repo-path is canonical; --repo is the hidden legacy alias.
         repoOverride: options.repoPath ?? options.repo,
         tokens: input,
+      });
+    }
+  );
+
+// OpenSpec changes, all on the checkout's current branch — no worktrees.
+program
+  .command("spec")
+  .description(
+    "start one agent per OpenSpec change (openspec/changes/<id>/), all on the current branch"
+  )
+  .argument("[change...]", "OpenSpec change id(s)")
+  .option("--all", "every active change that has no running agent")
+  .option("--print", "print each brief without launching")
+  .option("--json", "emit JSON: { branch, started: [...], skipped: [...] }")
+  .option("--repo-path <path>", "the git repo to run in (default: cwd)")
+  .option("--agent <name>", "claude (default) or codex (no plan gate)")
+  .action(
+    async (
+      ids: string[],
+      options: {
+        all?: boolean;
+        print?: boolean;
+        json?: boolean;
+        repoPath?: string;
+        agent?: string;
+      }
+    ) => {
+      process.exitCode = await runSpec({
+        agent: options.agent,
+        all: Boolean(options.all),
+        ids,
+        json: Boolean(options.json),
+        print: Boolean(options.print),
+        repoOverride: options.repoPath,
       });
     }
   );

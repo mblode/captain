@@ -1,5 +1,6 @@
 import { DEFAULT_SKILLS } from "./config";
-import { PLAN_RELPATH, RUBRIC_RELPATH } from "./rubric";
+import { RUBRIC_RELPATH, statePaths } from "./rubric";
+import type { SharedBranch } from "./rubric";
 import type { Issue } from "./types";
 
 export const renderPrompt = (
@@ -8,13 +9,14 @@ export const renderPrompt = (
   // the issue source, for the brief's opening line (Linear or donebear). The
   // rest of the context is source-agnostic — every source maps into the neutral
   // Issue shape upstream (linear.ts / donebear.ts).
-  source = "Linear"
+  source = "Linear",
+  rubricPath = RUBRIC_RELPATH
 ): string => {
   const identifier = issue?.identifier ?? displayId;
   const title = issue?.title ? `: ${issue.title}` : "";
   return (
     `Work on ${source} issue ${identifier}${title}.\n\n` +
-    `Read \`${RUBRIC_RELPATH}\` before planning: it is the complete authoritative ` +
+    `Read \`${rubricPath}\` before planning: it is the complete authoritative ` +
     "issue contract and your definition of done. Do not edit it."
   );
 };
@@ -38,7 +40,37 @@ interface PromptExtras {
   // plan mode and waits for plan approval. codex has no plan mode/gate, so its
   // plan step must NOT tell it to wait for an approval that can never arrive.
   agent?: string;
+  // an OpenSpec change run in the shared checkout: per-change plan path, and
+  // commit-and-push to the branch instead of a PR
+  shared?: SharedBranch;
+  // the OpenSpec change id, for commit tags and its tasks.md
+  sharedId?: string;
 }
+
+// How an agent shares one checkout and one branch with the rest of the fleet.
+// The index is shared too, so a plain `git commit` would sweep up whatever
+// another agent staged; `git commit -- <paths>` commits only the named paths.
+const sharedBranchSection = (shared: SharedBranch, id: string): string =>
+  [
+    "",
+    "<shared-branch>",
+    `There is no worktree and no new branch. You work directly on \`${shared.branch}\` in this`,
+    "checkout, alongside other agents working on other changes in the same file tree.",
+    "",
+    "- Never create, switch, or reset branches. Never run `git stash`, `git reset`,",
+    "  `git checkout -- .`, `git clean`, or `git add -A`/`git add .` — they touch other agents' work.",
+    "- Touch only the files your change needs. A failing test or lint error in a file you did",
+    "  not touch belongs to another agent in flight: leave it, and say so in your verdict evidence.",
+    `- Commit only your own paths: \`git add <new files>\` then \`git commit -m "[${id}] <summary>" -- <paths>\`.`,
+    `  Every commit message starts with \`[${id}]\`; the verifier finds your work by that tag.`,
+    `- Push after each commit: \`git push origin ${shared.branch}\`. If the push is rejected, run`,
+    `  \`git pull --rebase --autostash origin ${shared.branch}\` and push again. If git reports an`,
+    "  `index.lock`, wait a few seconds and retry — another agent is committing.",
+    `- Tick the boxes in \`openspec/changes/${id}/tasks.md\` as you finish each task, and commit that`,
+    "  file with your work.",
+    "</shared-branch>",
+    "",
+  ].join("\n");
 
 // The sections appended after the issue context: the self-drive workflow (the
 // agent owns the whole SDLC — captain only dispatches and surfaces), the
@@ -85,7 +117,7 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     // rewrite would silently erase what was approved, and there would be nothing
     // left for the criterion to compare the diff against.
     const planStep =
-      `write the plan verbatim to \`${PLAN_RELPATH}\`, then implement it. If you end up ` +
+      `write the plan verbatim to \`${statePaths(extras.shared).plan}\`, then implement it. If you end up ` +
       'deviating from it, append what changed and why under a "## Deviations" heading ' +
       "in that same file rather than rewriting the plan — the plan above it is the " +
       "record of what was approved, and a verifier grades the diff against both.";
@@ -135,6 +167,10 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     out += "\n</workflow>\n";
   }
 
+  if (extras.shared && extras.sharedId) {
+    out += sharedBranchSection(extras.shared, extras.sharedId);
+  }
+
   if (extras.dataScope) {
     out += "\n<data-scope>\n";
     out += `${extras.dataScope}\n`;
@@ -147,8 +183,8 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       `Before declaring the ticket done, follow ${extras.rubricPath}'s "How to verify" section: spawn a ` +
       "fresh-context verifier sub-agent to grade the diff against the acceptance criteria, " +
       "fix and re-verify until it passes, then write the verdict file exactly as the " +
-      'rubric\'s "Verdict" section specifies. Captain will not mark this worktree ' +
-      "PR-ready without a passing verdict.\n";
+      'rubric\'s "Verdict" section specifies. Captain will not mark this ' +
+      `${extras.shared ? "change" : "worktree PR-"}ready without a passing verdict.\n`;
     out +=
       "Once the verdict is written your work on this ticket is complete — stop and wait; the " +
       "captain driver sees the verdict on its next `captain status` and owns the merge decision. " +

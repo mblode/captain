@@ -17,6 +17,30 @@ const issue: Issue = {
 };
 
 describe("renderRubric", () => {
+  it("on a shared branch, done means tagged commits pushed to the branch, not a PR", () => {
+    const { text } = renderRubric(
+      issue,
+      "add-dark-mode",
+      undefined,
+      "OpenSpec",
+      {
+        baseSha: "abc1234",
+        branch: "main",
+        stateDir: ".captain/changes/add-dark-mode",
+      }
+    );
+    expect(text).toContain(
+      'committed with "[add-dark-mode]" in the message and pushed to `main`'
+    );
+    expect(text).not.toContain("A PR is open");
+    expect(text).toContain(
+      "git log -p --grep='\\[add-dark-mode\\]' abc1234..HEAD"
+    );
+    expect(text).toContain(
+      "write `.captain/changes/add-dark-mode/verdict.json`"
+    );
+  });
+
   it("derives criteria from the issue plus the standard repo gates", () => {
     const { text } = renderRubric(issue, "ENG-403");
     expect(text).toContain("# Definition of done — ENG-403");

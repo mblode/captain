@@ -8,7 +8,7 @@ import {
   rubricHash,
   VERDICT_RELPATH,
 } from "../rubric";
-import type { CmuxPort } from "./control";
+import type { CmuxPort, CmuxWorkspace } from "./control";
 import { parseVerdict } from "./verdict";
 import type { Verdict } from "./verdict";
 import { pickAgentWorkspaces, rowOf, withHandles } from "./view";
@@ -19,11 +19,19 @@ import type { FleetRow } from "./view";
 // and the per-worktree .captain/ files ARE the state, so nothing can desync
 // and no daemon has to own a write lock.
 
-// Thin fs edge: the agent-written verdict at <cwd>/.captain/verdict.json.
-// Missing or unreadable → null (no verdict yet).
-export const readVerdict = (cwd: string): Verdict | null => {
+// An OpenSpec change's captain files, under the shared checkout. Worktree runs
+// keep theirs at `<cwd>/.captain/` instead.
+export const changeStateDir = (id: string): string =>
+  join(".captain", "changes", id);
+
+// Thin fs edge: the agent-written verdict at <cwd>/.captain/verdict.json, or
+// in the change's state dir. Missing or unreadable → null (no verdict yet).
+export const readVerdict = (cwd: string, change?: string): Verdict | null => {
   try {
-    return parseVerdict(readFileSync(join(cwd, VERDICT_RELPATH), "utf-8"));
+    const path = change
+      ? join(cwd, changeStateDir(change), "verdict.json")
+      : join(cwd, VERDICT_RELPATH);
+    return parseVerdict(readFileSync(path, "utf-8"));
   } catch {
     return null;
   }
@@ -48,10 +56,14 @@ const TITLE_LINE = /^- Title: (.+)$/mu;
 // because two exported readers of the same file would drift and double the I/O
 // on every status/gain call, once per worktree.
 export const readRubricFacts = (
-  cwd: string
+  cwd: string,
+  change?: string
 ): { hash?: string; title?: string } => {
   try {
-    const text = readFileSync(join(cwd, RUBRIC_RELPATH), "utf-8");
+    const path = change
+      ? join(cwd, changeStateDir(change), "rubric.md")
+      : join(cwd, RUBRIC_RELPATH);
+    const text = readFileSync(path, "utf-8");
     return {
       hash: rubricHash(rubricBody(text)),
       title: TITLE_LINE.exec(text)?.[1].trim() || undefined,
@@ -65,11 +77,34 @@ export const readRubricFacts = (
   }
 };
 
-// A captain-managed worktree is exactly one with a `.captain/` dir (fanout
+// A captain-managed worktree is exactly one with a `.captain/rubric.md` (fanout
 // writes the rubric there) — a stateless membership marker that survives any
 // restart and needs no adoption bookkeeping.
 const isManaged = (cwd: string): boolean =>
-  Boolean(cwd) && existsSync(join(cwd, ".captain"));
+  Boolean(cwd) && existsSync(join(cwd, RUBRIC_RELPATH));
+
+// The OpenSpec change a workspace runs, when it runs one: launch sets the
+// workspace description to the change id and writes its rubric under the
+// change's state dir. The session file holds the agent's `--session-id`.
+const changeOf = (
+  w: CmuxWorkspace
+): { id: string; session?: string } | undefined => {
+  const id = w.description;
+  if (
+    !(w.cwd && id && existsSync(join(w.cwd, changeStateDir(id), "rubric.md")))
+  ) {
+    return undefined;
+  }
+  try {
+    const session = readFileSync(
+      join(w.cwd, changeStateDir(id), "session"),
+      "utf-8"
+    ).trim();
+    return { id, session: session || undefined };
+  } catch {
+    return { id };
+  }
+};
 
 // The whole fleet, one row per captain-managed cmux workspace. Everything is
 // gathered fresh: workspace list + feed + run states are one cmux call each,
@@ -85,10 +120,11 @@ export const fleetRows = (
   // collision — is known.
   return withHandles(
     pickAgentWorkspaces(
-      port.listWorkspaces().filter((w) => isManaged(w.cwd)),
+      port.listWorkspaces().filter((w) => changeOf(w) || isManaged(w.cwd)),
       runs
     ).map((w) => {
-      const rubric = readRubricFacts(w.cwd);
+      const change = changeOf(w);
+      const rubric = readRubricFacts(w.cwd, change?.id);
       return rowOf({
         cwd: w.cwd,
         expectedHash: rubric.hash,
@@ -96,8 +132,10 @@ export const fleetRows = (
         feed,
         repo: repoLabel(w.cwd, env),
         run: runs[w.id.toLowerCase()] ?? "unknown",
+        session: change?.session,
+        ticket: change?.id,
         title: rubric.title,
-        verdict: readVerdict(w.cwd),
+        verdict: readVerdict(w.cwd, change?.id),
         workspaceId: w.id,
       });
     })

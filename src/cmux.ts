@@ -9,6 +9,10 @@ interface OpenWorkspaceOptions {
   focus: boolean;
   promptPath: string;
   worktreePath: string;
+  // OpenSpec runs: the change id as the workspace description (status's
+  // membership marker) and a fixed claude session id (the gate join key)
+  description?: string;
+  sessionId?: string;
 }
 
 // A fan-out is ≥2 issue tokens on one line — any source's tokens, mixable,
@@ -86,10 +90,12 @@ export const claudeCommand = (
   model: string,
   effort: string,
   agentEnv: Record<string, string> = {},
-  name?: string
+  name?: string,
+  sessionId?: string
 ): string => {
   const nameFlag = name ? `--name ${shellQuote(name)} ` : "";
-  return `${envPrefix(agentEnv)}claude ${nameFlag}--model ${shellQuote(model)} --effort ${shellQuote(effort)} --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
+  const sessionFlag = sessionId ? `--session-id ${shellQuote(sessionId)} ` : "";
+  return `${envPrefix(agentEnv)}claude ${nameFlag}${sessionFlag}--model ${shellQuote(model)} --effort ${shellQuote(effort)} --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
 };
 
 // The codex counterpart of claudeCommand — best-effort: codex has no plan mode,
@@ -118,11 +124,12 @@ export const agentCommand = (
   model: string,
   effort: string,
   agentEnv: Record<string, string> = {},
-  name?: string
+  name?: string,
+  sessionId?: string
 ): string =>
   agent === "codex"
     ? codexCommand(promptPath, model, effort, agentEnv)
-    : claudeCommand(promptPath, model, effort, agentEnv, name);
+    : claudeCommand(promptPath, model, effort, agentEnv, name, sessionId);
 
 export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
   runRequired(
@@ -140,10 +147,12 @@ export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
         loadModel(options.env),
         loadEffort(options.env),
         loadAgentEnv(options.env),
-        options.branch
+        options.branch,
+        options.sessionId
       ),
       "--focus",
       options.focus ? "true" : "false",
+      ...(options.description ? ["--description", options.description] : []),
     ],
     { env: options.env }
   );

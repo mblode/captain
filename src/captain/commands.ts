@@ -398,7 +398,8 @@ const statusOnce = (
   // worktree, so it is reached ONLY on the plain TTY render — the --json and
   // --summary machine paths above all return before this point and never pay
   // the git cost. Only worth a git call when ≥2 worktrees are ready.
-  const ready = rows.filter((r) => r.group === "ready");
+  // OpenSpec changes are already on one shared branch: nothing to merge-order.
+  const ready = rows.filter((r) => r.group === "ready" && !r.change);
   const overlaps =
     ready.length >= 2
       ? mergeOrderHints(
@@ -717,7 +718,7 @@ const validVerdicts = (
     if (!row.verdict) {
       continue;
     }
-    const verdict = readVerdict(row.cwd);
+    const verdict = readVerdict(row.cwd, row.change);
     if (verdict) {
       out.push({ name: row.name, repo: row.repo, verdict });
     }

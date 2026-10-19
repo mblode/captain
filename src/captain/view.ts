@@ -29,6 +29,8 @@ export interface Gate {
 export interface FleetRow {
   workspaceId: string;
   cwd: string;
+  // the OpenSpec change this row runs, for rows in a shared checkout
+  change?: string;
   // friendly display name: "${repo}-${ticket}" when both derive, else the
   // workspace's own name
   name: string;
@@ -94,6 +96,10 @@ export const identityOf = (
   return { name, repo, ticket };
 };
 
+// OpenSpec changes share one checkout, so the description (the change id) is
+// part of a workspace's key; worktree workspaces carry none and key by cwd.
+const keyOf = (w: CmuxWorkspace): string => `${w.cwd}\0${w.description ?? ""}`;
+
 // PURE: collapse workspaces that share a cwd into the one that actually hosts
 // the agent. cmux sidebar groups are anchored to a real workspace, and a
 // group's anchor can be an idle shell spawned in a worktree's dir — without
@@ -106,14 +112,14 @@ export const pickAgentWorkspaces = (
   runs: Record<string, RunState>
 ): CmuxWorkspace[] => {
   const hasAgent = (w: CmuxWorkspace): boolean => w.id.toLowerCase() in runs;
-  const byCwd = new Map<string, CmuxWorkspace>();
+  const byKey = new Map<string, CmuxWorkspace>();
   for (const w of workspaces) {
-    const prev = byCwd.get(w.cwd);
+    const prev = byKey.get(keyOf(w));
     if (!prev || (!hasAgent(prev) && hasAgent(w))) {
-      byCwd.set(w.cwd, w);
+      byKey.set(keyOf(w), w);
     }
   }
-  return workspaces.filter((w) => byCwd.get(w.cwd) === w);
+  return workspaces.filter((w) => byKey.get(keyOf(w)) === w);
 };
 
 // Feed kinds that gate on a human. Wire names are WorkstreamKind raw values
@@ -141,15 +147,20 @@ const sameCwd = (left: string, right: string): boolean =>
   left === right || normalizeCwd(left) === normalizeCwd(right);
 
 // The newest unresolved gating feed item for a worktree, matched by cwd (the
-// cross-channel join key). `resolved_at` is set the moment an item is
+// cross-channel join key) — or by agent session when one is known, because
+// OpenSpec changes share a cwd and only the session tells their gates apart. `resolved_at` is set the moment an item is
 // answered/expired, so its absence is the pending marker; feed.list is
 // chronological, so the LAST match is the live gate.
 export const pendingGate = (
   items: CmuxFeedItem[],
-  cwd: string
+  cwd: string,
+  session?: string
 ): Gate | undefined => {
   const item = items.findLast(
-    (f) => GATE_KINDS.has(f.kind) && sameCwd(f.cwd, cwd) && !f.resolved_at
+    (f) =>
+      GATE_KINDS.has(f.kind) &&
+      (session ? f.session === session : sameCwd(f.cwd, cwd)) &&
+      !f.resolved_at
   );
   if (!item) {
     return undefined;
@@ -177,6 +188,10 @@ export interface RowInput {
   expectedHash?: string;
   // the ticket's subject, from the same rubric read as expectedHash
   title?: string;
+  // an OpenSpec change: its id (the ticket) and its agent's session id (the
+  // gate join key). Worktree rows derive the ticket from the cwd instead.
+  ticket?: string;
+  session?: string;
 }
 
 // PURE: the single executable next-action for a row, matching what the TTY
@@ -224,7 +239,7 @@ export const stateHash = (
 //   a valid passing verdict → ready (the human merge gate stays authoritative)
 //   otherwise → in-flight (working or idling)
 export const rowOf = (input: RowInput): FleetRow => {
-  const gate = pendingGate(input.feed, input.cwd);
+  const gate = pendingGate(input.feed, input.cwd, input.session);
   const verdict =
     input.verdict && verdictCounts(input.verdict, input.expectedHash)
       ? input.verdict
@@ -240,6 +255,7 @@ export const rowOf = (input: RowInput): FleetRow => {
     group = "needs-you";
   }
   const row: FleetRow = {
+    change: input.ticket,
     cwd: input.cwd,
     gate,
     group,
@@ -252,7 +268,13 @@ export const rowOf = (input: RowInput): FleetRow => {
     title: input.title,
     verdict: verdict?.verdict,
     workspaceId: input.workspaceId,
-    ...identityOf(input.cwd, input.fallbackName, input.repo),
+    ...(input.ticket
+      ? {
+          name: input.repo ? `${input.repo}-${input.ticket}` : input.ticket,
+          repo: input.repo,
+          ticket: input.ticket,
+        }
+      : identityOf(input.cwd, input.fallbackName, input.repo)),
   };
   row.nextCommand = nextCommand(row);
   row.stateHash = stateHash(row);

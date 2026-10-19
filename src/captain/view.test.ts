@@ -307,6 +307,43 @@ describe("pickAgentWorkspaces", () => {
     const b = ws("WS-B", "/wt/tig-2");
     expect(pickAgentWorkspaces([a, b], { "ws-a": "running" })).toEqual([a, b]);
   });
+  it("keeps OpenSpec agents that share one checkout apart by change id", () => {
+    const a = { ...ws("WS-A", "/repo"), description: "add-dark-mode" };
+    const b = { ...ws("WS-B", "/repo"), description: "fix-login" };
+    expect(pickAgentWorkspaces([a, b], {})).toEqual([a, b]);
+  });
+});
+
+describe("OpenSpec rows in a shared checkout", () => {
+  const plan = (session: string, id: string): CmuxFeedItem =>
+    feedItem({ cwd: "/repo", id, request_id: `req-${id}`, session });
+
+  it("matches each change's plan gate by its agent session, not the shared cwd", () => {
+    const feed = [plan("sess-a", "a"), plan("sess-b", "b")];
+    const rowA = rowOf(
+      input({
+        cwd: "/repo",
+        feed,
+        repo: "app",
+        session: "sess-a",
+        ticket: "add-dark-mode",
+      })
+    );
+    const rowB = rowOf(
+      input({
+        cwd: "/repo",
+        feed,
+        repo: "app",
+        session: "sess-c",
+        ticket: "fix-login",
+      })
+    );
+    expect(rowA.gate?.replyId).toBe("req-a");
+    expect(rowA.name).toBe("app-add-dark-mode");
+    expect(rowA.nextCommand).toBe("captain approve add-dark-mode");
+    expect(rowB.gate).toBeUndefined();
+    expect(rowB.group).toBe("in-flight");
+  });
 });
 
 const entry = (
