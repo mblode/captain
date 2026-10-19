@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +31,22 @@ import type {
 } from "./control";
 import { appendLog } from "./log";
 import type { FleetRow } from "./view";
+
+const PLAN_MENU_SCREEN = [
+  "─".repeat(20),
+  " Claude has written up a plan and is ready to execute. Would you like to proceed?",
+  "",
+  " ❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session",
+  "   2. Yes, manually approve edits",
+  "   3. Tell Claude what to change",
+].join("\n");
+const expiredPlan = (cwd: string): CmuxFeedItem => ({
+  cwd,
+  id: "feed-1",
+  kind: "exitPlan",
+  resolved_at: "2026-10-19T23:12:03Z",
+  status: "expired",
+});
 
 const fleetRow = (over: Partial<FleetRow> = {}): FleetRow => ({
   cwd: "/wt/tig-1",
@@ -161,6 +183,7 @@ describe("resolveTargets", () => {
 // over temp worktrees with a `.captain/` marker) with an in-memory CmuxPort.
 
 interface FakePort extends CmuxPort {
+  keys: { workspaceId: string; key: string }[];
   replies: { id: string; approve: boolean }[];
   sent: { workspaceId: string; text: string }[];
   sendAttempts: string[];
@@ -174,6 +197,8 @@ interface FakePortOpts {
   // throw from send() to simulate a failed feedback delivery
   sendThrows?: boolean;
   sendThrowsFor?: string[];
+  // each workspace's terminal text, keyed by workspace id
+  screens?: Record<string, string>;
 }
 
 const fakePort = (
@@ -185,6 +210,7 @@ const fakePort = (
   const sent: FakePort["sent"] = [];
   const sendAttempts: string[] = [];
   const toasts: FakePort["toasts"] = [];
+  const keys: FakePort["keys"] = [];
   // Real exitPlan items always carry a request_id (the reply handle, distinct
   // from the item id); fixtures that don't care get one mirroring their id.
   const items = feed.map((i) =>
@@ -192,11 +218,16 @@ const fakePort = (
   );
   return {
     feedList: () => items,
+    keys,
     listWorkspaces: () => workspaces,
     notify: (title, body) => {
       toasts.push({ body, title });
     },
+    pressKey: (workspaceId, key) => {
+      keys.push({ key, workspaceId });
+    },
     reachable: () => opts.reachable ?? true,
+    readScreen: (workspaceId) => opts.screens?.[workspaceId] ?? "",
     replies,
     replyExitPlan: (id, isApproved) => {
       replies.push({ approve: isApproved, id });
@@ -380,6 +411,83 @@ describe("stateless approve/reject/status over the real surface", () => {
     approve("tig-430", out, port);
     expect(port.replies).toHaveLength(0);
     expect(text()).toContain("nothing to approve");
+  });
+
+  // Regression: cmux expires a feed item ~2 minutes after it lands, and the
+  // agent then waits on its own plan menu. Status hid the gate and approve said
+  // "no plan-ready worktree", so plans sat unapproved behind a "working" row.
+  it("an expired plan gate still needs you, read off the agent's screen", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [expiredPlan(cwd)],
+      { runs: { "ws-1": "running" }, screens: { "ws-1": PLAN_MENU_SCREEN } }
+    );
+    const { out, text } = capture();
+    status({ json: true }, out, port);
+    const [row] = JSON.parse(text()) as FleetRow[];
+    expect(row).toMatchObject({
+      gate: { kind: "plan" },
+      group: "needs-you",
+      nextCommand: "captain approve tig-430",
+    });
+  });
+
+  it("approve answers an expired plan gate on screen and logs the note", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [expiredPlan(cwd)],
+      { screens: { "ws-1": PLAN_MENU_SCREEN } }
+    );
+    const { out } = capture();
+    approve("tig-430", out, port, { note: "scope matches" });
+    expect(port.keys).toEqual([{ key: "enter", workspaceId: "ws-1" }]);
+    expect(port.replies).toHaveLength(0);
+    const log = readFileSync(join(root, "home", "log.jsonl"), "utf-8");
+    expect(JSON.parse(log.trim())).toMatchObject({
+      kind: "approve",
+      note: "scope matches",
+    });
+  });
+
+  it("approve refuses an on-screen plan menu whose highlighted option is not the bypass approval", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [expiredPlan(cwd)],
+      {
+        screens: {
+          "ws-1": PLAN_MENU_SCREEN.replace(
+            "❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session",
+            "❯ 1. Yes, and auto-accept edits"
+          ),
+        },
+      }
+    );
+    const { out } = capture();
+    expect(() => approve("tig-430", out, port)).toThrow(/bypass permissions/u);
+    expect(port.keys).toHaveLength(0);
+    expect(existsSync(join(root, "home", "log.jsonl"))).toBe(false);
+  });
+
+  it("reject declines an on-screen plan before typing the feedback", () => {
+    const cwd = worktree("tig-430");
+    const port = fakePort(
+      [{ cwd, id: "ws-1", name: "tig-430", ref: "r" }],
+      [expiredPlan(cwd)],
+      { screens: { "ws-1": PLAN_MENU_SCREEN } }
+    );
+    const { out } = capture();
+    reject("tig-430", "split the migration", out, port);
+    expect(port.keys).toEqual([{ key: "escape", workspaceId: "ws-1" }]);
+    expect(port.replies).toHaveLength(0);
+    expect(port.sent).toEqual([
+      {
+        text: "Plan rejected — revise it: split the migration",
+        workspaceId: "ws-1",
+      },
+    ]);
   });
 
   it("reject replies false AND types the feedback into the workspace", () => {

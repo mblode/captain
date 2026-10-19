@@ -18,7 +18,12 @@ import { computeGain, parseSince } from "./gain";
 import { appendLog, now, readLog } from "./log";
 import { fleetRows, readVerdict } from "./surface";
 import type { Verdict } from "./verdict";
-import { groupCounts, mergeOrderHints, ticketFrom } from "./view";
+import {
+  groupCounts,
+  mergeOrderHints,
+  screenPlanApprovable,
+  ticketFrom,
+} from "./view";
 import type { FleetRow } from "./view";
 
 const styleFor = (out: NodeJS.WritableStream): Style => style(useColor(out));
@@ -566,6 +571,41 @@ const reportUnresolved = (
   }
 };
 
+// A plan gate whose feed item expired is answered on the agent's screen, and
+// only when Enter would pick the bypass-permissions approval (the mode the
+// feed reply uses). Checked for every target before any is answered.
+const assertScreenPlansApprovable = (
+  port: CmuxPort,
+  rows: FleetRow[]
+): void => {
+  const stuck = rows.filter(
+    (row) =>
+      row.gate?.onScreen &&
+      !screenPlanApprovable(port.readScreen(row.workspaceId))
+  );
+  if (stuck.length > 0) {
+    throw new CliError(
+      `the plan menu for ${stuck.map((row) => row.name).join(", ")} has no highlighted "Yes, and bypass permissions" option, so no plan was approved. Answer it in the workspace: ${stuck.map((row) => `cmux read-screen --workspace ${row.workspaceId}`).join("; ")}`,
+      EXIT.GENERIC,
+      "PLAN_MENU_UNRECOGNISED"
+    );
+  }
+};
+
+const replyToPlan = (
+  port: CmuxPort,
+  row: FleetRow,
+  approved: boolean
+): void => {
+  if (row.gate?.onScreen) {
+    // Enter takes the highlighted approval; Escape declines the plan and
+    // leaves the agent in plan mode at its prompt.
+    port.pressKey(row.workspaceId, approved ? "enter" : "escape");
+    return;
+  }
+  port.replyExitPlan(row.gate?.replyId ?? "", approved);
+};
+
 export const approve = (
   spec: string,
   out: NodeJS.WritableStream,
@@ -576,9 +616,10 @@ export const approve = (
   const note = cleanNote(options.note);
   const { matched, unknown, ambiguous } = resolvePlanTargets(port, spec);
   const unlogged: string[] = [];
+  assertScreenPlansApprovable(port, matched);
   // The reply IS the approval (no state), so do it regardless of output mode.
   for (const row of matched) {
-    port.replyExitPlan(row.gate?.replyId ?? "", true);
+    replyToPlan(port, row, true);
     appendDecision(
       { kind: "approve", name: row.name, ts: now(), ...(note ? { note } : {}) },
       unlogged
@@ -636,8 +677,16 @@ export const reject = (
   // Two-phase fail-closed rejection: every target must receive the feedback
   // before any gate is resolved. Otherwise a partial cmux failure could resume
   // agents without the reason they need to revise safely.
+  // An on-screen plan menu would swallow typed text, so it is declined first
+  // and the feedback lands at the agent's prompt; that gate is then already
+  // answered, which the failure message below accounts for.
+  const declined = new Set<FleetRow>();
   for (const row of matched) {
     try {
+      if (row.gate?.onScreen) {
+        replyToPlan(port, row, false);
+        declined.add(row);
+      }
       port.send(row.workspaceId, feedback);
     } catch {
       deliveryFailures.push(row);
@@ -651,7 +700,7 @@ export const reject = (
       )
       .join("; ");
     throw new CliError(
-      `feedback delivery failed for ${deliveryFailures.map((row) => row.name).join(", ")}; no plan gates were changed. Retry the rejection, or resend manually: ${resend}`,
+      `feedback delivery failed for ${deliveryFailures.map((row) => row.name).join(", ")}; ${declined.size > 0 ? `on-screen plans were already declined for ${[...declined].map((row) => row.name).join(", ")}, other` : "no"} plan gates were changed. Retry the rejection, or resend manually: ${resend}`,
       EXIT.CMUX_UNREACHABLE,
       "CMUX_UNREACHABLE"
     );
@@ -660,7 +709,9 @@ export const reject = (
   const rejected: string[] = [];
   const unlogged: string[] = [];
   for (const row of matched) {
-    port.replyExitPlan(row.gate?.replyId ?? "", false);
+    if (!declined.has(row)) {
+      replyToPlan(port, row, false);
+    }
     appendDecision(
       { kind: "reject", name: row.name, note: trimmedNote, ts: now() },
       unlogged

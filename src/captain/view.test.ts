@@ -9,6 +9,8 @@ import {
   pendingGate,
   pickAgentWorkspaces,
   rowOf,
+  screenGate,
+  screenPlanApprovable,
   stateHash,
   ticketFrom,
   withHandles,
@@ -126,6 +128,51 @@ describe("pendingGate", () => {
       pendingGate([feedItem({ cwd: "/private/var/wt/tig-1" })], "/var/wt/tig-1")
         ?.kind
     ).toBe("plan");
+  });
+});
+
+describe("screenGate", () => {
+  it("reads a question menu and its bordered prompt off the screen", () => {
+    const screen = [
+      "⏺ Everything left is blocked.",
+      "─".repeat(20),
+      " ☐ Blocked ",
+      "",
+      "│ Every Context file imports ContextRef. How should I proceed?",
+      "",
+      "❯ 1. Wait for them (Recommended)",
+      "  2. Local ContextRef shim now",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    expect(screenGate(screen)).toMatchObject({
+      hint: "Every Context file imports ContextRef. How should I proceed?",
+      kind: "question",
+      onScreen: true,
+    });
+  });
+
+  it("ignores a working agent and a menu that has scrolled out of view", () => {
+    const answered = [
+      " Would you like to proceed?",
+      ...Array.from({ length: 30 }, (_, i) => `line ${i}`),
+      "✻ Cerebrating… (2m 55s)",
+    ].join("\n");
+    expect(screenGate(answered)).toBeUndefined();
+    expect(screenGate("")).toBeUndefined();
+  });
+
+  it("approves on screen only when option 1 is the highlighted bypass approval", () => {
+    expect(
+      screenPlanApprovable(
+        " ❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts)"
+      )
+    ).toBe(true);
+    expect(
+      screenPlanApprovable(
+        "   1. Yes, and switch to BYPASS PERMISSIONS\n ❯ 2. Yes, manually approve edits"
+      )
+    ).toBe(false);
   });
 });
 

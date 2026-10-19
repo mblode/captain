@@ -74,6 +74,10 @@ export interface CmuxPort {
   replyExitPlan(requestId: string, approve: boolean): void;
   // every workspace's agent run state, keyed by workspace id (one `cmux top`)
   runStates(): Record<string, RunState>;
+  // the bottom of a workspace's terminal; "" when it cannot be read
+  readScreen(workspaceId: string): string;
+  // one key event (e.g. "enter", "escape") into a workspace's terminal
+  pressKey(workspaceId: string, key: string): void;
 }
 
 // What a tag row's title says → our RunState.
@@ -176,8 +180,32 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     run("cmux", ["notify", "--title", title, "--body", body], { env });
   },
 
+  pressKey: (workspaceId: string, key: string): void => {
+    try {
+      runRequired("cmux", ["send-key", "--workspace", workspaceId, key], {
+        env,
+      });
+    } catch (error) {
+      throw new CliError(
+        `failed to press ${key} in workspace ${workspaceId} via cmux: ${error instanceof Error ? error.message : String(error)}`,
+        EXIT.CMUX_UNREACHABLE,
+        "CMUX_UNREACHABLE"
+      );
+    }
+  },
+
   // Is cmux up? Reuses the shared reachability probe (commandExists + `ping`).
   reachable: (): boolean => cmuxReachable(env),
+
+  // Fails soft: an unreadable screen reads as "no gate on screen".
+  readScreen: (workspaceId: string): string => {
+    const raw = run(
+      "cmux",
+      ["read-screen", "--workspace", workspaceId, "--lines", "40"],
+      { env }
+    );
+    return raw.status === 0 ? raw.stdout : "";
+  },
 
   replyExitPlan: (requestId: string, approve: boolean): void => {
     if (!requestId) {

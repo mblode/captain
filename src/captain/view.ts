@@ -23,6 +23,10 @@ export interface Gate {
   kind: "plan" | "question";
   // what the gate is asking, so status shows it without opening the workspace
   hint?: string;
+  // read off the agent's screen because its feed item expired (cmux drops an
+  // unanswered item after ~2 minutes). No replyId: approve answers the menu
+  // with a keypress instead.
+  onScreen?: boolean;
 }
 
 // One workspace's live row in the fleet view.
@@ -173,6 +177,52 @@ export const pendingGate = (
   };
 };
 
+// Claude Code's own menus, as `cmux read-screen` renders them. cmux expires a
+// feed item ~2 minutes after it lands, and the agent then waits on its TUI
+// menu while the run-state tag can still read "Running" — so without this the
+// plan gate vanishes from status and approve reports "no plan-ready worktree".
+const PLAN_MENU = /Would you like to proceed\?/u;
+const QUESTION_MENU = /Enter to select .*Esc to cancel/u;
+// The bordered question text above a question menu: "│ <text>" lines.
+const QUESTION_LINE = /^\s*│\s?(.*)$/u;
+
+// PURE: the gate an agent's screen shows when the feed no longer does. Only the
+// bottom of the screen counts: a menu that scrolled up is already answered.
+export const screenGate = (screen: string): Gate | undefined => {
+  const tail = screen.split("\n").slice(-25);
+  const text = tail.join("\n");
+  if (PLAN_MENU.test(text)) {
+    return {
+      hint: "plan approval",
+      id: "screen",
+      kind: "plan",
+      onScreen: true,
+    };
+  }
+  if (QUESTION_MENU.test(text)) {
+    const hint = tail
+      .map((line) => QUESTION_LINE.exec(line)?.[1].trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
+    return {
+      hint: hint || undefined,
+      id: "screen",
+      kind: "question",
+      onScreen: true,
+    };
+  }
+  return undefined;
+};
+
+// PURE: may a keypress approve this plan menu? Only when the highlighted
+// option is the bypass-permissions approval — the same mode
+// `feed.exit_plan.reply` uses — so Enter can never pick a different answer.
+export const screenPlanApprovable = (screen: string): boolean =>
+  screen
+    .split("\n")
+    .slice(-25)
+    .some((line) => /❯\s*1\.\s*Yes\b.*bypass/iu.test(line));
+
 // Everything surface.ts gathers about one workspace.
 export interface RowInput {
   workspaceId: string;
@@ -192,6 +242,8 @@ export interface RowInput {
   // gate join key). Worktree rows derive the ticket from the cwd instead.
   ticket?: string;
   session?: string;
+  // the agent's screen, read only when the feed shows no gate for it
+  screen?: string;
 }
 
 // PURE: the single executable next-action for a row, matching what the TTY
@@ -239,7 +291,9 @@ export const stateHash = (
 //   a valid passing verdict → ready (the human merge gate stays authoritative)
 //   otherwise → in-flight (working or idling)
 export const rowOf = (input: RowInput): FleetRow => {
-  const gate = pendingGate(input.feed, input.cwd, input.session);
+  const gate =
+    pendingGate(input.feed, input.cwd, input.session) ??
+    (input.screen ? screenGate(input.screen) : undefined);
   const verdict =
     input.verdict && verdictCounts(input.verdict, input.expectedHash)
       ? input.verdict

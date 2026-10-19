@@ -150,13 +150,17 @@ worktree never has to pass the check. See `research/wayfinder-browser-harness-au
 - membership: a cmux workspace whose cwd has a `.captain/` dir (start writes the rubric there)
 - busy/idle: `cmux top --all --flat --format tsv` run-state tags (one call, all workspaces)
 - gates: the newest **unresolved** `feed.list` item per cwd (`resolved_at` absent = pending);
-  `exitPlan` → the plan gate, `question`/`notification` → blocked
+  `exitPlan` → the plan gate, `question`/`notification` → blocked. cmux expires a feed item
+  ~2 minutes after it lands, so a workspace with no live feed gate gets one `read-screen`: a
+  Claude plan menu or question menu on screen is the same gate, marked `onScreen`
 - done: `.captain/verdict.json`, hash-checked against the rubric as it exists now
 - grouping (`rowOf` in `view.ts`): gate, failed verdict, or run-state `needs-input` → NEEDS YOU;
   valid passing verdict → READY TO MERGE; otherwise IN FLIGHT
 
 `approve` replies to the exit-plan feed item directly; `reject` replies false **and** types the
-feedback into the workspace via `cmux send`. No state means no single-writer constraint, no
+feedback into the workspace via `cmux send`. An `onScreen` plan is answered by keypress instead:
+`enter` to approve (refused with `PLAN_MENU_UNRECOGNISED` unless option 1 is the highlighted
+bypass approval, the same mode the feed reply uses), `escape` to reject before the feedback. No state means no single-writer constraint, no
 intent queue, no daemon to race.
 
 `status --watch [--interval <s>]` re-renders that same derivation on a timer for a human watching

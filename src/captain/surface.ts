@@ -11,7 +11,7 @@ import {
 import type { CmuxPort, CmuxWorkspace } from "./control";
 import { parseVerdict } from "./verdict";
 import type { Verdict } from "./verdict";
-import { pickAgentWorkspaces, rowOf, withHandles } from "./view";
+import { pendingGate, pickAgentWorkspaces, rowOf, withHandles } from "./view";
 import type { FleetRow } from "./view";
 
 // The stateless read surface: the fleet view derived live from cmux + the
@@ -108,7 +108,8 @@ const changeOf = (
 
 // The whole fleet, one row per captain-managed cmux workspace. Everything is
 // gathered fresh: workspace list + feed + run states are one cmux call each,
-// verdict/rubric are two small file reads per worktree.
+// verdict/rubric are two small file reads per worktree, plus one screen read
+// per workspace the feed shows no gate for.
 export const fleetRows = (
   port: CmuxPort,
   env: NodeJS.ProcessEnv = process.env
@@ -125,6 +126,11 @@ export const fleetRows = (
     ).map((w) => {
       const change = changeOf(w);
       const rubric = readRubricFacts(w.cwd, change?.id);
+      // The feed forgets a gate ~2 minutes after it lands, so a workspace the
+      // feed shows nothing for gets its screen read for a menu instead.
+      const screen = pendingGate(feed, w.cwd, change?.session)
+        ? undefined
+        : port.readScreen(w.id);
       return rowOf({
         cwd: w.cwd,
         expectedHash: rubric.hash,
@@ -132,6 +138,7 @@ export const fleetRows = (
         feed,
         repo: repoLabel(w.cwd, env),
         run: runs[w.id.toLowerCase()] ?? "unknown",
+        screen,
         session: change?.session,
         ticket: change?.id,
         title: rubric.title,
