@@ -1,0 +1,12 @@
+schema: spec-driven
+
+context: |
+  captain is a TypeScript ESM CLI (Node >= 24) that drives cmux agents. AGENTS.md holds the
+  module map and gotcha rules; docs/architecture.md holds how each path works and why. Read
+  both before writing a design.
+  The pure modules listed in oxlint.config.ts take no filesystem or subprocess access.
+
+rules:
+  tasks:
+    - "End with a task that runs npm test, npm run typecheck and npm run check"
+    - "Name the AGENTS.md or docs/architecture.md section to update when behaviour changes"
