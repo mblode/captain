@@ -68,6 +68,9 @@ const sharedBranchSection = (shared: SharedBranch, id: string): string =>
     "  `index.lock`, wait a few seconds and retry — another agent is committing.",
     `- Tick the boxes in \`openspec/changes/${id}/tasks.md\` as you finish each task, and commit that`,
     "  file with your work.",
+    `- Once every box is ticked and checks pass, run \`openspec archive ${id} --yes\` and commit the`,
+    "  result as your last commit: it merges your spec deltas into `openspec/specs/` and moves the",
+    "  folder to `openspec/changes/archive/`, so the change lands as current behaviour, not a live proposal.",
     "</shared-branch>",
     "",
   ].join("\n");
