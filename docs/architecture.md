@@ -107,9 +107,13 @@ worktree never has to pass the check. See `research/wayfinder-browser-harness-au
   `exitPlan` → the plan gate, `question`/`notification` → blocked. cmux expires a feed item
   ~2 minutes after it lands, so a workspace with no live feed gate gets one `read-screen`: a
   Claude plan menu or question menu on screen is the same gate, marked `onScreen`
-- done: `.captain/verdict.json`, hash-checked against the rubric as it exists now
-- grouping (`rowOf` in `view.ts`): gate, failed verdict, or run-state `needs-input` → NEEDS YOU;
-  valid passing verdict → READY TO MERGE; otherwise IN FLIGHT
+- verified: `.captain/verdict.json`, hash-checked against the rubric as it exists now
+- shipped: an OpenSpec change's `.captain/changes/<id>/smoke.json` (`parseSmoke` in `smoke.ts`,
+  fail-safe like the verdict), counted only on top of a passing verdict that counts
+- grouping (`rowOf` in `view.ts`): gate, failed verdict, failed smoke test, or run-state
+  `needs-input` → NEEDS YOU; smoke passed → DONE; smoke running → SHIPPING; valid passing
+  verdict → READY TO MERGE; otherwise IN FLIGHT. `status --summary --json` counts all five;
+  `ready` stays the pre-merge verified set
 
 `approve` replies to the exit-plan feed item directly; `reject` replies false **and** types the
 feedback into the workspace via `cmux send`. An `onScreen` plan is answered by keypress instead:
@@ -188,6 +192,36 @@ repo, survives worktree removal); fan-out injects `## Rules` + the tail-capped `
 verifier run failed before eventually passing, the root cause of that failure as a preventive
 rule (the eventual pass is its verification). Curation is human-driven via the captain skill;
 approve/reject notes land in `~/.claude/captain/log.jsonl`.
+
+## OpenSpec changes: the home outside the repo, and verify in production
+
+`captain spec` runs one agent per OpenSpec change on the checkout's current branch. The user's
+changes do **not** live in the repo: `openspecHome` (`openspec.ts`) puts them in
+`<openspecHome>/<repo-key>/openspec/`, where the base is `CAPTAIN_OPENSPEC_HOME`, else config
+`.openspecHome`, else `~/.claude/captain/openspec`, and the key is fleet memory's `repoKey`
+taken from the **main** repo root (`mainRepoRoot` in `git.ts`). So every worktree of a repo
+shares one home, and the home sits next to that repo's memory under the same name.
+`captain spec --root` prints it; that is the directory to run `openspec new/validate/archive`
+in. `captain spec <id>` reads the home first and falls back to the repo's own
+`openspec/changes/<id>/` (a team change: read-only for the worker, never ticked or archived).
+`--all` lists the home only, because it is the user's queue.
+
+Nothing OpenSpec is ever committed. The brief forbids staging `openspec/` paths and anything
+under the home; the worker ticks `tasks.md` in the home. A `## Smoke test` section in
+`tasks.md` is not part of the acceptance criteria: `openTasks` skips it, and `rubric.ts`
+renders it as a "Smoke test" section **after** `## Verdict`, outside the hash. That keeps the
+pre-merge verifier from grading production checks.
+
+Done means verified in production, not merged. After a passing verdict the brief keeps the
+worker going: it polls `gh pr view <branch>` in the background until the human merges (captain
+never merges and runs no daemon, so the wait is the worker's own). It then writes `smoke.json`
+as `running` (the row reads SHIPPING), watches the deploy (`watch/*` statuses on the merge SHA,
+or the repo's documented check), and runs the smoke checks. Those are a terminal check and a
+browser check, read-only unless a step names a reversible write, inside the data scope. On a pass
+it runs `openspec archive <id> --yes` in the home and commits nothing (DONE). On a fail it does
+not archive or revert, and the row reads NEEDS YOU with the failing evidence. `status` learns
+about the merge only through that `running` file, so it stays a filesystem read with no `gh`
+call per row. A `pass` with no checks, or with a failing one, parses as a `fail`.
 
 ## Gotchas in full
 
@@ -378,8 +412,11 @@ The rationale behind each short rule in `AGENTS.md` § Gotchas, kept verbatim.
     signal. Revisit only on a regression the unit tests structurally cannot catch — a brief
     that renders exactly as pinned and still drives agents badly.
   - **Deployment: CI/CD tiers, MCP deploy/status/rollback tools, per-environment autonomy** —
-    past captain's boundary by definition. Its output is a PR-ready worktree; the human merge
-    gate is the last thing it participates in.
+    still past captain's boundary. *Verifying* in production is in scope (revised Oct 2026):
+    after the human merge, an OpenSpec worker watches the deploy and runs read-only smoke
+    checks, and status shows SHIPPING/DONE (see the OpenSpec section above). Deploying,
+    rolling back and per-environment autonomy stay out, and the human merge gate stays
+    authoritative: the worker waits on it and never merges.
   - **Control-band breach detection as a captain feature** — the *need* is fine and the
     playbook's own version is stateless in CI, so it is a cron job shelling out to
     `captain "<task>"` with zero captain code. A captain-owned trigger layer is the forbidden
@@ -414,7 +451,8 @@ The rationale behind each short rule in `AGENTS.md` § Gotchas, kept verbatim.
 **source**, not just the key's presence, so a donebear task never routes through the Linear
 download path) · `DONEBEAR_TOKEN` (donebear task fetch — a
 `db_` API key from `donebear api-key create`; read scope is enough, captain never writes back) ·
-`CAPTAIN_MEMORY_DIR` (fleet memory override) ·
+`CAPTAIN_MEMORY_DIR` (fleet memory override) · `CAPTAIN_OPENSPEC_HOME` (base of the per-repo
+OpenSpec homes, default `~/.claude/captain/openspec`) ·
 `CAPTAIN_HOME` (data home: log.jsonl + fleet memory base) · `CAPTAIN_SKILLS` (comma-separated
 pipeline steps, `$defaults` to keep the built-in ones; overrides the config file — prose steps
 with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
@@ -425,7 +463,8 @@ with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (override
 
 `~/.config/captain/config.json` keys (all fail-safe): `.skills` (string[] — each entry a
 `/skill` token, a plain-English instruction, or `"$defaults"`), `.dataScope` (string),
-`.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`), `.agentEnv`
+`.model` (string), `.effort` (string), `.agent` (string, `claude` | `codex`), `.openspecHome`
+(string, `~` expanded), `.agentEnv`
 (string→string map merged over `DEFAULT_AGENT_ENV` — `VITEST_MAX_FORKS`/`VITEST_MAX_THREADS`
 capped at 2, because N agents each spawning an uncapped worker pool has jetsam-killed a whole
 fleet; set a key to `""` to drop a default).

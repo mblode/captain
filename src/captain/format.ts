@@ -59,7 +59,7 @@ const paintGroup = (s: Style, group: Group): Paint => {
   if (group === "needs-you") {
     return s.yellow;
   }
-  if (group === "ready") {
+  if (group === "ready" || group === "done") {
     return s.green;
   }
   return s.cyan;
@@ -75,6 +75,15 @@ const meta = (row: FleetRow): { glyph: string; label: string } => {
   }
   if (row.verdict === "fail") {
     return { glyph: "●", label: "verifier failed" };
+  }
+  if (row.smoke === "fail") {
+    return { glyph: "●", label: "smoke failed" };
+  }
+  if (row.smoke === "pass") {
+    return { glyph: "✓", label: "done" };
+  }
+  if (row.smoke === "running") {
+    return { glyph: "◐", label: "shipping" };
   }
   if (row.verdict === "pass") {
     return { glyph: "✓", label: "ready to merge" };
@@ -124,6 +133,8 @@ const SECTIONS: { group: Group; heading: string }[] = [
   { group: "needs-you", heading: "NEEDS YOU" },
   { group: "in-flight", heading: "IN FLIGHT" },
   { group: "ready", heading: "READY TO MERGE" },
+  { group: "shipping", heading: "SHIPPING" },
+  { group: "done", heading: "DONE" },
 ];
 
 interface StatusView {
@@ -170,12 +181,14 @@ export const renderStatus = (
   const repoPad =
     repos.size > 1 ? Math.max(...[...repos].map((r) => r.length)) : 0;
   const width = Math.min(40, Math.max(...rows.map((r) => r.name.length), 8));
-  const { needsYou: needs, ready } = groupCounts(rows);
+  const { done, needsYou: needs, ready, shipping } = groupCounts(rows);
 
   const summary = [
     `${rows.length} worktrees`,
     needs ? s.yellow(`${needs} need you`) : "",
     ready ? s.green(`${ready} ready`) : "",
+    shipping ? s.cyan(`${shipping} shipping`) : "",
+    done ? s.green(`${done} done`) : "",
   ]
     .filter(Boolean)
     .join(s.dim(" · "));
@@ -221,11 +234,13 @@ export const renderStatus = (
 // set so the counts stay honest; only needs-you rows are detailed.
 export const renderSummary = (rows: FleetRow[], s: Style): string => {
   const needs = rows.filter((r) => r.group === "needs-you");
-  const { inFlight, ready } = groupCounts(rows);
+  const { done, inFlight, ready, shipping } = groupCounts(rows);
   const counts = [
     needs.length ? s.yellow(`${needs.length} need you`) : "",
     inFlight ? s.cyan(`${inFlight} in flight`) : "",
     ready ? s.green(`${ready} ready`) : "",
+    shipping ? s.cyan(`${shipping} shipping`) : "",
+    done ? s.green(`${done} done`) : "",
   ]
     .filter(Boolean)
     .join(s.dim(" · "));

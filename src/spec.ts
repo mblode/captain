@@ -8,12 +8,13 @@ import { changeStateDir } from "./captain/surface";
 import { cmuxReachable, openIssueWorkspace } from "./cmux";
 import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
 import { CliError, EXIT } from "./errors";
-import { repoLabel } from "./git";
+import { mainRepoRoot, repoLabel } from "./git";
 import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
 import {
   CHANGES_DIR,
   isOpenspecChange,
   listOpenspecChanges,
+  openspecHome,
   readOpenspecChange,
 } from "./openspec";
 import { renderPrompt, renderPromptExtras } from "./prompt";
@@ -32,6 +33,8 @@ export interface SpecOptions {
   env?: NodeJS.ProcessEnv;
   json?: boolean;
   print?: boolean;
+  // print the repo's OpenSpec home and exit
+  root?: boolean;
   repoOverride?: string;
   stdout?: NodeJS.WritableStream;
 }
@@ -60,27 +63,41 @@ const currentBranch = (repoRoot: string, env: NodeJS.ProcessEnv): string => {
   return branch;
 };
 
-const requestedChanges = (repoRoot: string, options: SpecOptions): string[] => {
-  const requested = options.all ? listOpenspecChanges(repoRoot) : options.ids;
+// Where each requested change lives: the user's home first, the repo's own
+// `openspec/changes/` (a team change) as the fallback. `--all` is the user's
+// queue, so it lists the home only.
+const requestedChanges = (
+  home: string,
+  repoRoot: string,
+  options: SpecOptions
+): Map<string, string> => {
+  const requested = options.all ? listOpenspecChanges(home) : options.ids;
   if (requested.length === 0) {
     throw new CliError(
       options.all
-        ? `no active OpenSpec changes in ${join(repoRoot, CHANGES_DIR)}`
+        ? `no active OpenSpec changes in ${join(home, CHANGES_DIR)}`
         : "usage: captain spec <change-id…> | --all",
       EXIT.USAGE,
       "USAGE"
     );
   }
-  const unknown = requested.filter((id) => !isOpenspecChange(repoRoot, id));
+  const roots = new Map<string, string>();
+  for (const id of requested) {
+    const root = [home, repoRoot].find((r) => isOpenspecChange(r, id));
+    if (root) {
+      roots.set(id, root);
+    }
+  }
+  const unknown = requested.filter((id) => !roots.has(id));
   if (unknown.length > 0) {
-    const known = listOpenspecChanges(repoRoot);
+    const known = listOpenspecChanges(home);
     throw new CliError(
-      `no OpenSpec change ${unknown.join(", ")} in ${join(repoRoot, CHANGES_DIR)} (each needs a proposal.md). Active: ${known.join(", ") || "none"}`,
+      `no OpenSpec change ${unknown.join(", ")} in ${join(home, CHANGES_DIR)} or ${join(repoRoot, CHANGES_DIR)} (each needs a proposal.md). Active: ${known.join(", ") || "none"}`,
       EXIT.USAGE,
       "USAGE"
     );
   }
-  return requested;
+  return roots;
 };
 
 const requireLauncher = (agent: string, env: NodeJS.ProcessEnv): void => {
@@ -129,9 +146,11 @@ const launchChange = async (brief: Brief): Promise<void> => {
   const { agent, env, id, repoRoot, shared } = brief;
   const absState = join(repoRoot, shared.stateDir);
   await mkdir(absState, { recursive: true });
-  // A relaunch is a fresh run: the last run's plan and verdict no longer apply.
-  await rm(join(absState, "verdict.json"), { force: true });
-  await rm(join(absState, "plan.md"), { force: true });
+  // A relaunch is a fresh run: the last run's plan, verdict and smoke test no
+  // longer apply.
+  for (const file of ["verdict.json", "plan.md", "smoke.json"]) {
+    await rm(join(absState, file), { force: true });
+  }
   const { text } = renderRubric(
     brief.issue,
     id,
@@ -170,11 +189,16 @@ export const runSpec = async (options: SpecOptions): Promise<number> => {
     env,
     repoOverride: options.repoOverride,
   });
+  const home = openspecHome(mainRepoRoot(repoRoot, env), env);
+  if (options.root) {
+    stdout.write(`${home}\n`);
+    return 0;
+  }
   const agent =
     options.agent === undefined
       ? loadAgent(env)
       : normalizeAgent(options.agent);
-  const requested = requestedChanges(repoRoot, options);
+  const requested = requestedChanges(home, repoRoot, options);
   if (!options.print) {
     requireLauncher(agent, env);
   }
@@ -191,12 +215,12 @@ export const runSpec = async (options: SpecOptions): Promise<number> => {
 
   const started: { change: string; name: string; cwd: string }[] = [];
   const skipped: string[] = [];
-  for (const id of requested) {
+  for (const [id, root] of requested) {
     if (live.has(id)) {
       skipped.push(id);
       continue;
     }
-    const issue = readOpenspecChange(repoRoot, id);
+    const issue = readOpenspecChange(root, id);
     const shared: SharedBranch = {
       baseSha,
       branch,
@@ -210,6 +234,7 @@ export const runSpec = async (options: SpecOptions): Promise<number> => {
         dataScope,
         memory,
         memoryPath,
+        openspec: { external: root === home, home: root },
         rubricPath,
         shared,
         sharedId: id,

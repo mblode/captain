@@ -181,6 +181,43 @@ describe("prompt extras", () => {
     expect(out).not.toContain("<fleet-memory>");
   });
 
+  it("keeps OpenSpec files out of every commit and verifies in production after the verdict", () => {
+    const shared = {
+      baseSha: "abc1234",
+      branch: "main",
+      stateDir: ".captain/changes/add-dark-mode",
+    };
+    const home = "/home/u/.claude/captain/openspec/app";
+    const out = renderPromptExtras({
+      openspec: { external: true, home },
+      rubricPath: ".captain/changes/add-dark-mode/rubric.md",
+      shared,
+      sharedId: "add-dark-mode",
+    });
+    expect(out).toContain(`${home}/openspec/changes/add-dark-mode/tasks.md`);
+    expect(out).toContain(
+      `Never stage or commit an \`openspec/\` path or anything under \`${home}\``
+    );
+    expect(out).not.toMatch(/commit (that file|the\s+result)/u);
+    expect(out).toContain("gh pr view main --json state");
+    expect(out).toContain("`watch/*`");
+    expect(out).toContain(".captain/changes/add-dark-mode/smoke.json");
+    expect(out).toContain(
+      `run \`openspec archive add-dark-mode --yes\` from \`${home}\``
+    );
+    expect(out).toContain("commit nothing");
+    expect(out).not.toContain("your work on this ticket is complete");
+
+    const team = renderPromptExtras({
+      openspec: { external: false, home: "/repo" },
+      rubricPath: ".captain/changes/add-dark-mode/rubric.md",
+      shared,
+      sharedId: "add-dark-mode",
+    });
+    expect(team).toContain("is the team's copy in this repo");
+    expect(team).not.toContain("openspec archive");
+  });
+
   it("renders the memory excerpt and the verified-only write rule", () => {
     const out = renderPromptExtras({
       memory: "- [TIG-1 2026-06-01] run yarn install first",

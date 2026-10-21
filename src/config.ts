@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { captainHome } from "./home";
+import { expandTilde } from "./repo";
+
 // The post-implementation steps the self-drive brief runs between *implement*
 // and the *verifier/verdict finish*. Configurable so a setup can run its own
 // review/ship pipeline; this is the fallback when no config is present.
@@ -226,6 +229,21 @@ export const loadModel = (env: NodeJS.ProcessEnv = process.env): string =>
 // config file `.effort` > DEFAULT_EFFORT. Passed to claude as `--effort`.
 export const loadEffort = (env: NodeJS.ProcessEnv = process.env): string =>
   loadStringSetting(env, "CAPTAIN_EFFORT", "effort", DEFAULT_EFFORT);
+
+// Resolve the base dir of the user's OpenSpec homes, fail-safe: env override
+// (CAPTAIN_OPENSPEC_HOME) > config file `.openspecHome` > ~/.claude/captain/openspec.
+// Each repo's home is a `<repo-key>/` dir under it (openspec.ts).
+export const loadOpenspecHome = (
+  env: NodeJS.ProcessEnv = process.env
+): string =>
+  expandTilde(
+    loadStringSetting(
+      env,
+      "CAPTAIN_OPENSPEC_HOME",
+      "openspecHome",
+      join(captainHome(env), "openspec")
+    )
+  );
 
 // Collapse any user-supplied agent name (flag, env, or config) to a launchable
 // one: anything but `codex` degrades to the default `claude`, so a typo never

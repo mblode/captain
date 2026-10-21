@@ -43,6 +43,7 @@ export default defineConfig({
         // the fleet-surface decisions
         "src/captain/view.ts",
         "src/captain/verdict.ts",
+        "src/captain/smoke.ts",
         "src/captain/gain.ts",
         // the launch-side decisions: the rubric text, argv routing, the
         // frontier rule. Documented as pure in AGENTS.md, unenforced until now.

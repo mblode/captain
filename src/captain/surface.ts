@@ -9,6 +9,8 @@ import {
   VERDICT_RELPATH,
 } from "../rubric";
 import type { CmuxPort, CmuxWorkspace } from "./control";
+import { parseSmoke } from "./smoke";
+import type { Smoke } from "./smoke";
 import { parseVerdict } from "./verdict";
 import type { Verdict } from "./verdict";
 import { pendingGate, pickAgentWorkspaces, rowOf, withHandles } from "./view";
@@ -32,6 +34,18 @@ export const readVerdict = (cwd: string, change?: string): Verdict | null => {
       ? join(cwd, changeStateDir(change), "verdict.json")
       : join(cwd, VERDICT_RELPATH);
     return parseVerdict(readFileSync(path, "utf-8"));
+  } catch {
+    return null;
+  }
+};
+
+// Thin fs edge: an OpenSpec change's smoke.json, the worker's production check
+// after the merge. Missing or unreadable → null (no smoke result yet).
+export const readSmoke = (cwd: string, change: string): Smoke | null => {
+  try {
+    return parseSmoke(
+      readFileSync(join(cwd, changeStateDir(change), "smoke.json"), "utf-8")
+    );
   } catch {
     return null;
   }
@@ -140,6 +154,7 @@ export const fleetRows = (
         run: runs[w.id.toLowerCase()] ?? "unknown",
         screen,
         session: change?.session,
+        smoke: change ? readSmoke(w.cwd, change.id) : null,
         ticket: change?.id,
         title: rubric.title,
         verdict: readVerdict(w.cwd, change?.id),

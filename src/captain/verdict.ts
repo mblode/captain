@@ -36,7 +36,7 @@ const isCriterion = (c: unknown): boolean =>
 // schema example modelled it as one for months, so most verdicts on disk carry
 // `"1784854700"`). A quoted integer is unambiguous, so accept it rather than
 // silently scoring it 0 — gain's launch→verdict latency drops every 0 sample.
-const epochSeconds = (raw: unknown): number => {
+export const epochSeconds = (raw: unknown): number => {
   if (typeof raw === "number") {
     return raw;
   }

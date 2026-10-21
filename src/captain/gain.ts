@@ -101,10 +101,7 @@ export interface GainMetrics {
     // present only when a --since window was applied (the epoch-seconds floor)
     window?: { since: number };
   };
-  fleet: {
-    needsYou: number;
-    inFlight: number;
-    ready: number;
+  fleet: ReturnType<typeof groupCounts> & {
     total: number;
     byRepo: { repo: string; total: number }[];
   };

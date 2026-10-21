@@ -11,7 +11,7 @@ interface ResolveRepoOptions {
   repoOverride?: string;
 }
 
-const expandTilde = (value: string, home = homedir()): string => {
+export const expandTilde = (value: string, home = homedir()): string => {
   if (value === "~") {
     return home;
   }

@@ -24,6 +24,13 @@ export const gitCommonDir = (
   return isAbsolute(commonDir) ? commonDir : join(repoRoot, commonDir);
 };
 
+// The main checkout of a repo: the parent of its common git dir, so every
+// linked worktree resolves to the same root.
+export const mainRepoRoot = (
+  repoRoot: string,
+  env: NodeJS.ProcessEnv
+): string => dirname(gitCommonDir(repoRoot, env));
+
 // Short repo label for a worktree path: a linked worktree's --git-common-dir
 // resolves to the main checkout's .git, whose parent dir name is the repo
 // ("linkiq"). Fail-soft: any git failure (not a repo, fake test path) →

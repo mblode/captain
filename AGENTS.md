@@ -34,7 +34,7 @@ src/
   route.ts       # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; lone non-issue word left alone)
   runner.ts      # runStart: runIssueWorktree (issue → worktree fan-out) or runDispatch (free-form → current dir); resolveAgent
   spec.ts        # runSpec: one agent per OpenSpec change in the CURRENT checkout + branch (no worktree, no PR)
-  openspec.ts    # read openspec/changes/<id>/ → Issue (proposal+design+deltas = description; unchecked tasks = criteria)
+  openspec.ts    # openspecHome (outside the repo, keyed like memory) + read openspec/changes/<id>/ → Issue (unchecked tasks = criteria, `## Smoke test` = smoke)
   source.ts      # THE ISSUE-SOURCE SEAM: IssueSource registry, sourceFor + isIssueToken. A new source touches only this file
   types.ts       # Issue: the source-neutral contract every source maps INTO
   linear.ts      # fetchLinearIssue + mapLinearIssue (sub-issues → criteria, `blocks` relations → blockedBy)
@@ -49,6 +49,7 @@ src/
   captain/
     view.ts      # 100% PURE: identity, pendingGate, rowOf (the grouping rule), mergeOrderHints, withHandles. Start here
     verdict.ts   # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
+    smoke.ts     # 100% PURE: parseSmoke (fail-safe) — the worker's post-merge production check
     gain.ts      # 100% PURE: computeGain (ledger + live snapshot + verdicts → metrics, rework, roster)
     surface.ts   # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
     control.ts   # CmuxPort seam: realCmux(env) wraps the cmux CLI; tests pass a fake port
@@ -91,7 +92,7 @@ Each rule's full rationale is in `docs/architecture.md` § Gotchas in full.
 
 Decided boundaries; the reasoning and audits are in `docs/architecture.md` § Gotchas in full.
 
-- Anything from the AI-native SDLC playbook beyond the three plays already built (plan.md, plan contents, `gain.rework`): no `/security-review` step or criterion, SIEM streaming, egress/sandbox control, risk-tier enum, hooks/managed settings, LLM evals in CI, deployment, captain-owned breach triggers, or Slack listeners.
+- Anything from the AI-native SDLC playbook beyond the three plays already built (plan.md, plan contents, `gain.rework`): no `/security-review` step or criterion, SIEM streaming, egress/sandbox control, risk-tier enum, hooks/managed settings, LLM evals in CI, deploy/rollback tooling or per-environment autonomy (verifying in production after the human merge is in scope), captain-owned breach triggers, or Slack listeners.
 - Captain reads trackers; it never writes them. `IssueSource` gains no write verb.
 - No browser daemon and no graded UI criterion; browser checks are an opt-in `.skills` entry, kept out of `DEFAULT_SKILLS`.
 
@@ -103,6 +104,7 @@ Decided boundaries; the reasoning and audits are in `docs/architecture.md` § Go
 | `DONEBEAR_TOKEN` | donebear task fetch (`db_` key, read scope is enough) |
 | `CAPTAIN_HOME` | data home: `log.jsonl` + fleet memory base |
 | `CAPTAIN_MEMORY_DIR` | fleet memory override |
+| `CAPTAIN_OPENSPEC_HOME` | base of the per-repo OpenSpec homes (default `~/.claude/captain/openspec`) |
 | `CAPTAIN_SKILLS` | comma-separated pipeline steps, `$defaults` keeps the built-ins |
 | `CAPTAIN_DATA_SCOPE` | overrides the data-scope guardrail |
 | `CAPTAIN_MODEL` / `CAPTAIN_EFFORT` | agent `--model` (default `default`) / `--effort` (default `high`) |
@@ -111,4 +113,4 @@ Decided boundaries; the reasoning and audits are in `docs/architecture.md` § Go
 | `CAPTAIN_DEBUG=1`, `NO_COLOR` | stack traces, plain output |
 
 `~/.config/captain/config.json` keys (all fail-safe): `.skills`, `.dataScope`, `.model`, `.effort`,
-`.agent`, `.agentEnv` (merged over `DEFAULT_AGENT_ENV`, which caps vitest workers at 2).
+`.agent`, `.openspecHome`, `.agentEnv` (merged over `DEFAULT_AGENT_ENV`, which caps vitest workers at 2).

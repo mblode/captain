@@ -59,4 +59,20 @@ describe("OpenSpec changes", () => {
     expect(issue.title).toBe("add-dark-mode");
     expect(issue.criteria).toEqual([{ title: "1.1 Add toggle" }]);
   });
+
+  it("keeps smoke checks out of the criteria and reads them as the smoke list", async () => {
+    const root = await repoWith({
+      "add-dark-mode": {
+        "proposal.md": "# Proposal\n",
+        "tasks.md":
+          "## 1. Theme\n\n- [ ] 1.1 Add toggle\n\n## Smoke test\n\n- [ ] S.1 Terminal: run it\n- [x] S.2 done already\n\n## 2. Docs\n\n- [ ] 2.1 Write docs\n",
+      },
+    });
+    const issue = readOpenspecChange(root, "add-dark-mode");
+    expect(issue.criteria).toEqual([
+      { title: "1.1 Add toggle" },
+      { title: "2.1 Write docs" },
+    ]);
+    expect(issue.smoke).toEqual(["S.1 Terminal: run it"]);
+  });
 });

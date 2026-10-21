@@ -1,5 +1,5 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +16,7 @@ import {
   loadDataScope,
   loadEffort,
   loadModel,
+  loadOpenspecHome,
   loadSkills,
   parseAgentEnv,
   parseDataScope,
@@ -163,6 +164,24 @@ describe("parseDataScope", () => {
     expect(parseDataScope({ dataScope: 42 })).toBeNull();
     expect(parseDataScope({ dataScope: "   " })).toBeNull();
     expect(parseDataScope(null)).toBeNull();
+  });
+});
+
+describe("loadOpenspecHome", () => {
+  it("expands a config ~ path, lets the env win, and defaults under the captain home", () => {
+    const path = writeConfig('{"openspecHome":"~/specs"}');
+    expect(loadOpenspecHome({ CAPTAIN_CONFIG: path })).toBe(
+      join(homedir(), "specs")
+    );
+    expect(
+      loadOpenspecHome({ CAPTAIN_CONFIG: path, CAPTAIN_OPENSPEC_HOME: "/x" })
+    ).toBe("/x");
+    expect(
+      loadOpenspecHome({
+        CAPTAIN_CONFIG: writeConfig("{}"),
+        CAPTAIN_HOME: "/cap",
+      })
+    ).toBe(join("/cap", "openspec"));
   });
 });
 

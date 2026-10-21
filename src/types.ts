@@ -45,6 +45,9 @@ export interface Issue {
   team?: { name?: string | null } | null;
   project?: { name?: string | null } | null;
   parent?: IssueCriterion | null;
+  // production checks run after the merge (an OpenSpec `## Smoke test`
+  // section). Not acceptance criteria: the pre-merge verifier never grades them.
+  smoke?: string[] | null;
 }
 
 // One blocking issue. `done` is the only thing the frontier rule needs, so the

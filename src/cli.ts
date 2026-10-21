@@ -61,11 +61,12 @@ Workflow:
   $ captain install                      install the /captain + pipeline skills, then check setup
   $ captain spec add-dark-mode fix-auth  OpenSpec changes → agents on the current branch
   $ captain spec --all                   every active OpenSpec change not already running
+  $ captain spec --root                  the repo's OpenSpec home (run openspec there)
   $ captain TIG-430 TIG-431              Linear issues → worktrees + agents (bare = start)
   $ captain start TIG-430 TIG-431        the same, explicit
   $ captain "tidy the README"            a free-form task in the current dir (no Linear)
   $ captain TIG-430 --agent codex        launch codex instead of Claude Code (best-effort)
-  $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY
+  $ captain status                       one view: NEEDS YOU / IN FLIGHT / READY / SHIPPING / DONE
   $ captain status TIG-430 --json        one ticket/workspace, compact JSON
   $ captain status --summary             compact: counts + only what needs you
   $ captain status --summary --json      compact poll + reusable snapshot token
@@ -158,11 +159,15 @@ program
 program
   .command("spec")
   .description(
-    "start one agent per OpenSpec change (openspec/changes/<id>/), all on the current branch"
+    "start one agent per OpenSpec change (in the repo's OpenSpec home, else its openspec/changes/<id>/), all on the current branch"
   )
   .argument("[change...]", "OpenSpec change id(s)")
   .option("--all", "every active change that has no running agent")
   .option("--print", "print each brief without launching")
+  .option(
+    "--root",
+    "print the repo's OpenSpec home (outside the repo) and exit"
+  )
   .option("--json", "emit JSON: { branch, started: [...], skipped: [...] }")
   .option("--repo-path <path>", "the git repo to run in (default: cwd)")
   .option("--agent <name>", "claude (default) or codex (no plan gate)")
@@ -175,6 +180,7 @@ program
         json?: boolean;
         repoPath?: string;
         agent?: string;
+        root?: boolean;
       }
     ) => {
       process.exitCode = await runSpec({
@@ -184,6 +190,7 @@ program
         json: Boolean(options.json),
         print: Boolean(options.print),
         repoOverride: options.repoPath,
+        root: Boolean(options.root),
       });
     }
   );

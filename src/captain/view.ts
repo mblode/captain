@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 
 import type { CmuxFeedItem, CmuxWorkspace, RunState } from "./control";
+import type { Smoke } from "./smoke";
 import type { Verdict } from "./verdict";
 import { verdictCounts } from "./verdict";
 
@@ -9,7 +10,7 @@ import { verdictCounts } from "./verdict";
 // decides what they mean. There is no persisted state: the worktrees, the cmux
 // feed, and the verdict files ARE the state.
 
-export type Group = "needs-you" | "in-flight" | "ready";
+export type Group = "needs-you" | "in-flight" | "ready" | "shipping" | "done";
 
 // A pending human gate, straight from the cmux feed (the feed IS the gate
 // inventory — captain adds no state of its own on top).
@@ -43,7 +44,9 @@ export interface FleetRow {
   run: RunState;
   gate?: Gate;
   verdict?: "pass" | "fail";
-  // the verifier's one-line summary, when a verdict exists
+  // the production check after the merge (an OpenSpec change's smoke.json)
+  smoke?: Smoke["status"];
+  // the smoke test's one-line summary when there is one, else the verifier's
   summary?: string;
   prUrl?: string;
   // the ticket's subject, read from the worktree's rubric — so a row reads as
@@ -233,6 +236,7 @@ export interface RowInput {
   run: RunState;
   feed: CmuxFeedItem[];
   verdict?: Verdict | null;
+  smoke?: Smoke | null;
   // the rubric's hash as it exists NOW — editing criteria after the verdict
   // voids it (undefined = no rubric on disk, accept the verdict as-is)
   expectedHash?: string;
@@ -255,7 +259,9 @@ export interface RowInput {
 //   needs-input  → cmux read-screen … (inspect, then cmux send the answer)
 //   ready        → the merge hint (gh pr merge <prUrl>) when a PR exists, else
 //                  captain status --ready
-//   in-flight    → cmux read-screen … to peek at the running agent
+//   in-flight /
+//   shipping /
+//   done         → cmux read-screen … to peek at the agent
 export const nextCommand = (row: FleetRow): string => {
   if (row.gate?.kind === "plan") {
     return `captain approve ${row.handle ?? row.ticket ?? row.name}`;
@@ -276,20 +282,48 @@ export const nextCommand = (row: FleetRow): string => {
 // definition.) Equal joins ⇒ same actionable state, so a poller can diff two
 // snapshots and skip rows that haven't transitioned.
 export const stateHash = (
-  row: Pick<FleetRow, "group" | "gate" | "verdict" | "run">
+  row: Pick<FleetRow, "group" | "gate" | "verdict" | "smoke" | "run">
 ): string =>
   [
     row.group,
     row.gate?.kind ?? "",
     row.gate?.id ?? "",
     row.verdict ?? "",
+    row.smoke ?? "",
     row.run,
   ].join("|");
 
 // The grouping rule — the whole "state machine" that's left:
-//   a pending gate, a failed verdict, or an agent stuck on input → needs-you
+//   a pending gate, a failed verdict or smoke test, or an agent stuck on
+//   input → needs-you
+//   a passing smoke test → done (merged, deployed and verified in production)
+//   a smoke test running → shipping (merged; the worker is checking production)
 //   a valid passing verdict → ready (the human merge gate stays authoritative)
 //   otherwise → in-flight (working or idling)
+// A smoke result counts only on top of a passing verdict that counts.
+const groupOf = (
+  gate: Gate | undefined,
+  verdict: Verdict | undefined,
+  smoke: Smoke | undefined,
+  run: RunState
+): Group => {
+  if (gate || verdict?.verdict === "fail" || smoke?.status === "fail") {
+    return "needs-you";
+  }
+  if (smoke?.status === "pass") {
+    return "done";
+  }
+  if (smoke?.status === "running") {
+    return run === "needs-input" ? "needs-you" : "shipping";
+  }
+  if (verdict?.verdict === "pass") {
+    return "ready";
+  }
+  // the agent is blocked on input that never reached the feed (e.g. a raw
+  // permission prompt) — still a "needs you", just without a hint
+  return run === "needs-input" ? "needs-you" : "in-flight";
+};
+
 export const rowOf = (input: RowInput): FleetRow => {
   const gate =
     pendingGate(input.feed, input.cwd, input.session) ??
@@ -298,16 +332,9 @@ export const rowOf = (input: RowInput): FleetRow => {
     input.verdict && verdictCounts(input.verdict, input.expectedHash)
       ? input.verdict
       : undefined;
-  let group: Group = "in-flight";
-  if (gate || verdict?.verdict === "fail") {
-    group = "needs-you";
-  } else if (verdict?.verdict === "pass") {
-    group = "ready";
-  } else if (input.run === "needs-input") {
-    // the agent is blocked on input that never reached the feed (e.g. a raw
-    // permission prompt) — still a "needs you", just without a hint
-    group = "needs-you";
-  }
+  const smoke =
+    verdict?.verdict === "pass" ? (input.smoke ?? undefined) : undefined;
+  const group = groupOf(gate, verdict, smoke, input.run);
   const row: FleetRow = {
     change: input.ticket,
     cwd: input.cwd,
@@ -317,8 +344,9 @@ export const rowOf = (input: RowInput): FleetRow => {
     nextCommand: "",
     prUrl: verdict?.prUrl,
     run: input.run,
+    smoke: smoke?.status,
     stateHash: "",
-    summary: verdict?.summary,
+    summary: smoke?.summary || verdict?.summary,
     title: input.title,
     verdict: verdict?.verdict,
     workspaceId: input.workspaceId,
@@ -366,10 +394,18 @@ export const withHandles = (rows: FleetRow[]): FleetRow[] => {
 // left to whichever caller needs it.
 export const groupCounts = (
   rows: FleetRow[]
-): { needsYou: number; inFlight: number; ready: number } => ({
+): {
+  needsYou: number;
+  inFlight: number;
+  ready: number;
+  shipping: number;
+  done: number;
+} => ({
+  done: rows.filter((r) => r.group === "done").length,
   inFlight: rows.filter((r) => r.group === "in-flight").length,
   needsYou: rows.filter((r) => r.group === "needs-you").length,
   ready: rows.filter((r) => r.group === "ready").length,
+  shipping: rows.filter((r) => r.group === "shipping").length,
 });
 
 // PURE: pairwise changed-file overlap between ready worktrees OF THE SAME REPO

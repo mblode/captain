@@ -45,13 +45,36 @@ interface PromptExtras {
   shared?: SharedBranch;
   // the OpenSpec change id, for commit tags and its tasks.md
   sharedId?: string;
+  // where the change lives: the dir holding its `openspec/` (run `openspec`
+  // there), and whether that is the user's home outside the repo (external) or
+  // the repo's own team copy
+  openspec?: { home: string; external: boolean };
 }
+
+type OpenspecPlace = NonNullable<PromptExtras["openspec"]>;
 
 // How an agent shares one checkout and one branch with the rest of the fleet.
 // The index is shared too, so a plain `git commit` would sweep up whatever
 // another agent staged; `git commit -- <paths>` commits only the named paths.
-const sharedBranchSection = (shared: SharedBranch, id: string): string =>
-  [
+const sharedBranchSection = (
+  shared: SharedBranch,
+  id: string,
+  place: OpenspecPlace | undefined
+): string => {
+  const tasks = place
+    ? `${place.home}/openspec/changes/${id}/tasks.md`
+    : `openspec/changes/${id}/tasks.md`;
+  const changeLines = place?.external
+    ? [
+        `- Tick the boxes in \`${tasks}\` as you finish each task. That file lives outside this`,
+        "  repo and is never committed. Run every `openspec` command from",
+        `  \`${place.home}\` (\`cd\` there first).`,
+      ]
+    : [
+        `- \`openspec/changes/${id}/\` is the team's copy in this repo: read it, but do not edit,`,
+        "  tick or archive it.",
+      ];
+  return [
     "",
     "<shared-branch>",
     `There is no worktree and no new branch. You work directly on \`${shared.branch}\` in this`,
@@ -66,14 +89,39 @@ const sharedBranchSection = (shared: SharedBranch, id: string): string =>
     `- Push after each commit: \`git push origin ${shared.branch}\`. If the push is rejected, run`,
     `  \`git pull --rebase --autostash origin ${shared.branch}\` and push again. If git reports an`,
     "  `index.lock`, wait a few seconds and retry — another agent is committing.",
-    `- Tick the boxes in \`openspec/changes/${id}/tasks.md\` as you finish each task, and commit that`,
-    "  file with your work.",
-    `- Once every box is ticked and checks pass, run \`openspec archive ${id} --yes\` and commit the`,
-    "  result as your last commit: it merges your spec deltas into `openspec/specs/` and moves the",
-    "  folder to `openspec/changes/archive/`, so the change lands as current behaviour, not a live proposal.",
+    `- Never stage or commit an \`openspec/\` path${place?.external ? ` or anything under \`${place.home}\`` : ""}: OpenSpec`,
+    "  files are never part of a commit.",
+    ...changeLines,
     "</shared-branch>",
     "",
   ].join("\n");
+};
+
+// What a shared-branch run does after its passing verdict: done means verified
+// in production, not merged. The worker waits on the human merge (captain never
+// merges and runs no daemon, so the wait is the worker's own background poll),
+// watches the deploy, runs the rubric's smoke checks, and archives the change
+// only on a pass — outside the repo, so nothing is committed.
+const productionSteps = (
+  shared: SharedBranch,
+  id: string,
+  place: OpenspecPlace | undefined
+): string => {
+  const { smoke } = statePaths(shared);
+  const archive = place?.external
+    ? `6. On a pass, run \`openspec archive ${id} --yes\` from \`${place.home}\`. It changes files outside this repo: commit nothing. On a fail, do not archive and do not revert: stop for the human.`
+    : "6. On a pass, leave the change folder alone (it is the team's copy). On a fail, do not revert: stop for the human.";
+  return [
+    "A passing verdict is not done: done means verified in production. After the verdict, keep going:",
+    `1. Wait for the human merge. Never merge yourself. Poll in the background (a backgrounded shell loop, not a foreground sleep): \`until gh pr view ${shared.branch} --json state -q .state 2>/dev/null | grep -qE 'MERGED|CLOSED'; do sleep 120; done\`. If the PR closed without merging, stop. Otherwise read the merge SHA: \`gh pr view ${shared.branch} --json mergeCommit -q .mergeCommit.oid\`.`,
+    `2. Write \`${smoke}\` with \`"status": "running"\` and the merge SHA, in the rubric's "Smoke test" shape, so \`captain status\` shows the change as SHIPPING.`,
+    "3. Watch the deploy: poll `gh api repos/{owner}/{repo}/commits/<merge sha>/statuses` until every `watch/*` context is `success`, or follow the repo's documented deploy check (AGENTS.md, README). A failed deploy is a failed smoke test.",
+    `4. Run the rubric's "Smoke test" checks in production: a terminal check and a browser check, read-only unless a step names a reversible write, and inside the data scope.`,
+    `5. Rewrite \`${smoke}\` with \`"status": "pass"\` or \`"fail"\` and the evidence for every check.`,
+    archive,
+    "Then stop.",
+  ].join("\n");
+};
 
 // The sections appended after the issue context: the self-drive workflow (the
 // agent owns the whole SDLC — captain only dispatches and surfaces), the
@@ -171,7 +219,7 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
   }
 
   if (extras.shared && extras.sharedId) {
-    out += sharedBranchSection(extras.shared, extras.sharedId);
+    out += sharedBranchSection(extras.shared, extras.sharedId, extras.openspec);
   }
 
   if (extras.dataScope) {
@@ -187,11 +235,13 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       "fresh-context verifier sub-agent to grade the diff against the acceptance criteria, " +
       "fix and re-verify until it passes, then write the verdict file exactly as the " +
       'rubric\'s "Verdict" section specifies. Captain will not mark this ' +
-      `${extras.shared ? "change" : "worktree PR-"}ready without a passing verdict.\n`;
+      `${extras.shared ? "change " : "worktree PR-"}ready without a passing verdict.\n`;
     out +=
-      "Once the verdict is written your work on this ticket is complete — stop and wait; the " +
-      "captain driver sees the verdict on its next `captain status` and owns the merge decision. " +
-      "Do not merge or open further work yourself.\n";
+      extras.shared && extras.sharedId
+        ? `${productionSteps(extras.shared, extras.sharedId, extras.openspec)}\n`
+        : "Once the verdict is written your work on this ticket is complete — stop and wait; the " +
+          "captain driver sees the verdict on its next `captain status` and owns the merge decision. " +
+          "Do not merge or open further work yourself.\n";
     out += "</finishing-protocol>\n";
   }
 

@@ -41,6 +41,40 @@ describe("renderRubric", () => {
     );
   });
 
+  it("on a shared branch, renders the smoke checks after the verdict, outside the hash", () => {
+    const shared = {
+      baseSha: "abc1234",
+      branch: "main",
+      stateDir: ".captain/changes/add-dark-mode",
+    };
+    const withSmoke = renderRubric(
+      { ...issue, smoke: ["S.1 Terminal: run it"] },
+      "add-dark-mode",
+      undefined,
+      "OpenSpec",
+      shared
+    );
+    const derived = renderRubric(
+      issue,
+      "add-dark-mode",
+      undefined,
+      "OpenSpec",
+      shared
+    );
+    const smokeAt = withSmoke.text.indexOf("\n## Smoke test\n");
+    expect(smokeAt).toBeGreaterThan(withSmoke.text.indexOf("\n## Verdict\n"));
+    expect(withSmoke.text).toContain("- S.1 Terminal: run it");
+    expect(withSmoke.text).toContain(
+      "`.captain/changes/add-dark-mode/smoke.json`"
+    );
+    expect(derived.text).toContain(
+      "derive one terminal check and one browser check"
+    );
+    expect(withSmoke.hash).toBe(derived.hash);
+    expect(rubricHash(rubricBody(withSmoke.text))).toBe(withSmoke.hash);
+    expect(renderRubric(issue, "ENG-403").text).not.toContain("## Smoke test");
+  });
+
   it("derives criteria from the issue plus the standard repo gates", () => {
     const { text } = renderRubric(issue, "ENG-403");
     expect(text).toContain("# Definition of done — ENG-403");

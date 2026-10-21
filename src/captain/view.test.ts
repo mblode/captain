@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CmuxFeedItem, CmuxWorkspace } from "./control";
+import type { Smoke } from "./smoke";
 import type { Verdict } from "./verdict";
 import {
   identityOf,
@@ -176,6 +177,13 @@ describe("screenGate", () => {
   });
 });
 
+const smoke = (status: Smoke["status"], summary = ""): Smoke => ({
+  checks: [],
+  status,
+  summary,
+  ts: 0,
+});
+
 describe("rowOf grouping", () => {
   it("a pending gate is needs-you", () => {
     expect(rowOf(input({ feed: [feedItem()] })).group).toBe("needs-you");
@@ -235,6 +243,33 @@ describe("rowOf grouping", () => {
     expect(rowOf(input({ run: "running" })).group).toBe("in-flight");
     expect(rowOf(input({ run: "idle" })).group).toBe("in-flight");
     expect(rowOf(input({ run: "unknown" })).group).toBe("in-flight");
+  });
+
+  it("walks a merged change through shipping to done, and a failed smoke test to needs-you", () => {
+    const v = verdict();
+    expect(rowOf(input({ verdict: v })).group).toBe("ready");
+    expect(rowOf(input({ smoke: smoke("running"), verdict: v })).group).toBe(
+      "shipping"
+    );
+    const done = rowOf(input({ smoke: smoke("pass", "prod ok"), verdict: v }));
+    expect(done.group).toBe("done");
+    expect(done.summary).toBe("prod ok");
+    const failed = rowOf(
+      input({ smoke: smoke("fail", "S.1 404"), verdict: v })
+    );
+    expect(failed.group).toBe("needs-you");
+    expect(failed.summary).toBe("S.1 404");
+    // blocked on input while checking production still needs you
+    expect(
+      rowOf(input({ run: "needs-input", smoke: smoke("running"), verdict: v }))
+        .group
+    ).toBe("needs-you");
+    // a smoke file without a passing verdict that counts is ignored
+    expect(rowOf(input({ smoke: smoke("pass") })).group).toBe("in-flight");
+    expect(
+      rowOf(input({ expectedHash: "other", smoke: smoke("pass"), verdict: v }))
+        .group
+    ).toBe("in-flight");
   });
 });
 

@@ -688,12 +688,18 @@ describe("stateless approve/reject/status over the real surface", () => {
     const { out, text } = capture();
     status({ json: true, summary: true }, out, port);
     const parsed = JSON.parse(text()) as {
-      counts: { needsYou: number; inFlight: number; ready: number };
+      counts: Record<string, number>;
       needsYou: FleetRow[];
       ready: string[];
       snapshot: string;
     };
-    expect(parsed.counts).toEqual({ inFlight: 1, needsYou: 1, ready: 1 });
+    expect(parsed.counts).toEqual({
+      done: 0,
+      inFlight: 1,
+      needsYou: 1,
+      ready: 1,
+      shipping: 0,
+    });
     expect(parsed.needsYou).toHaveLength(1);
     expect(parsed.needsYou[0]).toMatchObject({
       gate: { kind: "plan" },
@@ -701,6 +707,84 @@ describe("stateless approve/reject/status over the real surface", () => {
     });
     expect(parsed.ready).toEqual(["tig-431"]);
     expect(parsed.snapshot).toMatch(/^[0-9a-f]{16}$/u);
+  });
+
+  it("status --summary --json counts shipping and done OpenSpec changes apart from ready", () => {
+    const checkout = join(root, "app");
+    // One OpenSpec change in the shared checkout: rubric, passing verdict, and
+    // the worker's smoke.json (absent while it waits for the merge).
+    const change = (id: string, smoke?: object): CmuxWorkspace => {
+      const stateDir = join(".captain", "changes", id);
+      mkdirSync(join(checkout, stateDir), { recursive: true });
+      const { hash, text } = renderRubric(
+        undefined,
+        id,
+        undefined,
+        "OpenSpec",
+        {
+          baseSha: "abc",
+          branch: "main",
+          stateDir,
+        }
+      );
+      writeFileSync(join(checkout, stateDir, "rubric.md"), text);
+      writeFileSync(
+        join(checkout, stateDir, "verdict.json"),
+        JSON.stringify({
+          criteria: [{ evidence: "x", name: "implements", pass: true }],
+          rubricHash: hash,
+          summary: "verified",
+          verdict: "pass",
+        })
+      );
+      if (smoke) {
+        writeFileSync(
+          join(checkout, stateDir, "smoke.json"),
+          JSON.stringify(smoke)
+        );
+      }
+      return {
+        cwd: checkout,
+        description: id,
+        id: `ws-${id}`,
+        name: id,
+        ref: "r",
+      };
+    };
+    const ok = [{ evidence: "exit 0", name: "S.1", pass: true }];
+    const port = fakePort(
+      [
+        change("awaiting-merge"),
+        change("checking-prod", { checks: [], status: "running" }),
+        change("in-prod", { checks: ok, status: "pass" }),
+        change("broke-prod", {
+          checks: [{ ...ok[0], pass: false }],
+          status: "fail",
+          summary: "S.1 returned 500",
+        }),
+      ],
+      []
+    );
+    const { out, text } = capture();
+    status({ json: true, summary: true }, out, port);
+    const parsed = JSON.parse(text()) as {
+      counts: Record<string, number>;
+      needsYou: FleetRow[];
+      ready: string[];
+    };
+    expect(parsed.counts).toEqual({
+      done: 1,
+      inFlight: 0,
+      needsYou: 1,
+      ready: 1,
+      shipping: 1,
+    });
+    expect(parsed.ready).toEqual(["awaiting-merge"]);
+    expect(parsed.needsYou[0]).toMatchObject({
+      smoke: "fail",
+      summary: "S.1 returned 500",
+      ticket: "broke-prod",
+    });
   });
 
   it("summary snapshot changes when a row moves from needs-you to ready", () => {
@@ -791,7 +875,7 @@ describe("stateless approve/reject/status over the real surface", () => {
     );
     expect(JSON.parse(changed.text())).toMatchObject({
       changed: true,
-      counts: { inFlight: 0, needsYou: 1, ready: 0 },
+      counts: { done: 0, inFlight: 0, needsYou: 1, ready: 0, shipping: 0 },
     });
   });
 

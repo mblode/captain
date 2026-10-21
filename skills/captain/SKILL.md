@@ -1,6 +1,6 @@
 ---
 name: captain
-description: Conduct a fleet of cmux agents from one driver session — write OpenSpec changes (Markdown in openspec/changes/), launch one self-driving agent per change on the current branch, then surface what needs you. Use when asked to "add this to the list", "write a change for…", "fan out the changes", "start this change", "run these on codex", "what's blocked across my agents", "approve all the plans", "check and approve plans", "show me the plans", "what's done", "start the captain", "run the dev loop", or "drain the queue".
+description: Conduct a fleet of cmux agents from one driver session — write OpenSpec changes (Markdown in the repo's OpenSpec home, outside the repo), launch one self-driving agent per change on the current branch, then surface what needs you. Use when asked to "add this to the list", "write a change for…", "fan out the changes", "start this change", "run these on codex", "what's blocked across my agents", "approve all the plans", "check and approve plans", "show me the plans", "what's done", "start the captain", "run the dev loop", or "drain the queue".
 ---
 
 # Captain
@@ -11,13 +11,16 @@ approve plans`; this skill writes the specs and runs the CLI. **IS NOT:** a clou
 coordinator, a ticket tracker, or typing cmux keys to approve a plan.
 
 The backlog is **OpenSpec**: each piece of work is a Markdown folder
-`openspec/changes/<id>/` in the repo. No Linear. Every agent runs in **the same
-checkout on its current branch** — no worktrees, no PRs. Workers self-drive plan →
-implement → `/pr-reviewer` → `/tidy` → conditional UI steps → commit `[<id>] …` → push
-to the branch → verdict.
+`openspec/changes/<id>/` in the repo's **OpenSpec home**, outside the repo
+(`captain spec --root` prints it: `~/.claude/captain/openspec/<repo-key>/`). Nothing
+OpenSpec is ever committed. No Linear. Every agent runs in **the same checkout on its
+current branch** — no worktrees, no per-change PRs. Workers self-drive plan → implement →
+`/pr-reviewer` → `/tidy` → conditional UI steps → commit `[<id>] …` → push to the branch →
+verdict → wait for the human merge → watch the deploy → smoke test in production →
+`openspec archive` in the home → stop.
 
 Captain keeps **no state**. `status` derives from cmux + `.captain/changes/<id>/`
-(rubric, plan, verdict, session id — git-excluded).
+(rubric, plan, verdict, smoke, session id — git-excluded).
 
 ## References
 
@@ -32,8 +35,10 @@ Captain keeps **no state**. `status` derives from cmux + `.captain/changes/<id>/
 - Claude workers have a real plan gate (`--permission-mode plan`). Codex has none —
   `approve`/`reject` do nothing there; the brief says plan then proceed.
 - Definition of done is `.captain/changes/<id>/rubric.md`, built from the change's
-  open `tasks.md` boxes. A passing `verdict.json` is a label; the commits are already
-  on the branch.
+  open `tasks.md` boxes. A passing `verdict.json` is READY (the commits are already on
+  the branch), not done. Done means verified in production: after the human merges, the
+  worker writes `smoke.json` (SHIPPING while it runs), then DONE on a pass or NEEDS YOU
+  on a fail. You merge; captain and the workers never do.
 - Agents share one working tree and one index. The brief makes them commit only their
   own paths (`git commit -m "[<id>] …" -- <paths>`), never stash/reset/clean/switch
   branch, and `git pull --rebase --autostash` when a push is rejected. Two changes
@@ -43,16 +48,19 @@ Captain keeps **no state**. `status` derives from cmux + `.captain/changes/<id>/
 
 ## Writing a change ("add this to the list")
 
-Run from the target repo (or pass `--repo-path`). Use the OpenSpec CLI to scaffold and
-check changes. Captain reads the Markdown itself, so the CLI is not needed to launch.
+Run every `openspec` command from the repo's home, never from the repo:
+`home="$(captain spec --root --repo-path <repo>)"; mkdir -p "$home"; cd "$home"`.
+Captain reads the Markdown itself, so the CLI is not needed to launch. Never write a
+change into the repo's own `openspec/` and never commit one; a change already in the repo
+belongs to the team and is read-only.
 
 Setup, once per machine and once per repo: Node >= 20.19, then
 `npm install -g @fission-ai/openspec@latest` (or `brew install openspec`), then
-`openspec init --tools claude` in the repo. Run `openspec update` in the repo after
-upgrading the CLI. `captain install` flags a missing CLI.
+`openspec init --tools none` in the home. Run `openspec update` there after upgrading the
+CLI. `captain install` flags a missing CLI.
 
 1. Pick a kebab-case verb-led id: `add-dark-mode`, `fix-login-redirect`.
-2. `openspec new change <id>` creates `openspec/changes/<id>/`. Fill its artifacts
+2. `openspec new change <id>` creates `openspec/changes/<id>/` in the home. Fill its artifacts
    in the current template's shape; `openspec instructions <artifact> --change <id>`
    prints the template and rules for each one (`proposal`, `specs`, `design`, `tasks`).
    - `proposal.md`: `## Why` (at least 50 characters, or validate warns), `## What Changes`, `## Capabilities` (the new or
@@ -73,7 +81,15 @@ upgrading the CLI. `captain install` flags a missing CLI.
 
      - [ ] 1.1 <observable outcome>
      - [ ] 1.2 Tests cover <behaviour>
+
+     ## Smoke test
+
+     - [ ] S.1 Terminal: <a command run against production and the output it must show>
+     - [ ] S.2 Browser: <a page in production and what it must show>
      ```
+     `## Smoke test` boxes are not rubric criteria: the worker runs them in production after
+     the merge, read-only unless a step names a reversible write. Without the section the
+     worker derives one terminal and one browser check from the proposal.
    - `design.md` is optional, for decisions and trade-offs.
 3. `openspec validate <id>` must pass before you launch the change.
 4. Keep changes that will run together on disjoint files. Say so if two overlap and
@@ -84,15 +100,16 @@ upgrading the CLI. `captain install` flags a missing CLI.
 
 - `captain spec <id…>` — one cmux workspace per change, in this checkout, on the
   current branch (refuses a detached HEAD).
-- `captain spec --all` — every active change (not under `archive/`) without a live
-  agent; already-running ones are skipped, so it is safe to rerun.
+- `captain spec --all` — every active change in the home (not under `archive/`) without a
+  live agent; already-running ones are skipped, so it is safe to rerun. A team change in
+  the repo's `openspec/` launches only by explicit id.
 - `--repo-path <abs>` from a driver session whose cwd is not the repo. `--agent codex`
   is ungated. `--print` writes the brief without launching.
-- Agents tick their boxes in `tasks.md` as they go. When a change is done and you are
-  asked to archive it, run `openspec archive <id> --yes` and commit the result. Archive
-  validates the change, merges its spec deltas into `openspec/specs/`, and moves the
-  folder to `openspec/changes/archive/`. Do not `git mv` it by hand: that skips the
-  spec merge. A `skip_specs: true` change archives with no spec merge and needs no extra flag.
+- Agents tick their boxes in the home's `tasks.md` as they go, and the worker runs
+  `openspec archive <id> --yes` in the home itself once its smoke test passes. Nothing is
+  committed. Archive validates the change, merges its spec deltas into the home's
+  `openspec/specs/`, and moves the folder to `openspec/changes/archive/`. Do not move it by
+  hand: that skips the spec merge.
 
 ## The loop
 
@@ -106,7 +123,7 @@ Poll once a fleet is running. Never ask the human whether to poll.
 | "show me the plans" / "check and approve plans" | `captain status --needs --json` (or summary `needsYou` with `gate.kind=plan`). One read-only reviewer, at most 8 plans, 6k chars each, 24k total. Card quotes `## Decisions for the reviewer` verbatim, then `{change, scopeDrift, risk, recommendation}`. Then **one** AskUserQuestion. Approve is `captain approve <handle> --note "<card, one line>"`. Reject is `captain reject <handle> --note "…"`. Never `cmux send-key` to accept a plan |
 | "approve all plans" | Same as above, one `approve --note` per gate. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
 | "send dark-mode back: don't touch auth" | `captain reject add-dark-mode --note "…"` |
-| "what's verified" / "what's been done" | READY in `status`; `git log --grep='\[<id>\]'` for the commits; history in `captain gain --json` `roster`. Then `/eli5` if asked. Do not reconstruct from scrollback |
+| "what's verified" / "what's been done" | READY (verified, awaiting your merge), SHIPPING (merged, smoke test running) and DONE (verified in production, archived) in `status`; `git log --grep='\[<id>\]'` for the commits; history in `captain gain --json` `roster`. Then `/eli5` if asked. Do not reconstruct from scrollback |
 | "this one's gone quiet" | `cmux read-screen --workspace <id>` using the id from status. Nudge only after evidence of a stall: `cmux send` then `cmux send-key enter` |
 | "Open <id> in cmux" | `status` row → `cmux read-screen --workspace <id>` (or the cmux skill). Not a plan approval |
 | "start the loop" | Arm [heartbeat.md](references/heartbeat.md). Never hand polling back to the human |
@@ -133,8 +150,10 @@ Poll once a fleet is running. Never ask the human whether to poll.
   follow with `cmux send-key enter` and re-read.
 - **Never approve without a card.** `--note` is the only reasoning `gain` can see.
 - **Never guess off-script questions.** `cmux send` the answer, or `reject` if it is a plan.
-- **Pushes go straight to the branch.** There is no PR gate; review the plan carefully
-  and spot-read the `[<id>]` commits. Rewinding is `git revert`, never a force-push.
+- **Pushes go straight to the branch.** There is no per-change PR; review the plan
+  carefully and spot-read the `[<id>]` commits. Rewinding is `git revert`, never a force-push.
+- **A smoke failure is yours.** NEEDS YOU with `smoke: "fail"` means production disagrees:
+  read `.captain/changes/<id>/smoke.json` evidence. The worker does not revert or archive.
 - **Never trust a one-line verdict.** Spot-read `verdict.json` criteria; `name` must match
   the rubric; `na` is not a pass.
 - **`run=unknown`:** no live `cmux top` tag. Read the screen. Empty shell → rerun
@@ -145,5 +164,5 @@ Poll once a fleet is running. Never ask the human whether to poll.
 
 ## Reference
 
-- CLI: `captain --help`. Pure core: `src/captain/view.ts`, `verdict.ts`.
+- CLI: `captain --help`. Pure core: `src/captain/view.ts`, `verdict.ts`, `smoke.ts`.
 - Low-level cmux: the [`cmux`](../cmux/SKILL.md) skill.

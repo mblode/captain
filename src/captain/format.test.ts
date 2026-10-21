@@ -20,9 +20,11 @@ const metrics = (over: Partial<GainMetrics> = {}): GainMetrics => ({
   },
   fleet: {
     byRepo: [{ repo: "linkiq", total: 3 }],
+    done: 0,
     inFlight: 1,
     needsYou: 1,
     ready: 1,
+    shipping: 0,
     total: 3,
   },
   verdicts: {
@@ -170,6 +172,29 @@ describe("renderStatus", () => {
       }
     );
     expect(out).toContain("overlaps x on a.ts");
+  });
+
+  it("renders SHIPPING and DONE after READY TO MERGE, with their counts", () => {
+    const out = renderStatus(
+      [
+        row({ group: "ready", name: "a", verdict: "pass" }),
+        row({
+          group: "shipping",
+          name: "b",
+          smoke: "running",
+          verdict: "pass",
+        }),
+        row({ group: "done", name: "c", smoke: "pass", verdict: "pass" }),
+      ],
+      plain
+    );
+    expect(out).toContain("1 shipping");
+    expect(out).toContain("1 done");
+    const at = (text: string): number => out.indexOf(text);
+    expect(at("READY TO MERGE")).toBeLessThan(at("SHIPPING"));
+    expect(at("SHIPPING")).toBeLessThan(at("DONE"));
+    expect(out).toMatch(/◐ b\s+shipping/u);
+    expect(out).toMatch(/✓ c\s+done/u);
   });
 
   it("reassures when nothing needs you and nothing is ready", () => {

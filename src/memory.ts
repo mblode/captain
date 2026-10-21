@@ -51,18 +51,28 @@ ${INBOX_HEADING}
 // two repos share a basename under different parents. We disambiguate with a
 // short hash of the full repoRoot, but keep returning the LEGACY bare-basename
 // path when it already exists, so existing users' memory keeps working untouched.
-export const memoryPath = (
+const memoryBase = (env: NodeJS.ProcessEnv): string =>
+  env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory");
+
+// The per-repo key: the bare basename when its legacy memory exists, else
+// `<basename>-<hash8>`. The OpenSpec home (openspec.ts) reuses it, so a repo's
+// memory and its changes sit under the same name.
+export const repoKey = (
   repoRoot: string,
   env: NodeJS.ProcessEnv = process.env
 ): string => {
-  const base = env.CAPTAIN_MEMORY_DIR ?? join(captainHome(env), "memory");
-  const legacy = join(base, basename(repoRoot), "learnings.md");
-  if (existsSync(legacy)) {
-    return legacy;
+  const name = basename(repoRoot);
+  if (existsSync(join(memoryBase(env), name, "learnings.md"))) {
+    return name;
   }
   const hash = createHash("sha256").update(repoRoot).digest("hex").slice(0, 8);
-  return join(base, `${basename(repoRoot)}-${hash}`, "learnings.md");
+  return `${name}-${hash}`;
 };
+
+export const memoryPath = (
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env
+): string => join(memoryBase(env), repoKey(repoRoot, env), "learnings.md");
 
 export const ensureMemoryFile = (
   repoRoot: string,

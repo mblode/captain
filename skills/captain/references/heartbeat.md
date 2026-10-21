@@ -23,13 +23,18 @@ Take the first available rung. **Never** skip a missing rung to "ask the human t
 For an ordinary fleet, retain the `started[].name` refs and poll only those.
 
 - First session-preserving wake: `captain status <refs…> --summary --json`; retain its
-  opaque `snapshot`. The payload also has `counts`, `needsYou`, and `ready` — relay those
-  as returned.
+  opaque `snapshot`. The payload also has `counts` (`needsYou`, `inFlight`, `ready`,
+  `shipping`, `done`), `needsYou`, and `ready` — relay those as returned.
 - Later wakes: the same command with `--since <snapshot>`.
   - `changed:false` → no new fleet action; re-arm immediately.
   - `changed:true` → returns the current `counts`, `needsYou`, and `ready` (identities of
     rows that are verified). Relay those three fields as returned — do not compose a
     story from them. Act, replace the snapshot, then re-arm.
+
+An OpenSpec change runs merge → deploy → smoke → archive → next change. `ready` rows wait on
+the human merge (never merge for them). After it, a row moves to `shipping` while its worker
+watches the deploy and smoke-tests production, then to `done` once it passed and archived the
+change. A smoke failure lands in `needsYou`: relay its `summary` and leave it for the human.
 
 Plan gates in `needsYou` go through `captain approve <handle> --note "…"` (or reject).
 If that CLI errors, read the screen and report; do not click the plan menu with

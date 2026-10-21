@@ -31,17 +31,22 @@ export interface SharedBranch {
   baseSha: string;
 }
 
-// Where a run's plan and verdict live: under `.captain/` for a worktree, under
-// the change's own state dir on a shared branch.
+// Where a run's plan, verdict and smoke result live: under `.captain/` for a
+// worktree, under the change's own state dir on a shared branch.
 export const statePaths = (
   shared?: SharedBranch
-): { plan: string; verdict: string } =>
+): { plan: string; smoke: string; verdict: string } =>
   shared
     ? {
         plan: `${shared.stateDir}/plan.md`,
+        smoke: `${shared.stateDir}/smoke.json`,
         verdict: `${shared.stateDir}/verdict.json`,
       }
-    : { plan: PLAN_RELPATH, verdict: VERDICT_RELPATH };
+    : {
+        plan: PLAN_RELPATH,
+        smoke: ".captain/smoke.json",
+        verdict: VERDICT_RELPATH,
+      };
 
 // The verifier's view of a change on a shared branch: only this change's
 // commits, since other agents commit to the same branch.
@@ -121,6 +126,57 @@ const criteriaFor = (
     );
   }
   return criteria;
+};
+
+// The post-merge production checks and the smoke.json shape, for a change run
+// on a shared branch. Rendered after `## Verdict`, so outside the hash: the
+// pre-merge verifier never grades them, and the worker runs them only once the
+// change is merged and deployed.
+const renderSmoke = (
+  issue: Issue | undefined,
+  displayId: string,
+  smokePath: string
+): string => {
+  const checks = issue?.smoke ?? [];
+  const list =
+    checks.length > 0
+      ? checks.map((check) => `- ${check}`).join("\n")
+      : "No `## Smoke test` section in tasks.md: derive one terminal check and one browser check from the proposal, and mark each `derived: true`. Leave out the browser check when the change has no browser surface, and say so in `summary`.";
+  const schema = JSON.stringify(
+    {
+      change: displayId,
+      checks: [
+        {
+          derived: false,
+          evidence: "<the command and its output, or what the browser showed>",
+          kind: "terminal | browser",
+          name: "<the check, copied verbatim>",
+          pass: true,
+        },
+      ],
+      mergeSha: "<the merge commit sha>",
+      status: "running | pass | fail",
+      summary: "<one line>",
+      ts: "<epoch seconds>",
+    },
+    null,
+    2
+  );
+  return [
+    "",
+    "## Smoke test",
+    "",
+    "Run these in production after the merge and deploy, read-only unless a step names a reversible write:",
+    "",
+    list,
+    "",
+    `Record the result in \`${smokePath}\` (git-ignored). Write \`"status": "running"\` once the merge lands, then \`pass\` only when every check passed, else \`fail\`:`,
+    "",
+    "```json",
+    schema,
+    "```",
+    "",
+  ].join("\n");
 };
 
 const renderParentContext = (parent: Issue["parent"]): string => {
@@ -251,7 +307,8 @@ export const renderRubric = (
     "",
   ].join("\n");
 
+  const smoke = shared ? renderSmoke(issue, displayId, paths.smoke) : "";
   // Concatenated, not joined: rubricBody splits at the exact VERDICT_HEADING
   // bytes, so nothing may sit between the body and the heading.
-  return { hash, text: `${body}${VERDICT_HEADING}${tail}` };
+  return { hash, text: `${body}${VERDICT_HEADING}${tail}${smoke}` };
 };

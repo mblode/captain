@@ -24,9 +24,12 @@ after a stop dispatches nothing and never re-arms.
 - **Gates before pickup.** Derive the fleet with unfiltered `captain status --json`.
   Work the NEEDS YOU batch, _then_ consider pickup. A structured status error or a
   non-zero exit **fails closed**: dispatch nothing, surface once, re-arm.
-- **Capacity.** `active` = NEEDS YOU + IN FLIGHT rows; `available = max(0, cap − active)`.
-  Zero available → skip the queue and re-arm.
-- **The queue** is `openspec/changes/*/` in the repo (excluding `archive/`), sorted by id.
+- **Capacity.** `active` = NEEDS YOU + IN FLIGHT + SHIPPING rows (a SHIPPING worker is
+  still smoke-testing production); `available = max(0, cap − active)`. A DONE row frees
+  its slot: that change merged, passed its smoke test and archived itself. Zero available
+  → skip the queue and re-arm.
+- **The queue** is `"$(captain spec --root --repo-path <repo>)"/openspec/changes/*/`, the
+  repo's OpenSpec home outside the repo (excluding `archive/`), sorted by id.
   A change is eligible when it has a `proposal.md`, at least one unchecked `- [ ]` box in
   `tasks.md`, and no status row (`change` field) in any state. Take at most `available`.
   Skip a change whose `## Impact` paths overlap a running change's — shared checkout
@@ -43,9 +46,13 @@ after a stop dispatches nothing and never re-arms.
 
 - **No lock guards the loop.** Two armed drivers race the same queue. One armed loop per
   repo; stop one the moment you spot a second.
-- **A finished change stays in the queue** until its boxes are all ticked or it is
-  archived. A READY row with open boxes means the agent missed a box — read its verdict
-  before relaunching.
+- **The flow is merge → deploy → smoke → archive → next change.** A READY row waits on
+  your merge; after it the worker turns SHIPPING, then DONE, and archives the change in
+  the home, which takes it out of the queue. Pick up the next change once a row is DONE.
+- **A finished change stays in the queue** until it is archived. A DONE row whose change
+  is still in the queue means the archive failed — read the worker's screen before
+  relaunching. A smoke failure sits in NEEDS YOU and keeps its change in the queue; never
+  relaunch it without the human.
 - **Invariants, unchanged by arming:** plan approval stays mandatory for Claude agents;
   codex has no plan gate; `captain status --json` is the fleet source of truth;
   test-worker caps are untouched.

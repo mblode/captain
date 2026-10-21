@@ -53,10 +53,14 @@ captain approve tig-430
 
 ### OpenSpec on one branch
 
-No tracker and no worktrees: write each piece of work as an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change (`openspec/changes/<id>/proposal.md` + `tasks.md`), then launch one agent per change in the current checkout. Each agent commits `[<id>] …` with only its own paths and pushes to the current branch; no PR is opened. The open `tasks.md` boxes become the definition of done.
+No tracker and no worktrees: write each piece of work as an [OpenSpec](https://github.com/Fission-AI/OpenSpec) change (`openspec/changes/<id>/proposal.md` + `tasks.md`), then launch one agent per change in the current checkout. Your changes live outside the repo, in its OpenSpec home (`captain spec --root`, under `~/.claude/captain/openspec/`), so no OpenSpec file is ever committed. A change already in the repo's own `openspec/` still runs, read-only. Each agent commits `[<id>] …` with only its own paths and pushes to the current branch. The open `tasks.md` boxes become the definition of done.
+
+Done means verified in production. After its verdict passes, the agent waits for you to merge. Then it watches the deploy and runs the `## Smoke test` checks from `tasks.md` in production. On a pass it archives the change in the home. `status` shows SHIPPING while the smoke test runs and DONE once it passed. A failed smoke test lands in NEEDS YOU.
 
 ```bash
-captain spec add-dark-mode fix-login-redirect   # or: captain spec --all
+home="$(captain spec --root)"; mkdir -p "$home" && cd "$home"   # the repo's OpenSpec home
+openspec init --tools none && openspec new change add-dark-mode  # init once, then write changes
+cd - && captain spec add-dark-mode fix-login-redirect            # or: captain spec --all
 captain status
 ```
 
@@ -66,7 +70,7 @@ From inside a Claude Code session, run `/captain` and steer the same fleet in pl
 
 - **The plan:** each agent presents a plan and waits. Nothing gets built until you approve it.
 - **The questions:** an agent that needs an answer shows up under NEEDS YOU with the reply command.
-- **The merge:** an agent opens the PR and stops there. Merging stays yours.
+- **The merge:** an agent opens the PR and stops there. Merging stays yours. An OpenSpec agent waits for your merge, then checks production.
 
 Everything between those gates is fixed: plan, implement, the review skills you configured, then a fresh-context verifier that has to pass the worktree's definition of done before the run counts as ready.
 
