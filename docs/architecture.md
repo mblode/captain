@@ -216,8 +216,10 @@ Done means verified in production, not merged. After a passing verdict the brief
 worker going: it polls `gh pr view <branch>` in the background until the human merges (captain
 never merges and runs no daemon, so the wait is the worker's own). It then writes `smoke.json`
 as `running` (the row reads SHIPPING), watches the deploy (`watch/*` statuses on the merge SHA,
-or the repo's documented check), and runs the smoke checks. Those are a terminal check and a
-browser check, read-only unless a step names a reversible write, inside the data scope. On a pass
+or the repo's documented check), and runs the smoke checks (terminal and browser, as listed),
+read-only unless a step names a reversible write, inside the data scope. It confirms the merge
+commit contains its own last commit first, so an older merged PR on a long-lived shared branch
+never counts. On a pass
 it runs `openspec archive <id> --yes` in the home and commits nothing (DONE). On a fail it does
 not archive or revert, and the row reads NEEDS YOU with the failing evidence. `status` learns
 about the merge only through that `running` file, so it stays a filesystem read with no `gh`

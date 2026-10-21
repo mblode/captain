@@ -113,10 +113,10 @@ const productionSteps = (
     : "6. On a pass, leave the change folder alone (it is the team's copy). On a fail, do not revert: stop for the human.";
   return [
     "A passing verdict is not done: done means verified in production. After the verdict, keep going:",
-    `1. Wait for the human merge. Never merge yourself. Poll in the background (a backgrounded shell loop, not a foreground sleep): \`until gh pr view ${shared.branch} --json state -q .state 2>/dev/null | grep -qE 'MERGED|CLOSED'; do sleep 120; done\`. If the PR closed without merging, stop. Otherwise read the merge SHA: \`gh pr view ${shared.branch} --json mergeCommit -q .mergeCommit.oid\`.`,
+    `1. Wait for the human merge. Never merge, and never open further work yourself. Poll in the background (a backgrounded shell loop, not a foreground sleep): \`until gh pr view ${shared.branch} --json state -q .state 2>/dev/null | grep -qE 'MERGED|CLOSED'; do sleep 120; done\`. If the PR closed without merging, stop. Otherwise read the merge SHA (\`gh pr view ${shared.branch} --json mergeCommit -q .mergeCommit.oid\`), \`git fetch origin\`, and check the merge holds your work: \`git merge-base --is-ancestor <your last [${id}] commit> <merge sha>\`. If it does not, that PR is an older one on this branch: keep polling.`,
     `2. Write \`${smoke}\` with \`"status": "running"\` and the merge SHA, in the rubric's "Smoke test" shape, so \`captain status\` shows the change as SHIPPING.`,
     "3. Watch the deploy: poll `gh api repos/{owner}/{repo}/commits/<merge sha>/statuses` until every `watch/*` context is `success`, or follow the repo's documented deploy check (AGENTS.md, README). A failed deploy is a failed smoke test.",
-    `4. Run the rubric's "Smoke test" checks in production: a terminal check and a browser check, read-only unless a step names a reversible write, and inside the data scope.`,
+    `4. Run every check in the rubric's "Smoke test" section in production (terminal and browser, as listed), read-only unless a step names a reversible write, and inside the data scope.`,
     `5. Rewrite \`${smoke}\` with \`"status": "pass"\` or \`"fail"\` and the evidence for every check.`,
     archive,
     "Then stop.",
