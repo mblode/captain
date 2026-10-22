@@ -199,7 +199,12 @@ describe("prompt extras", () => {
       `Never stage or commit an \`openspec/\` path or anything under \`${home}\``
     );
     expect(out).not.toMatch(/commit (that file|the\s+result)/u);
-    expect(out).toContain("gh pr view main --json state");
+    expect(out).toContain("gh pr view main --json number,state,headRefOid");
+    // A squash merge rewrites the commits, so the wait tests the PR's head, never the merge SHA.
+    expect(out).toContain(
+      'git merge-base --is-ancestor <your last [add-dark-mode] commit> "$head"'
+    );
+    expect(out).toContain('[ "$st" = CLOSED ]');
     expect(out).toContain("`watch/*`");
     expect(out).toContain(".captain/changes/add-dark-mode/smoke.json");
     expect(out).toContain(
