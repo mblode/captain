@@ -15,7 +15,7 @@ The backlog is **OpenSpec**: each piece of work is a Markdown folder
 (`captain spec --root` prints it: `~/.claude/captain/openspec/<repo-key>/`). Nothing
 OpenSpec is ever committed. No Linear. Every agent runs in **the same checkout on its
 current branch** — no worktrees, no per-change PRs. Workers self-drive plan → implement →
-`/pr-reviewer` → `/tidy` → conditional UI steps → commit `[<id>] …` → push to the branch →
+`/tidy` → conditional UI steps → commit `[<id>] …` → push to the branch →
 verdict → wait for the human merge → watch the deploy → smoke test in production →
 `openspec archive` in the home → stop.
 

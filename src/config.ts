@@ -9,12 +9,10 @@ import { expandTilde } from "./repo";
 // and the *verifier/verdict finish*. Configurable so a setup can run its own
 // review/ship pipeline; this is the fallback when no config is present.
 //
-// ORDER IS LOAD-BEARING: /pr-reviewer runs BEFORE /tidy. Both skills document
-// the handoff — pr-reviewer is read-only and writes a report whose `Fix:` lines
-// are committable, and tidy's Phase 2 looks for a review that already ran and
-// routes its confirmed findings straight into its own apply phase. Running the
-// fixer first strands the report: nothing downstream applies it, and the PR
-// /pr-creator opens carries the review's "Must fix before push" findings.
+// ORDER IS LOAD-BEARING: /tidy runs BEFORE /pr-creator. /tidy is the review
+// and the fix in one pass (it absorbed the retired /pr-reviewer: see
+// agent-skills maintenance/retired-names.tsv), so the PR /pr-creator opens
+// already carries the fixes rather than the findings.
 //
 // An entry is either a `/skill` token (rendered as "Run /skill.") or a plain
 // English instruction rendered verbatim as its own step. Prose is what makes a
@@ -23,7 +21,6 @@ import { expandTilde } from "./repo";
 // cannot be skipped teaches agents to argue exemptions instead (the same reason
 // the rubric has an `na` state and /security-review was reverted).
 export const DEFAULT_SKILLS = [
-  "/pr-reviewer",
   "/tidy",
   "If the diff touches user-facing UI, run /product-design then /ui-design, and iterate between them until both the states and the visual are right.",
   "If the diff changes a rendered page or component, run /visual-qa before finishing.",

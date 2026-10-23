@@ -33,7 +33,7 @@ same brief: the `<workflow>` pipeline (plan → write the approved plan to `.cap
 → implement → the configured skills → verifier finish), the `<data-scope>` guardrail (source/config only — no customer data, secrets, or PII;
 `loadDataScope`, on by default), the finishing protocol, and fleet memory. The skills run between implement and finish are
 config-driven (`config.ts` `loadSkills`: `CAPTAIN_SKILLS` env > `~/.config/captain/config.json`
-`.skills` > the default `/pr-reviewer` → `/tidy` → two conditional UI steps (`/product-design`
+`.skills` > the default `/tidy` → two conditional UI steps (`/product-design`
 + `/ui-design`, then `/visual-qa`) → `/pr-creator` → `/pr-babysitter`); plan,
 implement, and the verdict finish stay fixed because `status` derives from them. The agent
 self-drives; nothing external types commands into it.
@@ -317,14 +317,10 @@ The rationale behind each short rule in `AGENTS.md` § Gotchas, kept verbatim.
   `CAPTAIN_MEMORY_DIR`), and `config.ts` honours `CAPTAIN_CONFIG` (point it at a temp file) —
   runner/commands/config tests set these to temp dirs and drive the real modules through a fake
   `CmuxPort` (no mocking library).
-- **The pipeline order is a correctness property, not a preference.** `/pr-reviewer` runs
-  BEFORE `/tidy`. The reviewer is read-only and writes a report whose `Fix:` lines are
-  committable; `tidy`'s Phase 2 looks for a review that already ran and routes its confirmed
-  findings straight into its apply phase. Reversed — as `DEFAULT_SKILLS` shipped until Aug 2026
-  — the report is produced with nothing downstream to apply it and `/pr-creator` opens the PR
-  still carrying the review's own "Must fix before push" findings. Pinned by a test in
-  `config.test.ts`; the skills' own docs are the source (`pr-reviewer/SKILL.md`: "The usual
-  sequence is this skill, then that one").
+- **The pipeline order is a correctness property, not a preference.** `/tidy` runs BEFORE
+  `/pr-creator`. `/tidy` reviews and applies its confirmed findings in one pass (it absorbed the
+  retired `/pr-reviewer` in Sep 2026), so the PR opens with the fixes, not the findings. Pinned
+  by a test in `config.test.ts`, which also fails if `/pr-reviewer` returns as a step.
 - **A pipeline step is a `/skill` token OR plain English.** An entry that doesn't start with `/`
   renders verbatim as its own numbered step (`prompt.ts`), which is how a step becomes
   conditional — "If the diff touches user-facing UI, run /product-design then /ui-design" — with

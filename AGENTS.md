@@ -80,7 +80,7 @@ Each rule's full rationale is in `docs/architecture.md` § Gotchas in full.
 - **Friendly ids**: `approve`/`reject` take `tig-430` or substrings; an ambiguous ticket across repos must be passed as `${repo}-${ticket}`.
 - **`.captain/` never reaches a diff**: `start` appends it to `.git/info/exclude`; it is also the membership marker `surface.ts` filters by.
 - **Tests must not touch the real `$HOME`**: set `CAPTAIN_HOME`, `CAPTAIN_MEMORY_DIR` and `CAPTAIN_CONFIG` to temp paths and use a fake `CmuxPort` (no mocking library).
-- **Pipeline order is correctness**: `/pr-reviewer` runs before `/tidy` so tidy applies the review's fixes. Pinned in `config.test.ts`.
+- **Pipeline order is correctness**: `/tidy` (review and fix in one pass) runs before `/pr-creator`. Pinned in `config.test.ts`.
 - **A pipeline step is a `/skill` token or plain English**; plain English is how a step becomes conditional. Don't add a condition DSL.
 - **Skills config is fail-safe**: `loadSkills` never throws; `"$defaults"` expands in place, and a non-empty list without it replaces the defaults.
 - **No daemon, ever**: no watcher, pidfile or `state.json`; derive from cmux + the filesystem. `status --watch` is a foreground re-render, not a violation.

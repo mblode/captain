@@ -44,8 +44,7 @@ export interface DoctorDeps {
 // The skills `captain install` can fetch from mblode/agent-skills. The doctor
 // only nags about the ones the configured brief actually runs, so a custom
 // pipeline (CAPTAIN_SKILLS / config) isn't warned about skills it doesn't use.
-// (/tidy runs first but isn't fetched through this bundle, so it's not here.)
-const INSTALLABLE_SKILLS = ["pr-reviewer", "pr-creator", "pr-babysitter"];
+const INSTALLABLE_SKILLS = ["tidy", "pr-creator", "pr-babysitter"];
 
 const PIPELINE_BUNDLE = "mblode/agent-skills";
 const CAPTAIN_BUNDLE = "mblode/captain";

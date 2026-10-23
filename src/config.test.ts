@@ -53,14 +53,12 @@ describe("parseSkills", () => {
 const stepAt = (step: string): number => DEFAULT_SKILLS.indexOf(step);
 
 describe("DEFAULT_SKILLS order", () => {
-  // The pipeline order is a correctness property, not a preference. pr-reviewer
-  // is read-only and writes a report whose `Fix:` lines are committable; tidy's
-  // Phase 2 picks that report up and applies its confirmed findings. Reversed,
-  // the report is produced with nothing downstream to apply it and pr-creator
-  // opens the PR carrying the review's own "Must fix before push" findings.
-  it("runs /pr-reviewer before /tidy, and both before /pr-creator", () => {
-    expect(stepAt("/pr-reviewer")).toBeGreaterThanOrEqual(0);
-    expect(stepAt("/pr-reviewer")).toBeLessThan(stepAt("/tidy"));
+  // The pipeline order is a correctness property, not a preference. /tidy
+  // reviews and fixes in one pass, so it must land its fixes before pr-creator
+  // opens the PR. The retired /pr-reviewer must not come back as a step.
+  it("runs /tidy before /pr-creator, and never the retired /pr-reviewer", () => {
+    expect(stepAt("/pr-reviewer")).toBe(-1);
+    expect(stepAt("/tidy")).toBeGreaterThanOrEqual(0);
     expect(stepAt("/tidy")).toBeLessThan(stepAt("/pr-creator"));
     expect(stepAt("/pr-creator")).toBeLessThan(stepAt("/pr-babysitter"));
   });
