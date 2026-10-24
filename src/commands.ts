@@ -19,7 +19,12 @@ import { boardRows, isShared, reviewName, workerName } from "./evidence";
 import type { Ports } from "./evidence";
 import { renderBoard, renderGain, renderTaskLine } from "./format";
 import { screenPlanApprovable } from "./gate";
-import { ensureWorktree, gitCommonDir, sharedBranchOf } from "./git";
+import {
+  ensureWorktree,
+  gitCommonDir,
+  sharedBranchOf,
+  worktreePathFor,
+} from "./git";
 import { openBlockers as issueBlockers, slugify } from "./issue";
 import { readMemoryExcerpt } from "./memory";
 import { isChange, listChanges, openspecHome, readChange } from "./openspec";
@@ -347,11 +352,17 @@ const checkoutFor = async (
       shared: { baseSha, branch, stateDir: sharedStateDir(task.id) },
     };
   }
+  // The folder carries the project name: two projects on one repo both have a
+  // `t-1`. A task started before that keeps the worktree it already has.
   const worktree = await ensureWorktree({
     env,
     issueId: task.id,
     repoRoot: project.repo,
     slug: slugify(task.title),
+    worktreePath:
+      task.worktree && task.worktree !== project.repo
+        ? task.worktree
+        : worktreePathFor(project.repo, `${project.name}-${task.id}`),
   });
   return { branch: worktree.branch, cwd: worktree.worktreePath };
 };

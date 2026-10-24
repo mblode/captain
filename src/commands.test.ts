@@ -274,7 +274,7 @@ describe("start", () => {
     const t = findTask(project(), "t-1");
     expect(t.state).toBe("active");
     expect(t.branch).toBe("t-1-rebuild-billing");
-    expect(t.worktree).toBe(join(world.repo, "..", "app-t-1"));
+    expect(t.worktree).toBe(join(world.repo, "..", "app-rebuild-t-1"));
     expect(
       readFileSync(join(t.worktree, ".captain", "rubric.md"), "utf-8")
     ).toContain("plans render");

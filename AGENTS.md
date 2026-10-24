@@ -100,7 +100,7 @@ Enter only when the highlighted option is "Yes, and bypass permissions"
 
 **Start.** Refuses a closed task, a task with a live worker, an open blocker, and a start past
 the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last two. Then:
-`ensureWorktree` (`<parent>/<repo>-<id>` on branch `<id>-<slug>`, or the shared checkout), `.captain/rubric.md`,
+`ensureWorktree` (`<parent>/<repo>-<project>-<id>` on branch `<id>-<slug>`, or the shared checkout; the project name keeps two projects' `t-1` apart, and a task keeps a worktree it already has), `.captain/rubric.md`,
 `.captain/brief.md`, `.captain/` appended to `.git/info/exclude`, and `cmux new-workspace` named
 after the branch running `harnessCommand`. An `escalate` task always runs on Claude in plan mode
 (`--permission-mode plan --allow-dangerously-skip-permissions`); everything else runs unattended

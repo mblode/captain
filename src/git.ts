@@ -47,6 +47,8 @@ interface EnsureWorktreeOptions {
   repoRoot: string;
   slug: string;
   skipFetch?: boolean;
+  // where the worktree goes, instead of `worktreePathFor(repoRoot, issueId)`
+  worktreePath?: string;
   // branch the new worktree off this ref (another worktree's branch, a tag, a
   // sha) instead of origin's default branch — lets a dependent ticket start
   // from its prerequisite's code before that lands on main
@@ -260,7 +262,8 @@ export const ensureWorktree = async (
   options: EnsureWorktreeOptions
 ): Promise<WorktreeResult> => {
   const branch = `${options.issueId}${options.slug ? `-${options.slug}` : ""}`;
-  const worktreePath = worktreePathFor(options.repoRoot, options.issueId);
+  const worktreePath =
+    options.worktreePath ?? worktreePathFor(options.repoRoot, options.issueId);
 
   // Re-running for an issue is a no-op: reuse the existing worktree as-is.
   const existing = reuseExistingWorktree(worktreePath, branch, options.env);
