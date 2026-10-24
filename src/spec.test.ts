@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runRequired } from "./shell";
-import { runSpec } from "./spec";
+import { runSpec, unstartedChanges } from "./spec";
 
 const writeChange = (root: string, id: string, title: string): void => {
   const dir = join(root, "openspec", "changes", id);
@@ -74,5 +74,56 @@ describe("captain spec change resolution", () => {
       "Work on OpenSpec change issue theirs: Team change."
     );
     expect(printed).toContain("`openspec/changes/theirs/` is the team's copy");
+  });
+});
+
+describe("unstartedChanges", () => {
+  const workspaces = [
+    {
+      cwd: "/repo",
+      description: "live",
+      id: "AAA",
+      name: "live",
+      ref: "workspace:1",
+    },
+    {
+      cwd: "/repo",
+      description: "dead",
+      id: "BBB",
+      name: "dead",
+      ref: "workspace:2",
+    },
+    {
+      cwd: "/other",
+      description: "elsewhere",
+      id: "CCC",
+      name: "x",
+      ref: "workspace:3",
+    },
+  ];
+
+  it("returns the changes whose workspace never gets an agent tag", async () => {
+    const port = {
+      listWorkspaces: () => workspaces,
+      runStates: () => ({ aaa: "idle" as const, ccc: "running" as const }),
+    };
+    expect(
+      await unstartedChanges(port, "/repo", ["live", "dead", "elsewhere"], 0)
+    ).toEqual(["dead", "elsewhere"]);
+  });
+
+  it("keeps polling until a slow agent registers", async () => {
+    let calls = 0;
+    const port = {
+      listWorkspaces: () => workspaces,
+      runStates: () => {
+        calls += 1;
+        return calls < 3 ? {} : { bbb: "running" as const };
+      },
+    };
+    expect(await unstartedChanges(port, "/repo", ["dead"], 1000, 1)).toEqual(
+      []
+    );
+    expect(calls).toBe(3);
   });
 });

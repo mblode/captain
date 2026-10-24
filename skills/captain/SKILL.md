@@ -158,6 +158,12 @@ Poll once a fleet is running. Never ask the human whether to poll.
   the rubric; `na` is not a pass.
 - **`run=unknown`:** no live `cmux top` tag. Read the screen. Empty shell → rerun
   `captain spec <id>` (with `--repo-path`/`--agent` as before). Never reconstruct from `prompt.txt`.
+- **`not started <id>`, or the launch command echoed above the first prompt with no
+  session:** shell init read stdin and ate the typed command (cmux types `--command`
+  before the shell is ready). Common cause: the repo pins a Node version that fnm/nvm
+  doesn't have, so its on-cd hook prompts "install? [y/N]" silently. Fix the shell
+  (install the version, or make the hook read `</dev/null`), close the dead workspace,
+  then rerun; rerunning first just hits the same prompt.
 - **Never close an apparent duplicate workspace** — likely a group anchor.
 - **Cap test workers.** Agents launch with `VITEST_MAX_THREADS/FORKS=2`. Briefs say
   `--maxWorkers=2`. Jest ignores env; uncapped repo config is still a hole.

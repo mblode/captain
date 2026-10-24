@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { realCmux } from "./captain/control";
+import type { CmuxPort } from "./captain/control";
 import { appendLog, now } from "./captain/log";
 import { changeStateDir } from "./captain/surface";
 import { cmuxReachable, openIssueWorkspace } from "./cmux";
@@ -37,6 +39,8 @@ export interface SpecOptions {
   root?: boolean;
   repoOverride?: string;
   stdout?: NodeJS.WritableStream;
+  // how long to wait for each launched agent to show up in `cmux top`
+  startTimeoutMs?: number;
 }
 
 // Shared-branch runs finish by pushing to the branch, so the PR steps of the
@@ -129,6 +133,39 @@ const liveChanges = (
   );
 };
 
+// cmux types --command into the new shell, so anything in shell init that
+// reads stdin (fnm or nvm offering to install the repo's Node version, a direnv
+// prompt) swallows the agent command and leaves a bare shell. Poll until each
+// change's workspace carries an agent tag; return the ones that never do.
+export const unstartedChanges = async (
+  port: Pick<CmuxPort, "listWorkspaces" | "runStates">,
+  repoRoot: string,
+  ids: string[],
+  timeoutMs: number,
+  intervalMs = 2000
+): Promise<string[]> => {
+  let pending = ids;
+  const deadline = Date.now() + timeoutMs;
+  while (pending.length > 0) {
+    const runs = port.runStates();
+    const workspaces = port.listWorkspaces();
+    pending = pending.filter(
+      (id) =>
+        !workspaces.some(
+          (w) =>
+            w.cwd === repoRoot &&
+            w.description === id &&
+            w.id.toLowerCase() in runs
+        )
+    );
+    if (pending.length === 0 || Date.now() >= deadline) {
+      break;
+    }
+    await sleep(intervalMs);
+  }
+  return pending;
+};
+
 interface Brief {
   agent: string;
   env: NodeJS.ProcessEnv;
@@ -174,6 +211,43 @@ const launchChange = async (brief: Brief): Promise<void> => {
     sessionId,
     worktreePath: repoRoot,
   });
+};
+
+interface LaunchReport {
+  branch: string;
+  json?: boolean;
+  skipped: string[];
+  started: { change: string; name: string; cwd: string }[];
+  stdout: NodeJS.WritableStream;
+  timeoutMs: number;
+  unstarted: string[];
+}
+
+const reportLaunch = (report: LaunchReport): number => {
+  const { branch, skipped, stdout, unstarted } = report;
+  const launched = report.started.filter(
+    (entry) => !unstarted.includes(entry.change)
+  );
+  const exitCode = unstarted.length > 0 ? EXIT.GENERIC : 0;
+  if (report.json) {
+    stdout.write(
+      `${JSON.stringify({ branch, skipped, started: launched, unstarted })}\n`
+    );
+    return exitCode;
+  }
+  for (const entry of launched) {
+    stdout.write(`started ${entry.change} on ${branch}\n`);
+  }
+  for (const id of unstarted) {
+    stdout.write(
+      `not started ${id}: no agent in its workspace after ${Math.round(report.timeoutMs / 1000)}s. If its screen shows the command above the first prompt, shell init read stdin and ate it (e.g. fnm or nvm asking to install the repo's Node version). Fix the shell, close that workspace, then rerun captain spec ${id}\n`
+    );
+  }
+  for (const id of skipped) {
+    stdout.write(`skipped ${id}: its agent is already running\n`);
+  }
+  stdout.write("follow along: captain status\n");
+  return exitCode;
 };
 
 // `captain spec <change…>`: one agent per OpenSpec change, all in this
@@ -274,16 +348,24 @@ export const runSpec = async (options: SpecOptions): Promise<number> => {
   if (options.print) {
     return 0;
   }
-  if (options.json) {
-    stdout.write(`${JSON.stringify({ branch, skipped, started })}\n`);
-    return 0;
-  }
-  for (const entry of started) {
-    stdout.write(`started ${entry.change} on ${branch}\n`);
-  }
-  for (const id of skipped) {
-    stdout.write(`skipped ${id}: its agent is already running\n`);
-  }
-  stdout.write("follow along: captain status\n");
-  return 0;
+  // Codex sessions carry no reliable `cmux top` tag, so only claude is checked.
+  const timeoutMs = options.startTimeoutMs ?? 60_000;
+  const unstarted =
+    agent === "claude" && started.length > 0
+      ? await unstartedChanges(
+          realCmux(env),
+          repoRoot,
+          started.map((entry) => entry.change),
+          timeoutMs
+        )
+      : [];
+  return reportLaunch({
+    branch,
+    json: options.json,
+    skipped,
+    started,
+    stdout,
+    timeoutMs,
+    unstarted,
+  });
 };
