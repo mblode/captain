@@ -9,6 +9,7 @@ import { parseVerdict, verdictCounts } from "./captain/verdict";
 import { CliError, EXIT } from "./errors";
 import { pendingGate, sameCwd, screenGate } from "./gate";
 import type { GithubPort } from "./github";
+import { slugify } from "./issue";
 import type { Project } from "./project";
 import {
   REVIEW_RELPATH,
@@ -49,10 +50,21 @@ export const pathsOf = (
     isShared(project, task) ? { stateDir: sharedStateDir(task.id) } : undefined
   );
 
-// The worker's cmux workspace name: the branch in a worktree, the task id in
-// the shared checkout (where every worker is on the same branch).
-export const workerName = (project: Project, task: Task): string =>
-  isShared(project, task) ? task.id : task.branch;
+// The worker's cmux workspace name, as v2 named it: the branch in a worktree.
+// In the shared checkout every worker is on one branch, so the name comes from
+// the task: `<ticket>-<title slug>`, the title slug alone for a chat message
+// (`t-<n>` says nothing), and the change id for an OpenSpec change (already a
+// slug).
+export const workerName = (project: Project, task: Task): string => {
+  if (!isShared(project, task)) {
+    return task.branch;
+  }
+  const slug = slugify(task.title);
+  if (!slug || task.source.startsWith("openspec:")) {
+    return task.id;
+  }
+  return /^t-\d+$/u.test(task.id) ? slug : `${task.id}-${slug}`;
+};
 
 // The worker's verdict counts only if it cites the rubric as it exists NOW, so
 // editing the criteria after the fact voids it.

@@ -38,9 +38,10 @@ import {
   status,
 } from "./commands";
 import type { Deps } from "./commands";
-import { parseReview, readVerdict } from "./evidence";
+import { parseReview, readVerdict, workerName } from "./evidence";
 import { findTask, listTasks, resolveProject } from "./project";
 import { renderRubric } from "./rubric";
+import { parseTask } from "./task";
 
 // The commands run for real against a temp project, a temp git repo with an
 // origin, a fake `cmux` binary (for new-workspace and ping) and an in-memory
@@ -680,5 +681,35 @@ describe("evidence readers", () => {
     });
     expect(parseReview('{"verdict":"maybe"}')).toBeUndefined();
     expect(parseReview("")).toBeUndefined();
+  });
+});
+
+const sharedProject = {
+  bootstrap: "",
+  checkout: "shared" as const,
+  dir: "/p",
+  name: "p",
+  repo: "/repo",
+  wip: 3,
+};
+const sharedTaskOf = (id: string, title: string, source = "") => ({
+  ...parseTask("", id),
+  source,
+  title,
+  worktree: "/repo",
+});
+
+describe("workerName", () => {
+  it("names a shared worker the way v2 did", () => {
+    const name = (id: string, title: string, source?: string) =>
+      workerName(sharedProject, sharedTaskOf(id, title, source));
+    expect(name("t-4", "Rebuild the billing page")).toBe(
+      "rebuild-the-billing-page"
+    );
+    expect(name("tig-430", "Fix login")).toBe("tig-430-fix-login");
+    expect(name("add-dark-mode", "Add dark mode", "openspec:x")).toBe(
+      "add-dark-mode"
+    );
+    expect(name("t-5", "")).toBe("t-5");
   });
 });

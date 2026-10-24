@@ -15,7 +15,7 @@ import {
   REVIEW_EFFORT,
 } from "./config";
 import { CliError, EXIT } from "./errors";
-import { boardRows, isShared, reviewName } from "./evidence";
+import { boardRows, isShared, reviewName, workerName } from "./evidence";
 import type { Ports } from "./evidence";
 import { renderBoard, renderGain, renderTaskLine } from "./format";
 import { screenPlanApprovable } from "./gate";
@@ -447,7 +447,11 @@ const launch = async (
   if (shared) {
     await writeFile(join(checkout.cwd, paths.session), sessionId ?? "");
   }
-  const name = shared ? task.id : checkout.branch;
+  const name = workerName(project, {
+    ...task,
+    branch: checkout.branch,
+    worktree: checkout.cwd,
+  });
   const command = harnessCommand({
     bin: loadHarnessDefaults(task.harness, env).bin,
     // The bootstrap prepares a fresh worktree; in the shared checkout it would
@@ -567,17 +571,18 @@ export const start = async (
       : boardRows(project, listTasks(project), deps.ports());
     started.push(await startOne(project, id, options, deps, rows));
   }
-  const nameOf = (t: Task): string => (isShared(project, t) ? t.id : t.branch);
   const unstartedNames =
     options.print || deps.startTimeoutMs === undefined
       ? []
       : await unstartedWorkers(
           deps.ports().cmux,
-          started.filter((t) => t.harness === "claude").map(nameOf),
+          started
+            .filter((t) => t.harness === "claude")
+            .map((t) => workerName(project, t)),
           deps.startTimeoutMs
         );
   const unstarted = started
-    .filter((t) => unstartedNames.includes(nameOf(t)))
+    .filter((t) => unstartedNames.includes(workerName(project, t)))
     .map((t) => t.id);
   if (options.json) {
     json(deps, { started, unstarted });
