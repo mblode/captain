@@ -272,9 +272,9 @@ export const renderRubric = (
     "",
     `1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file, \`${paths.plan}\` if it exists, and ${diff} (plus read access to the checkout). Do not share your own reasoning or summary of the work.`,
     "2. The verifier grades every acceptance criterion above, in order, and must cite concrete evidence per criterion (file and line, or command output).",
-    "3. Prefer a mechanical referee to your own reading. Where a criterion names a command, run the repo's own command — not a hand-picked subset of test files — and quote it with its exit code or summary line. CI status (`gh pr checks`) beats anything run locally; cite it once the PR is open.",
+    "3. Prefer mechanical evidence to your own reading. Where a criterion names a command, cite its command, exit code, revision and relevant environment. Reuse an accessible result only after confirming its inputs match; otherwise run the required command when the user's and repository's check policy allows it. Do not substitute a narrower check for an explicit criterion. CI status (`gh pr checks`) must cover the current head; cite it once the PR is open.",
     "4. If a criterion genuinely cannot apply to this diff, mark it `na` with the reason as its evidence. Do NOT reword the criterion to something you can pass, and do not pass it on an exemption argument — `na` is the honest answer and captain surfaces it as one.",
-    "5. If any criterion fails, fix the code, then re-run the verifier in another fresh context. Iterate until it passes.",
+    "5. If a criterion fails because of an in-scope defect, fix it, then have a fresh verifier grade every criterion at the new revision, reusing valid evidence for unchanged inputs. An external blocker or scope conflict remains a failure: record it and surface it instead of repeating the same run or widening the task.",
     "6. You may not write a pass verdict without a verifier run backing it.",
     "",
   ].join("\n");

@@ -18,7 +18,7 @@ pnpm test                        # vitest run
 pnpm test -- src/board.test.ts --reporter=dot   # one file, quiet
 pnpm typecheck                   # tsc --noEmit
 pnpm lint                        # oxlint .
-pnpm check                       # ultracite check (lint + format); read-only, unlike `format:check` (`oxfmt .` writes)
+pnpm check                       # ultracite check (lint + format); read-only, as is `format:check` (`oxfmt --check .`)
 pnpm fix                         # ultracite fix (format + lint autofix)
 pnpm link --global               # install `captain` globally from this checkout
 ```

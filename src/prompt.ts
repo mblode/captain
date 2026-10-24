@@ -75,12 +75,15 @@ const sharedSection = (
     "",
     "- Never create, switch, or reset branches. Never run `git stash`, `git reset`,",
     "  `git checkout -- .`, `git clean`, or `git add -A`/`git add .`: they touch other workers' files.",
-    "- Touch only the files your task needs. A failing test or lint error in a file you did",
-    "  not touch belongs to another worker in flight: leave it, and say so in your verdict evidence.",
+    "- Touch only the files your task needs. A failing check in an untouched file is not",
+    "  proof of another worker's mistake. Compare with clean HEAD when check policy allows,",
+    "  report the evidence, and leave other workers' changes alone.",
     `- Commit only your own paths: \`git add <new files>\` then \`git commit -m "[${id}] <summary>" -- <paths>\`.`,
     `  Every commit message starts with \`[${id}]\`; the verifier finds your work by that tag.`,
-    `- Push after each commit: \`git push origin ${shared.branch}\`. If the push is rejected, run`,
-    `  \`git pull --rebase --autostash origin ${shared.branch}\` and push again. If git reports an`,
+    `- Push after each commit when authorized: \`git push origin ${shared.branch}\`. If rejected,`,
+    "  fetch and inspect the remote changes. Coordinate with other workers before one merge",
+    `  of \`origin/${shared.branch}\` into a clean checkout; never rebase, autostash or force-push.`,
+    "  If the checkout is dirty or the merge conflicts, surface the blocker. If git reports an",
     "  `index.lock`, wait a few seconds and retry: another worker is committing.",
     `- Never stage or commit an \`openspec/\` path${home ? ` or anything under \`${home}\`` : ""}, or anything under \`.captain/\`.`,
     ...changeLines,
@@ -212,6 +215,17 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
       ...skillSteps,
       `${skills.length + 3}. Finish with the finishing protocol below (verifier + verdict).`,
       "",
+      "Before implementation, resolve the applicable skills from the installed skill catalog.",
+      "If a required skill is missing, surface that blocker instead of inventing its instructions.",
+      "For browser QA, check the dev port with `lsof -i :<port>`, load the target route, and",
+      "confirm authentication before changing code. Request any needed sign-in code up front.",
+      "",
+      "Load only the references needed for the current step. Give subagents a bounded",
+      "question, relevant paths and a done condition, not the whole conversation.",
+      "Keep command logs in files and report relevant excerpts with exit codes.",
+      "Reuse evidence for unchanged inputs; follow the user's and repository's policy",
+      "on when tests may run. Required CI and current-revision gates still apply.",
+      "",
       "You share this machine with the rest of the fleet. Bound the parallelism of every",
       "heavy command you run: pass `--maxWorkers=2` (or the repo's equivalent) to jest/vitest",
       "suites, and never launch more than one full test suite or typecheck at a time —",
@@ -238,9 +252,13 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     out +=
       `Before declaring the ticket done, follow ${extras.rubricPath}'s "How to verify" section: spawn a ` +
       "fresh-context verifier sub-agent to grade the diff against the acceptance criteria, " +
-      "fix and re-verify until it passes, then write the verdict file exactly as the " +
+      "fix defects within scope and re-verify changed evidence, then write the verdict file exactly as the " +
       'rubric\'s "Verdict" section specifies. Captain will not mark this ' +
       `${extras.shared ? "task" : "worktree PR-"}ready without a passing verdict.\n`;
+    out +=
+      "If a criterion is blocked by external state or conflicts with the task's scope, " +
+      "record the failing evidence and surface the blocker. Do not repeat an unchanged " +
+      "verifier run or widen the task to manufacture a pass.\n";
     out +=
       extras.shared && extras.id
         ? `${productionSteps(extras.shared, extras.id, extras.openspecHome)}\n`
