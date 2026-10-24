@@ -77,14 +77,17 @@ describe("prompt extras", () => {
     expect(out).not.toContain("<finishing-protocol>");
   });
 
-  // The plan gate is the human's one cheap chance to redirect a run, so both
-  // agent variants must ask for the unknowns rather than just "a plan".
+  // Gated or not, the plan must name the unknowns rather than just "a plan".
+  // Gated, a human resolves them before work starts; ungated, nobody reads the
+  // plan first, so each unknown records the choice made.
   it("asks the plan to lead with a named Decisions for the reviewer section", () => {
-    for (const agent of ["claude", "codex"]) {
-      const out = renderPromptExtras({ agent, workflow: true });
+    for (const gated of [true, false]) {
+      const out = renderPromptExtras({ gated, workflow: true });
       expect(out).toContain("## Decisions for the reviewer");
       expect(out).toContain("at most five bullets");
-      expect(out).toContain("assumptions you had to make");
+      expect(out).toContain(
+        gated ? "assumptions you had to make" : "the option you chose, and why"
+      );
       expect(out).toContain("Never resolve an ambiguity silently.");
       // the playbook's plan contract: what changes, in what order, proven how
       expect(out).toContain("name the files you will change");
@@ -116,7 +119,7 @@ describe("prompt extras", () => {
       skills: ["/tidy", "/pr-creator"],
       workflow: true,
     });
-    expect(out).toContain("2. Once the plan is approved,");
+    expect(out).toContain("2. Before you touch code,");
     expect(out).toContain("3. Run /tidy.");
     expect(out).toContain("4. Run /pr-creator.");
     expect(out).toContain(
@@ -160,15 +163,24 @@ describe("prompt extras", () => {
     expect(out).toContain("3. Run /tidy.");
   });
 
-  it("keeps the plan-gate steps for claude (and by default)", () => {
+  // Claude runs unattended by default, so its brief must not wait for an
+  // approval either; only a gated run gets the plan-mode steps.
+  it("keeps the plan-gate steps only for a gated run", () => {
     for (const agent of ["claude", undefined]) {
       const out = renderPromptExtras({ agent, workflow: true });
-      expect(out).toContain(
-        "1. Plan first (you are launched in plan mode) and present the plan for approval."
-      );
-      expect(out).toContain("2. Once the plan is approved,");
-      expect(out).toContain("then implement it.");
+      expect(out).not.toContain("you are launched in plan mode");
+      expect(out).toContain("no plan-approval gate");
     }
+    const gated = renderPromptExtras({
+      agent: "claude",
+      gated: true,
+      workflow: true,
+    });
+    expect(gated).toContain(
+      "1. Plan first (you are launched in plan mode) and present the plan for approval."
+    );
+    expect(gated).toContain("2. Once the plan is approved,");
+    expect(gated).toContain("then implement it.");
   });
 
   it("renders the finishing protocol around the rubric path", () => {

@@ -44,19 +44,23 @@ Every launch pins the agent's **model + effort** so it never inherits the driver
 fallback) — pass `--model`/`--effort` from `loadModel`/`loadEffort` (`config.ts`: `CAPTAIN_MODEL`/
 `CAPTAIN_EFFORT` env > config `.model`/`.effort` > `DEFAULT_MODEL` `default` / `DEFAULT_EFFORT`
 `high`, fail-safe like the rest). `default` resolves to the machine's configured default model.
+`start` and `spec` take `--model`/`--effort` per run, which `cli.ts` sets as those same env vars,
+so the driver can pick a cheap tier for a routine change and a frontier one for a hard change.
 `cmux.ts` shell-quotes the model because a full id can carry glob metacharacters (the `[1m]` in
 `claude-opus-4-8[1m]`); the inline path passes it as a discrete argv element, so no quoting.
 
 The launched **agent** is selectable: `--agent <claude|codex>` (flag) > `CAPTAIN_AGENT` env /
 `.agent` config > `DEFAULT_AGENT` `claude` (`loadAgent`/`resolveAgent`, fail-safe — any unknown
-value degrades to `claude`). `claude` (the default) is the only agent wired into the plan-gate
-flow: it launches in plan mode (`--permission-mode plan`) and its `ExitPlanMode` feed item is what
-`approve`/`reject` gate on. `codex` is **best-effort**: it has no plan mode, so it launches with
+value degrades to `claude`). `claude` runs **unattended by default**
+(`--dangerously-skip-permissions`): the plan still lands in `plan.md` and is graded, but nobody
+approves it first. `--gate` (`CAPTAIN_PLAN_GATE=1`, read by `planGated` in `config.ts`) starts a
+claude run in plan mode (`--permission-mode plan --allow-dangerously-skip-permissions`) for a risky
+change, and its `ExitPlanMode` feed item is what `approve`/`reject` gate on. `codex` is **best-effort**: it has no plan mode, so it launches with
 full autonomy (`--dangerously-bypass-approvals-and-sandbox`, the analog of claude's skip-perms) and
-drives straight from the brief — no plan gate, no `approve` step. The brief's plan step is
-agent-aware (`renderPromptExtras` takes `agent`): claude is told to present the plan for approval;
-codex is told to plan then proceed, because telling it to wait for an approval that can never
-arrive would stall every codex run at step 1. The command builders branch by
+drives straight from the brief — no plan gate, no `approve` step. The brief's plan step follows
+the gate (`renderPromptExtras` takes `gated`): a gated run is told to present the plan for
+approval; every other run is told to plan, record the choice it made for each unknown, then
+proceed, because telling it to wait for an approval that can never arrive would stall it at step 1. The command builders branch by
 agent (`agentCommand` → `claudeCommand`/`codexCommand` in `cmux.ts`; `launchPlanMode` in
 `launch.ts`), and the launch-time binary probe checks the selected agent's binary. Codex maps
 effort to `-c model_reasoning_effort=<effort>` and omits `-m` on the `default` model sentinel (that
@@ -357,9 +361,10 @@ The rationale behind each short rule in `AGENTS.md` § Gotchas, kept verbatim.
   what actually launched — with nothing blocked, both are byte-identical to before. A single
   blocked issue now *errors* instead of launching; `--print` and `--force` are unaffected on
   every mode.
-- **codex is best-effort, claude is the gated default**: only `claude` produces the `ExitPlanMode`
-  gate that `approve`/`reject` act on; `codex` launches with full autonomy and no plan gate. Don't
-  wire `approve`/`reject` to codex or assume a codex workspace pauses for a plan.
+- **Only a gated claude run pauses for a plan**: claude runs unattended unless launched with
+  `--gate`, and only a gated claude run produces the `ExitPlanMode` gate that `approve`/`reject`
+  act on; `codex` has no plan mode and is never gated. Don't wire `approve`/`reject` to codex or
+  assume an ungated workspace pauses for a plan.
 - **Claude session `--name` is the ticket slug; messaging is not a control plane.**
   Audited Aug 2026 — see `research/cross-session-messaging-audit.md`. Captain pins
   `claude --name <ticket>` on both launch paths so multi-session Claude UX matches the
@@ -455,7 +460,8 @@ OpenSpec homes, default `~/.claude/captain/openspec`) ·
 pipeline steps, `$defaults` to keep the built-in ones; overrides the config file — prose steps
 with commas belong in the config file instead) · `CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) ·
 `CAPTAIN_MODEL` (agent `--model`, default `default`) · `CAPTAIN_EFFORT` (agent `--effort`, default
-`high`) · `CAPTAIN_AGENT` (which agent to launch, `claude` | `codex`, default `claude`) ·
+`high`) · `CAPTAIN_PLAN_GATE=1` (start claude in plan mode; set by `--gate`) ·
+`CAPTAIN_AGENT` (which agent to launch, `claude` | `codex`, default `claude`) ·
 `CAPTAIN_CONFIG` (config.json path override) · `XDG_CONFIG_HOME` (config dir) ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 

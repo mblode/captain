@@ -12,7 +12,7 @@ describe("claudeCommand", () => {
   it("renders the pinned model/effort launch with no env prefix by default", () => {
     const command = claudeCommand("/tmp/p/prompt.txt", "default", "high");
     expect(command).toBe(
-      `claude --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
+      `claude --model 'default' --effort 'high' --dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
     );
   });
 
@@ -25,7 +25,22 @@ describe("claudeCommand", () => {
       "tst-1"
     );
     expect(command).toBe(
-      `claude --name 'tst-1' --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
+      `claude --name 'tst-1' --model 'default' --effort 'high' --dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
+    );
+  });
+
+  it("starts a gated run in plan mode with bypassPermissions reachable", () => {
+    const command = claudeCommand(
+      "/tmp/p/prompt.txt",
+      "default",
+      "high",
+      {},
+      undefined,
+      undefined,
+      true
+    );
+    expect(command).toBe(
+      `claude --model 'default' --effort 'high' --permission-mode plan --allow-dangerously-skip-permissions "$(cat '/tmp/p/prompt.txt')"`
     );
   });
 

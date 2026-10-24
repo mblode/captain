@@ -86,6 +86,21 @@ CAPTAIN_SKILLS=/tidy,/pr-creator; pick the agent with --agent / CAPTAIN_AGENT.
 Plain output when piped; NO_COLOR=1 disables colour on a TTY too.`
   );
 
+// Per-run launch overrides, carried in the env the config loaders already read
+// (CAPTAIN_MODEL, CAPTAIN_EFFORT, CAPTAIN_PLAN_GATE), so every launch path picks
+// them up without threading new options through.
+interface LaunchFlags {
+  model?: string;
+  effort?: string;
+  gate?: boolean;
+}
+const launchEnv = (flags: LaunchFlags): NodeJS.ProcessEnv => ({
+  ...process.env,
+  ...(flags.model ? { CAPTAIN_MODEL: flags.model } : {}),
+  ...(flags.effort ? { CAPTAIN_EFFORT: flags.effort } : {}),
+  ...(flags.gate ? { CAPTAIN_PLAN_GATE: "1" } : {}),
+});
+
 // Start agents on work. A Linear issue id/URL fans out worktrees (one per
 // issue); anything else is a free-form task run in the current checkout. Both
 // hand the agent the same self-drive brief.
@@ -123,6 +138,15 @@ program
     "--agent <name>",
     "which agent to launch: claude (default) or codex (best-effort: no plan gate)"
   )
+  .option("--model <id>", "claude/codex model for this run (default: config)")
+  .option(
+    "--effort <level>",
+    "effort for this run: low, medium, high, xhigh, max (default: config)"
+  )
+  .option(
+    "--gate",
+    "claude only: start in plan mode and wait for `captain approve` (default: run unattended)"
+  )
   .option(
     "--force",
     "launch issues whose blockers are still open (default: fan-out skips them, a single issue errors)"
@@ -139,11 +163,12 @@ program
         base?: string;
         agent?: string;
         force?: boolean;
-      }
+      } & LaunchFlags
     ) => {
       process.exitCode = await runStart({
         agent: options.agent,
         base: options.base,
+        env: launchEnv(options),
         force: Boolean(options.force),
         json: Boolean(options.json),
         name: options.name,
@@ -171,6 +196,15 @@ program
   .option("--json", "emit JSON: { branch, started: [...], skipped: [...] }")
   .option("--repo-path <path>", "the git repo to run in (default: cwd)")
   .option("--agent <name>", "claude (default) or codex (no plan gate)")
+  .option("--model <id>", "claude/codex model for this run (default: config)")
+  .option(
+    "--effort <level>",
+    "effort for this run: low, medium, high, xhigh, max (default: config)"
+  )
+  .option(
+    "--gate",
+    "claude only: start in plan mode and wait for `captain approve` (default: run unattended)"
+  )
   .action(
     async (
       ids: string[],
@@ -181,11 +215,12 @@ program
         repoPath?: string;
         agent?: string;
         root?: boolean;
-      }
+      } & LaunchFlags
     ) => {
       process.exitCode = await runSpec({
         agent: options.agent,
         all: Boolean(options.all),
+        env: launchEnv(options),
         ids,
         json: Boolean(options.json),
         print: Boolean(options.print),

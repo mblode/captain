@@ -1,4 +1,10 @@
-import { DEFAULT_MODEL, loadAgentEnv, loadEffort, loadModel } from "./config";
+import {
+  DEFAULT_MODEL,
+  loadAgentEnv,
+  loadEffort,
+  loadModel,
+  planGated,
+} from "./config";
 import { commandExists, run, runRequired, shellQuote } from "./shell";
 import { isIssueToken } from "./source";
 
@@ -84,18 +90,24 @@ const envPrefix = (agentEnv: Record<string, string>): string => {
 // `name` pins Claude Code's session name (`claude --name`) to the ticket slug
 // so multi-session Claude UX matches the fleet — distinct from cmux's own
 // `--name` on new-workspace. Omitted when unset (tests / callers without a
-// slug); production always passes the branch.
+// slug); production always passes the branch. `gated` starts it in plan mode
+// (--allow-dangerously-skip-permissions keeps bypassPermissions reachable for
+// `captain approve`); otherwise it runs unattended from the first turn.
 export const claudeCommand = (
   promptPath: string,
   model: string,
   effort: string,
   agentEnv: Record<string, string> = {},
   name?: string,
-  sessionId?: string
+  sessionId?: string,
+  gated = false
 ): string => {
   const nameFlag = name ? `--name ${shellQuote(name)} ` : "";
   const sessionFlag = sessionId ? `--session-id ${shellQuote(sessionId)} ` : "";
-  return `${envPrefix(agentEnv)}claude ${nameFlag}${sessionFlag}--model ${shellQuote(model)} --effort ${shellQuote(effort)} --permission-mode plan --allow-dangerously-skip-permissions "$(cat ${shellQuote(promptPath)})"`;
+  const mode = gated
+    ? "--permission-mode plan --allow-dangerously-skip-permissions"
+    : "--dangerously-skip-permissions";
+  return `${envPrefix(agentEnv)}claude ${nameFlag}${sessionFlag}--model ${shellQuote(model)} --effort ${shellQuote(effort)} ${mode} "$(cat ${shellQuote(promptPath)})"`;
 };
 
 // The codex counterpart of claudeCommand — best-effort: codex has no plan mode,
@@ -115,7 +127,7 @@ export const codexCommand = (
 };
 
 // Build the launch command for the selected agent. `claude` (the default) is the
-// only one wired into the plan-gate flow; `codex` is best-effort. `name` is the
+// only one that can be gated; `codex` is best-effort. `name` is the
 // ticket/branch slug pinned as Claude's session name (claude only — codex has
 // no `--name` equivalent here).
 export const agentCommand = (
@@ -125,11 +137,20 @@ export const agentCommand = (
   effort: string,
   agentEnv: Record<string, string> = {},
   name?: string,
-  sessionId?: string
+  sessionId?: string,
+  gated = false
 ): string =>
   agent === "codex"
     ? codexCommand(promptPath, model, effort, agentEnv)
-    : claudeCommand(promptPath, model, effort, agentEnv, name, sessionId);
+    : claudeCommand(
+        promptPath,
+        model,
+        effort,
+        agentEnv,
+        name,
+        sessionId,
+        gated
+      );
 
 // The id of the sidebar group holding `workspaceId`, from
 // `workspace-group list --json --id-format both`. Garbage reads as "no group"
@@ -228,7 +249,8 @@ export const openIssueWorkspace = (options: OpenWorkspaceOptions): void => {
         loadEffort(options.env),
         loadAgentEnv(options.env),
         options.branch,
-        options.sessionId
+        options.sessionId,
+        planGated(options.agent, options.env)
       ),
       "--focus",
       options.focus ? "true" : "false",

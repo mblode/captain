@@ -12,7 +12,13 @@ import {
   isFanOutInput,
   openIssueWorkspace,
 } from "./cmux";
-import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
+import {
+  loadAgent,
+  loadDataScope,
+  loadSkills,
+  normalizeAgent,
+  planGated,
+} from "./config";
 import { CliError, EXIT } from "./errors";
 import {
   ensureWorktree,
@@ -443,6 +449,7 @@ const withLoopExtras = async (
     renderPromptExtras({
       agent,
       dataScope,
+      gated: planGated(agent, env),
       memory: readMemoryExcerpt(repoRoot, env),
       memoryPath,
       rubricPath: RUBRIC_RELPATH,

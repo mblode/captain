@@ -36,10 +36,13 @@ interface PromptExtras {
   memoryPath?: string;
   // the data-scope guardrail (empty/undefined → section omitted)
   dataScope?: string;
-  // which agent the brief launches on. claude (default) is gated: it starts in
-  // plan mode and waits for plan approval. codex has no plan mode/gate, so its
-  // plan step must NOT tell it to wait for an approval that can never arrive.
+  // which agent the brief launches on: claude (default) or codex. Only claude
+  // has AskUserQuestion, so it picks how a blocked agent asks for help.
   agent?: string;
+  // the run starts in plan mode and waits for `captain approve` (claude with
+  // `--gate` only). An ungated brief must NOT tell the agent to wait for an
+  // approval that can never arrive.
+  gated?: boolean;
   // an OpenSpec change run in the shared checkout: per-change plan path, and
   // commit-and-push to the branch instead of a PR
   shared?: SharedBranch;
@@ -148,20 +151,29 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
     const skillSteps = skills.map((skill, i) =>
       skill.startsWith("/") ? `${i + 3}. Run ${skill}.` : `${i + 3}. ${skill}`
     );
-    // The plan is the human's one cheap chance to redirect the run, so both
-    // variants ask for the unknowns first: an ambiguity resolved at the gate
+    // Both variants put the unknowns first. Behind the gate the plan is the
+    // human's one cheap chance to redirect the run: an ambiguity resolved there
     // costs a sentence, the same ambiguity guessed wrong costs the whole run.
-    const planLead =
-      "Open it with a heading `## Decisions for the reviewer` and at most five bullets " +
-      "covering what you are least sure of: any ambiguity in the ticket, the " +
-      "assumptions you had to make, and the decisions a reviewer is most likely to " +
-      "want changed. Mechanical work goes last. Never resolve an ambiguity silently. " +
-      "Then name the files you will change, the order you will do the work in, and the " +
-      "tests that will prove it.";
+    // Ungated, nobody reads the plan before the work starts, so each unknown
+    // records the choice made: the reviewer can still see and reverse it, and
+    // the agent keeps moving instead of stalling on a decision it can defend.
+    const planTail =
+      "Mechanical work goes last. Then name the files you will change, the order you " +
+      "will do the work in, and the tests that will prove it.";
+    const planLead = extras.gated
+      ? "Open it with a heading `## Decisions for the reviewer` and at most five bullets " +
+        "covering what you are least sure of: any ambiguity in the ticket, the " +
+        "assumptions you had to make, and the decisions a reviewer is most likely to " +
+        `want changed. Never resolve an ambiguity silently. ${planTail}`
+      : "Open it with a heading `## Decisions for the reviewer` and at most five bullets, " +
+        "one per thing you are least sure of: the ambiguity or assumption, the option you " +
+        "chose, and why. Choose the option the ticket and the codebase support best; only " +
+        "ask a human when no option is defensible. Never resolve an ambiguity silently. " +
+        `${planTail} Keep it short: nobody approves it before you start.`;
     // The plan stops being a throwaway here: it lands in the worktree next to the
     // rubric and the verdict, and one acceptance criterion grades the diff against
-    // it. Both agents write it — the only difference is when they may (claude is in
-    // plan mode until the gate clears, where it cannot write files at all).
+    // it. Every run writes it — the only difference is when it may (a gated run is
+    // in plan mode until the gate clears, where it cannot write files at all).
     //
     // Deviations are APPENDED, never merged into the plan. `.captain/` is in the
     // repo's exclude file, so this artifact is in no commit and has no history: a
@@ -188,16 +200,15 @@ export const renderPromptExtras = (extras: PromptExtras): string => {
             "AskUserQuestion tool and wait for the answer — never guess, and never just print the",
             "question to stdout and continue past it. Otherwise keep moving to the next step on your own.",
           ];
-    const planSteps =
-      extras.agent === "codex"
-        ? [
-            `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
-            `2. Before you touch code, ${planStep} (This session has no plan-approval gate — do not stop to wait for one.)`,
-          ]
-        : [
-            `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
-            `2. Once the plan is approved, ${planStep}`,
-          ];
+    const planSteps = extras.gated
+      ? [
+          `1. Plan first (you are launched in plan mode) and present the plan for approval. ${planLead}`,
+          `2. Once the plan is approved, ${planStep}`,
+        ]
+      : [
+          `1. Plan first: write out a short plan of your approach before touching code. ${planLead}`,
+          `2. Before you touch code, ${planStep} (This session has no plan-approval gate — do not stop to wait for one.)`,
+        ];
     out += "\n<workflow>\n";
     out += [
       "You own this ticket end to end: drive every step yourself, in order. The only",

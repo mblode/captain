@@ -32,8 +32,10 @@ Captain keeps **no state**. `status` derives from cmux + `.captain/changes/<id>/
 ## Mental model
 
 - You are the driver. Workers self-drive. Do not send routine "continue" prompts.
-- Claude workers have a real plan gate (`--permission-mode plan`). Codex has none —
-  `approve`/`reject` do nothing there; the brief says plan then proceed.
+- Workers run unattended (`--dangerously-skip-permissions`). Each still writes its plan to
+  `.captain/changes/<id>/plan.md`, leading with `## Decisions for the reviewer` (each unknown
+  and the choice it made), and the verifier grades the diff against it. Only a claude run
+  launched with `--gate` stops in plan mode for `approve`/`reject`; codex is never gated.
 - Definition of done is `.captain/changes/<id>/rubric.md`, built from the change's
   open `tasks.md` boxes. A passing `verdict.json` is READY (the commits are already on
   the branch), not done. Done means verified in production: after the human merges, the
@@ -104,12 +106,29 @@ CLI. `captain install` flags a missing CLI.
   live agent; already-running ones are skipped, so it is safe to rerun. A team change in
   the repo's `openspec/` launches only by explicit id.
 - `--repo-path <abs>` from a driver session whose cwd is not the repo. `--agent codex`
-  is ungated. `--print` writes the brief without launching.
+  runs codex. `--model`, `--effort` and `--gate` per [Choosing model, effort and
+  gate](#choosing-model-effort-and-gate). `--print` writes the brief without launching.
 - Agents tick their boxes in the home's `tasks.md` as they go, and the worker runs
   `openspec archive <id> --yes` in the home itself once its smoke test passes. Nothing is
   committed. Archive validates the change, merges its spec deltas into the home's
   `openspec/specs/`, and moves the folder to `openspec/changes/archive/`. Do not move it by
   hand: that skips the spec merge.
+
+## Choosing model, effort and gate
+
+Pick per change when you launch, and launch changes that need different settings in
+separate `captain spec` calls. Without flags a run gets the config default (`default`
+model, `high` effort).
+
+| Change | Flags |
+| --- | --- |
+| Mechanical: rename, copy, config, docs, a test for existing behaviour | `--model sonnet --effort medium` |
+| Routine feature or bug fix in one area | none (config default) |
+| Cross-cutting, ambiguous, or a hard bug with no clear cause | `--model opus --effort xhigh` |
+| Auth, billing, data migrations, deletes, public contracts, build or release config | add `--gate` (claude only) |
+
+Don't put a frontier model on a routine change to be safe; the default tier handles it.
+Name the model, effort and gate for each change in one line when you report the launch.
 
 ## The loop
 
@@ -120,7 +139,7 @@ Poll once a fleet is running. Never ask the human whether to poll.
 | "add this to the list" / "write a change for …" | [Writing a change](#writing-a-change-add-this-to-the-list). Do not launch |
 | "start everything" / "fan out the changes" / "start <id>" | `captain spec --all` or `captain spec <id…>` (`--repo-path` if not in the repo). Honor skip lists by naming the ids |
 | "status" / "what's blocked" / "what's ready" | Known run: `captain status <id…> --json`. Polling: add `--summary` (returns `counts`, `needsYou`, `ready`). Unfiltered `captain status` only when the request is fleet-wide. Copy `nextCommand` / `handle` from the row |
-| "show me the plans" / "check and approve plans" | `captain status --needs --json` (or summary `needsYou` with `gate.kind=plan`). One read-only reviewer, at most 8 plans, 6k chars each, 24k total. Card quotes `## Decisions for the reviewer` verbatim, then `{change, scopeDrift, risk, recommendation}`. Then **one** AskUserQuestion. Approve is `captain approve <handle> --note "<card, one line>"`. Reject is `captain reject <handle> --note "…"`. Never `cmux send-key` to accept a plan |
+| "show me the plans" / "check and approve plans" | Only `--gate` runs have a plan to approve; for the rest, read `.captain/changes/<id>/plan.md` and spot-read the `[<id>]` commits. `captain status --needs --json` (or summary `needsYou` with `gate.kind=plan`). One read-only reviewer, at most 8 plans, 6k chars each, 24k total. Card quotes `## Decisions for the reviewer` verbatim, then `{change, scopeDrift, risk, recommendation}`. Then **one** AskUserQuestion. Approve is `captain approve <handle> --note "<card, one line>"`. Reject is `captain reject <handle> --note "…"`. Never `cmux send-key` to accept a plan |
 | "approve all plans" | Same as above, one `approve --note` per gate. Bare `captain approve all` only on an explicit blanket instruction — it records no reasoning |
 | "send dark-mode back: don't touch auth" | `captain reject add-dark-mode --note "…"` |
 | "what's verified" / "what's been done" | READY (verified, awaiting your merge), SHIPPING (merged, smoke test running) and DONE (verified in production, archived) in `status`; `git log --grep='\[<id>\]'` for the commits; history in `captain gain --json` `roster`. Then `/eli5` if asked. Do not reconstruct from scrollback |
@@ -129,7 +148,7 @@ Poll once a fleet is running. Never ask the human whether to poll.
 | "start the loop" | Arm [heartbeat.md](references/heartbeat.md). Never hand polling back to the human |
 | "distill the learnings" | Only if they asked. Edit `~/.claude/captain/memory/<repo>/learnings.md` |
 
-**Codex:** do not call `approve`/`reject`. Track as IN FLIGHT until a verdict or a question.
+**Ungated runs (the default, and every codex run):** do not call `approve`/`reject`. Track as IN FLIGHT until a verdict or a question.
 
 ## Gotchas
 
@@ -150,8 +169,9 @@ Poll once a fleet is running. Never ask the human whether to poll.
   follow with `cmux send-key enter` and re-read.
 - **Never approve without a card.** `--note` is the only reasoning `gain` can see.
 - **Never guess off-script questions.** `cmux send` the answer, or `reject` if it is a plan.
-- **Pushes go straight to the branch.** There is no per-change PR; review the plan
-  carefully and spot-read the `[<id>]` commits. Rewinding is `git revert`, never a force-push.
+- **Pushes go straight to the branch, and most runs have no plan gate.** There is no
+  per-change PR; read each `plan.md` and spot-read the `[<id>]` commits, and use `--gate`
+  for anything you would not let land unreviewed. Rewinding is `git revert`, never a force-push.
 - **A smoke failure is yours.** NEEDS YOU with `smoke: "fail"` means production disagrees:
   read `.captain/changes/<id>/smoke.json` evidence. The worker does not revert or archive.
 - **Never trust a one-line verdict.** Spot-read `verdict.json` criteria; `name` must match

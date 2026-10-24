@@ -8,7 +8,13 @@ import type { CmuxPort } from "./captain/control";
 import { appendLog, now } from "./captain/log";
 import { changeStateDir } from "./captain/surface";
 import { cmuxReachable, openIssueWorkspace } from "./cmux";
-import { loadAgent, loadDataScope, loadSkills, normalizeAgent } from "./config";
+import {
+  loadAgent,
+  loadDataScope,
+  loadSkills,
+  normalizeAgent,
+  planGated,
+} from "./config";
 import { CliError, EXIT } from "./errors";
 import { mainRepoRoot, repoLabel } from "./git";
 import { ensureMemoryFile, readMemoryExcerpt } from "./memory";
@@ -306,6 +312,7 @@ export const runSpec = async (options: SpecOptions): Promise<number> => {
       renderPromptExtras({
         agent,
         dataScope,
+        gated: planGated(agent, env),
         memory,
         memoryPath,
         openspec: { external: root === home, home: root },

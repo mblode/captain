@@ -255,3 +255,13 @@ export const loadAgent = (env: NodeJS.ProcessEnv = process.env): string =>
   normalizeAgent(
     loadStringSetting(env, "CAPTAIN_AGENT", "agent", DEFAULT_AGENT)
   );
+
+// Whether an agent starts behind the plan gate (`--permission-mode plan`, which
+// `captain approve` releases). Off by default: claude launches with
+// --dangerously-skip-permissions and drives its whole brief unattended. Opt in
+// per run with `--gate` (env CAPTAIN_PLAN_GATE=1) for a risky change. Codex has
+// no plan mode, so it is never gated.
+export const planGated = (
+  agent: string,
+  env: NodeJS.ProcessEnv = process.env
+): boolean => agent === DEFAULT_AGENT && env.CAPTAIN_PLAN_GATE === "1";

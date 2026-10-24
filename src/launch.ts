@@ -1,4 +1,10 @@
-import { DEFAULT_MODEL, loadAgentEnv, loadEffort, loadModel } from "./config";
+import {
+  DEFAULT_MODEL,
+  loadAgentEnv,
+  loadEffort,
+  loadModel,
+  planGated,
+} from "./config";
 import { CliError } from "./errors";
 import { commandExists, run } from "./shell";
 
@@ -16,8 +22,8 @@ export const copyCommand = (command: string, env: NodeJS.ProcessEnv): void => {
   }
 };
 
-// The inline (non-cmux) launch. Agent-aware: claude launches in plan mode;
-// codex is best-effort with full autonomy (no plan mode). The argv mirrors the
+// The inline (non-cmux) launch. Agent-aware: claude runs unattended unless the
+// run is gated (then plan mode, same as claudeCommand); codex is best-effort with full autonomy (no plan mode). The argv mirrors the
 // cmux command builders (claudeCommand / codexCommand) so the two launch paths
 // can't drift. `name` pins Claude's session name to the ticket/branch slug
 // (same as the cmux workspace name); ignored for codex.
@@ -43,9 +49,9 @@ const inlineArgs = (
     loadModel(env),
     "--effort",
     loadEffort(env),
-    "--permission-mode",
-    "plan",
-    "--allow-dangerously-skip-permissions",
+    ...(planGated("claude", env)
+      ? ["--permission-mode", "plan", "--allow-dangerously-skip-permissions"]
+      : ["--dangerously-skip-permissions"]),
     prompt,
   ];
 };

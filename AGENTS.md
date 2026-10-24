@@ -85,7 +85,7 @@ Each rule's full rationale is in `docs/architecture.md` § Gotchas in full.
 - **Skills config is fail-safe**: `loadSkills` never throws; `"$defaults"` expands in place, and a non-empty list without it replaces the defaults.
 - **No daemon, ever**: no watcher, pidfile or `state.json`; derive from cmux + the filesystem. `status --watch` is a foreground re-render, not a violation.
 - **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue, donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch, `--repo-path`, the bare-token form, and `--print` for each. A blocked fan-out issue is skipped; a single blocked issue errors; `--print`/`--force` are unaffected.
-- **codex is best-effort, claude is the gated default**: only claude produces the `ExitPlanMode` gate; don't wire `approve`/`reject` to codex.
+- **Only a gated claude run pauses for a plan**: claude runs with `--dangerously-skip-permissions` unless launched with `--gate`; only that gated run produces the `ExitPlanMode` gate. Don't wire `approve`/`reject` to codex.
 - **Claude `--name` is the ticket slug; messaging is not a control plane**: keep `cmux send`/`approve`/`reject` and fleet memory, not `SendMessage`/`ListAgents`.
 
 ## Non-goals
@@ -108,6 +108,7 @@ Decided boundaries; the reasoning and audits are in `docs/architecture.md` § Go
 | `CAPTAIN_SKILLS` | comma-separated pipeline steps, `$defaults` keeps the built-ins |
 | `CAPTAIN_DATA_SCOPE` | overrides the data-scope guardrail |
 | `CAPTAIN_MODEL` / `CAPTAIN_EFFORT` | agent `--model` (default `default`) / `--effort` (default `high`) |
+| `CAPTAIN_PLAN_GATE` | `1` starts claude in plan mode behind `approve` (set by `--gate`; default unattended) |
 | `CAPTAIN_AGENT` | `claude` (default) or `codex` |
 | `CAPTAIN_CONFIG` / `XDG_CONFIG_HOME` | config.json path / config dir |
 | `CAPTAIN_DEBUG=1`, `NO_COLOR` | stack traces, plain output |
