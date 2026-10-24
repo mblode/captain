@@ -32,6 +32,9 @@ export interface CmuxFeedItem {
   // id. This is the only handle `feed.exit_plan.reply` accepts (verified on
   // cmux 0.64.17); passing `id` fails with "requires request_id".
   request_id?: string;
+  // the agent session the item came from, decoded from workstream_id. Workers
+  // sharing one checkout share a cwd, so this is their gate's join key.
+  session?: string;
 }
 
 // What `feed.exit_plan.reply` does with the plan, in cmux's own vocabulary.
@@ -83,6 +86,15 @@ const TOP_STATES: Record<string, RunState> = {
 // the workspace id and the tag NAME (a workspace can carry more than one tag row).
 const TAG_REF = /^workspace:([^:]+):tag:(.+)$/iu;
 
+// workstream_id is `cmux-feed-v1:<base64 source>:<base64 session id>` (cmux
+// 0.64); for claude the session id is the one passed as `--session-id`.
+export const sessionOf = (
+  workstreamId: string | undefined
+): string | undefined => {
+  const encoded = workstreamId?.split(":")[2];
+  return encoded ? Buffer.from(encoded, "base64").toString("utf-8") : undefined;
+};
+
 // Parse cmux RPC stdout, falling back on garbage. The RPC is unreliable: a
 // status-0 response with malformed stdout must read as "no data this tick", not
 // a thrown exception (every reader downstream — status, notify — depends on it).
@@ -114,6 +126,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
           text?: string | null;
           resolved_at?: string | null;
           request_id?: string | null;
+          workstream_id?: string | null;
         }[];
       }
     );
@@ -124,6 +137,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
       question_prompt: i.question_prompt ?? undefined,
       request_id: i.request_id ?? undefined,
       resolved_at: i.resolved_at ?? undefined,
+      session: sessionOf(i.workstream_id ?? undefined),
       status: i.status ?? "",
       text: i.text ?? undefined,
     }));

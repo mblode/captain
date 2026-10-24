@@ -120,12 +120,33 @@ export const renderTask = (task: Task): string => {
 // The acceptance criteria are the body's checklist lines (`- [ ] ...`), one
 // rubric criterion each. Everything else in the body is the contract prose.
 const CHECKBOX = /^\s*[-*] \[[ xX]\] (.+)$/u;
+const SMOKE_HEADING = /^## Smoke test\s*$/u;
+
+// The body split at its `## Smoke test` section (which runs to the next `## `
+// heading): the work, and the checks a shared-checkout worker runs in
+// production after the merge. Smoke checks are not acceptance criteria: the
+// pre-merge verifier can't run them.
+const splitSmoke = (body: string): { work: string[]; smoke: string[] } => {
+  const work: string[] = [];
+  const smoke: string[] = [];
+  let inSmoke = false;
+  for (const line of body.split("\n")) {
+    if (line.startsWith("## ")) {
+      inSmoke = SMOKE_HEADING.test(line);
+    }
+    (inSmoke ? smoke : work).push(line);
+  }
+  return { smoke, work };
+};
+
+const checklist = (lines: string[]): string[] =>
+  lines.map((line) => CHECKBOX.exec(line)?.[1]?.trim() ?? "").filter(Boolean);
 
 export const criteriaOf = (body: string): string[] =>
-  body
-    .split("\n")
-    .map((line) => CHECKBOX.exec(line)?.[1]?.trim() ?? "")
-    .filter(Boolean);
+  checklist(splitSmoke(body).work);
+
+export const smokeOf = (body: string): string[] =>
+  checklist(splitSmoke(body).smoke);
 
 // Task ids are lowercase ticket ids (tig-430, db-35a2097c) or `t-<n>` for a
 // task that came from a chat message.

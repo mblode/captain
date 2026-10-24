@@ -36,15 +36,21 @@ const normalizeCwd = (path: string): string => {
 export const sameCwd = (left: string, right: string): boolean =>
   left === right || normalizeCwd(left) === normalizeCwd(right);
 
-// The newest unresolved gating feed item for a worktree, matched by cwd.
-// `resolved_at` is set the moment an item is answered or expires, so its
-// absence marks it pending. feed.list is chronological: the LAST match is live.
+// The newest unresolved gating feed item for a worktree, matched by cwd, or by
+// agent session when one is known: workers in a shared checkout share a cwd,
+// and only the session tells their gates apart. `resolved_at` is set the
+// moment an item is answered or expires, so its absence marks it pending.
+// feed.list is chronological: the LAST match is live.
 export const pendingGate = (
   items: CmuxFeedItem[],
-  cwd: string
+  cwd: string,
+  session?: string
 ): Gate | undefined => {
   const item = items.findLast(
-    (f) => GATE_KINDS.has(f.kind) && sameCwd(f.cwd, cwd) && !f.resolved_at
+    (f) =>
+      GATE_KINDS.has(f.kind) &&
+      (session ? f.session === session : sameCwd(f.cwd, cwd)) &&
+      !f.resolved_at
   );
   if (!item) {
     return undefined;

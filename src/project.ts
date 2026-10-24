@@ -7,9 +7,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { CliError, EXIT } from "./errors";
+import { gitCommonDir } from "./git";
 import { ensureMemoryFile } from "./memory";
 import { run } from "./shell";
 import { parseTask, renderTask } from "./task";
@@ -26,11 +27,20 @@ import type { Task } from "./task";
 // The chat maintains the task files directly; `captain` commands write through
 // here. It lives outside the product repo, so it never lands in an agent's PR.
 
+// How a project's workers share the repo. `shared` (the default): every worker
+// runs in the repo's own checkout on its current branch, commits only its own
+// paths with an `[<id>]` tag and pushes to that branch; the human merges the
+// branch, and each worker then checks production. `worktree`: each task gets
+// its own worktree, branch and PR, reviewed by the other vendor.
+export const CHECKOUTS = ["shared", "worktree"] as const;
+export type Checkout = (typeof CHECKOUTS)[number];
+
 export interface Project {
   name: string;
   dir: string;
-  // the product repo every task's worktree branches from
+  // the product repo: the shared checkout, or what every worktree branches from
   repo: string;
+  checkout: Checkout;
   // max tasks in progress at once (each one is a PR you will review)
   wip: number;
   // optional shell command run in each new worktree before the agent starts
@@ -68,6 +78,7 @@ const readProject = (dir: string, name: string): Project => {
   const wip = Number(raw.wip);
   return {
     bootstrap: typeof raw.bootstrap === "string" ? raw.bootstrap : "",
+    checkout: raw.checkout === "worktree" ? "worktree" : "shared",
     dir,
     name,
     repo: raw.repo,
@@ -85,17 +96,46 @@ const projectNames = (root: string): string[] => {
   }
 };
 
+// The main checkout of the git repo holding `cwd`, or undefined outside one.
+// Every linked worktree resolves to the same root.
+export const mainRepoRoot = (
+  cwd: string,
+  env: NodeJS.ProcessEnv
+): string | undefined =>
+  run("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { env }).status === 0
+    ? dirname(gitCommonDir(cwd, env))
+    : undefined;
+
+// The one project whose repo is `repo`, if any.
+export const projectForRepo = (
+  env: NodeJS.ProcessEnv,
+  repo: string
+): Project | undefined => {
+  const root = projectsRoot(env);
+  const matches = projectNames(root)
+    .map((n) => readProject(join(root, n), n))
+    .filter((p) => p.repo === repo);
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
 // Which project a command runs against: --project, then $CAPTAIN_PROJECT, then
-// the only project there is. Anything ambiguous is an error that names the
-// choices, never a guess (a wrong-repo launch was v2's worst silent failure).
+// the project whose repo holds the current directory, then the only project
+// there is. Anything ambiguous is an error that names the choices, never a
+// guess (a wrong-repo launch was v2's worst silent failure).
 export const resolveProject = (
   env: NodeJS.ProcessEnv,
-  name?: string
+  name?: string,
+  cwd = process.cwd()
 ): Project => {
   const root = projectsRoot(env);
   const chosen = name || env.CAPTAIN_PROJECT;
   if (chosen) {
     return readProject(join(root, chosen), chosen);
+  }
+  const here = mainRepoRoot(cwd, env);
+  const local = here ? projectForRepo(env, here) : undefined;
+  if (local) {
+    return local;
   }
   const names = projectNames(root);
   if (names.length === 1) {
@@ -139,7 +179,13 @@ export const commit = (project: Project, message: string): void => {
 
 export const initProject = (
   env: NodeJS.ProcessEnv,
-  options: { name: string; repo: string; wip?: number; bootstrap?: string }
+  options: {
+    name: string;
+    repo: string;
+    wip?: number;
+    bootstrap?: string;
+    checkout?: Checkout;
+  }
 ): Project => {
   if (!/^[a-z0-9][a-z0-9._-]*$/iu.test(options.name)) {
     throw new CliError(
@@ -163,6 +209,7 @@ export const initProject = (
   mkdirSync(join(dir, "tasks"), { recursive: true });
   const project: Project = {
     bootstrap: options.bootstrap ?? "",
+    checkout: options.checkout ?? "shared",
     dir,
     name: options.name,
     repo,
@@ -170,7 +217,7 @@ export const initProject = (
   };
   writeFileSync(
     join(dir, PROJECT_FILE),
-    `${JSON.stringify({ bootstrap: project.bootstrap, repo, wip: project.wip }, null, 2)}\n`
+    `${JSON.stringify({ bootstrap: project.bootstrap, checkout: project.checkout, repo, wip: project.wip }, null, 2)}\n`
   );
   ensureMemoryFile(learningsPath(project));
   if (!existsSync(join(dir, ".git"))) {

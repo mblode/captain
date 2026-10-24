@@ -249,3 +249,19 @@ export const loadHarnessDefaults = (
     model: parseStringField(section, "model") ?? fallback.model,
   };
 };
+
+// The base dir of the per-repo OpenSpec homes, fail-safe: env override
+// (CAPTAIN_OPENSPEC_HOME) > config file `.openspecHome` > ~/.claude/captain/openspec.
+// The default is where v2 kept them, so existing changes carry over.
+export const loadOpenspecBase = (
+  env: NodeJS.ProcessEnv = process.env
+): string => {
+  const home = env.HOME || homedir();
+  const value = loadStringSetting(
+    env,
+    "CAPTAIN_OPENSPEC_HOME",
+    "openspecHome",
+    join(home, ".claude", "captain", "openspec")
+  );
+  return value.startsWith("~/") ? join(home, value.slice(2)) : value;
+};

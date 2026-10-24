@@ -1,6 +1,6 @@
 ---
 name: captain
-description: Be the one chat that runs a local fleet of coding agents. Turn messages and tickets into a task list, start Claude Code, Codex and Cursor workers in cmux worktrees, and bring back only what needs the human. Use when asked to "start the captain", "add this to the list", "pick up TIG-430", "what needs me", "what's ready to merge", "check the plans", "run the backlog", "morning summary", or when a message reads like work to hand off.
+description: Be the one chat that runs a local fleet of coding agents. Turn messages, tickets and OpenSpec changes into a task list, start Claude Code, Codex and Cursor workers in cmux (sharing the repo's checkout and branch by default), and bring back only what needs the human. Use when asked to "start the captain", "add this to the list", "write a change for…", "start this change", "fan out the changes", "pick up TIG-430", "what needs me", "what's ready to merge", "check the plans", "run the backlog", "morning summary", or when a message reads like work to hand off.
 ---
 
 # Captain
@@ -19,9 +19,20 @@ merge, and never approve a plan the human hasn't seen.
 | --- | --- |
 | [references/heartbeat.md](references/heartbeat.md) | Any worker is running and you need to wake yourself up |
 | [references/intake.md](references/intake.md) | Turning a message, a ticket, or a big goal into tasks |
+| [references/openspec.md](references/openspec.md) | Writing an OpenSpec change ("add this to the list" in a repo with an OpenSpec home) |
 
 ## What you work with
 
+- **The checkout.** A project is `shared` (the default) or `worktree`. Shared: every
+  worker runs in the repo's own checkout on its current branch, commits only its own
+  files tagged `[<id>]`, and pushes to that branch. There is no PR per task; you merge the
+  branch, then each worker checks production and writes a smoke result. Worktree
+  (`captain init --worktrees`): each task gets its own worktree, branch and PR, reviewed by
+  the other vendor. `captain init` prints which one a project is.
+- **OpenSpec changes** live in the repo's OpenSpec home, outside the repo
+  (`captain spec --root`). `captain spec <id…>` or `--all` turns changes into tasks and
+  starts them; the change folder stays the plan of record, and the worker archives it
+  after its smoke test passes.
 - **The task list** is `~/captain/<project>/tasks/*.md`, one file each: frontmatter
   (`state`, `risk`, `harness`, `model`, `blockedBy`) and a body that is the contract.
   You maintain it. Edit the files directly to sharpen a contract, fix a blocker, or
@@ -51,10 +62,10 @@ your head: after any restart or compaction, `captain status --json` tells you ev
 | Group | Meaning | You |
 | --- | --- | --- |
 | `needs-you` | a plan to approve, a question, a failed verifier, no CI | Bring it to the human (below) |
-| `ready` | CI green, verified, cross-vendor reviewed | Tell the human, with the PR link. They merge |
+| `ready` | Worktree: CI green, verified, cross-vendor reviewed. Shared: verified and pushed to the branch | Tell the human, with the PR link. They merge |
 | `captain` | your move | Run `next`: `captain review`, `captain send`, or restart a dead worker |
-| `working` | agent busy, CI running, under review | Nothing. `captain peek` only if it looks stuck |
-| `merged` | PR merged | `captain done <id>`, then start the next queued task |
+| `working` | agent busy, CI running, under review, or (shared) merged and checking production | Nothing. `captain peek` only if it looks stuck |
+| `merged` | Worktree: PR merged. Shared: merged and verified in production | `captain done <id>`, then start the next queued task |
 | `queued` / `blocked` | not started | Start queued ones as WIP frees up |
 
 ## Choosing the harness and model
@@ -85,7 +96,10 @@ For each `needs-you` row with a plan gate:
 3. One AskUserQuestion. Then `captain approve <id> --note "<why, one line>"` or
    `captain reject <id> --note "<what to change>"`. The note is the only record of why.
 
-## Review
+## Review (worktree projects only)
+
+A shared task has no PR of its own, so `captain review` refuses it: read its
+`.captain/tasks/<id>/plan.md` and spot-read its `[<id>]` commits instead.
 
 A verified PR (group `captain`, next `captain review <id>`) gets the other vendor.
 `captain review <id>` starts a second workspace that reads the PR and writes
@@ -119,5 +133,13 @@ A verified PR (group `captain`, next `captain review <id>`) gets the other vendo
 - **Auto-approval (Stamp or similar) is the last check, not the only one.** Only let it
   approve a PR the board calls READY TO MERGE, never an `escalate` task, and never a UI
   change a human hasn't clicked through. If a Stamped PR skipped any of that, tell the human.
+- **Shared workers share one index.** Keep tasks that run together on disjoint files; two
+  tasks editing the same file will still collide. Say so and offer to run them in turn.
+- **Pushes go straight to the branch** in a shared project, and most tasks have no plan
+  gate. Use `--risk escalate` for anything you wouldn't let land unreviewed. Undo is
+  `git revert`, never a force-push.
+- **A smoke failure is yours.** `needs-you` with "smoke test failed in production" means
+  production disagrees: read `.captain/tasks/<id>/smoke.json`. The worker neither reverts
+  nor archives.
 - **Worktrees stay after `done`.** Remove them when the human asks:
   `git worktree remove <path>`.

@@ -21,6 +21,12 @@ describe("harnessCommand", () => {
     );
   });
 
+  it("pins claude's session id, which matches a shared worker's feed gates", () => {
+    expect(harnessCommand(spec({ name: "add-x", sessionId: "s-1" }))).toContain(
+      "claude --name 'add-x' --session-id 's-1' --effort"
+    );
+  });
+
   it("runs an ungated claude task unattended from the start", () => {
     const command = harnessCommand(spec());
     expect(command).toContain("--dangerously-skip-permissions");

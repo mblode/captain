@@ -46,6 +46,7 @@ export default defineConfig({
         "src/gate.ts",
         "src/stats.ts",
         "src/captain/verdict.ts",
+        "src/captain/smoke.ts",
         // the launch-side decisions: the rubric text and the ticket parsing
         "src/rubric.ts",
         "src/issue.ts",

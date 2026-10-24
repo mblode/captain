@@ -61,8 +61,11 @@ export interface LaunchSpec {
   gated: boolean;
   // env every tool the agent runs inherits (test pool caps, CAPTAIN_SLOT)
   env: Record<string, string>;
-  // the session name claude shows (the branch)
+  // the session name claude shows (the branch, or the task id when shared)
   name?: string;
+  // claude's fixed session id: in a shared checkout every worker has the same
+  // cwd, so this is how a feed gate is matched to its task
+  sessionId?: string;
   // run first in the workspace, before the agent (the project's bootstrap)
   bootstrap?: string;
 }
@@ -102,11 +105,14 @@ export const harnessCommand = (spec: LaunchSpec): string => {
     agent = `${prefix}${spec.bin} ${modelFlag("--model", spec.model)}--force ${prompt}`;
   } else {
     const name = spec.name ? `--name ${shellQuote(spec.name)} ` : "";
+    const session = spec.sessionId
+      ? `--session-id ${shellQuote(spec.sessionId)} `
+      : "";
     const effort = spec.effort ? `--effort ${shellQuote(spec.effort)} ` : "";
     const mode = spec.gated
       ? "--permission-mode plan --allow-dangerously-skip-permissions"
       : "--dangerously-skip-permissions";
-    agent = `${prefix}${spec.bin} ${name}${modelFlag("--model", spec.model)}${effort}${mode} ${prompt}`;
+    agent = `${prefix}${spec.bin} ${name}${session}${modelFlag("--model", spec.model)}${effort}${mode} ${prompt}`;
   }
   return spec.bootstrap ? `(${spec.bootstrap}) && ${agent}` : agent;
 };

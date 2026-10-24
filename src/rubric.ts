@@ -18,6 +18,48 @@ export const BRIEF_RELPATH = ".captain/brief.md";
 // in every PR diff. Its job is to bind implement→verify INSIDE the run.
 export const PLAN_RELPATH = ".captain/plan.md";
 
+// A task run in a shared checkout instead of its own worktree. Several workers
+// share one branch and one `.captain/` there, so each task keeps its files
+// under its own state dir, and its work is the commits after `baseSha` tagged
+// with its id.
+export interface Shared {
+  stateDir: string;
+  branch: string;
+  baseSha: string;
+}
+
+export const sharedStateDir = (id: string): string => `.captain/tasks/${id}`;
+
+// Where a run's captain files live, relative to its checkout: `.captain/` in a
+// worktree, the task's state dir in a shared checkout.
+export const statePaths = (
+  shared?: Pick<Shared, "stateDir">
+): {
+  brief: string;
+  plan: string;
+  review: string;
+  rubric: string;
+  session: string;
+  smoke: string;
+  verdict: string;
+} => {
+  const dir = shared?.stateDir ?? ".captain";
+  return {
+    brief: `${dir}/brief.md`,
+    plan: `${dir}/plan.md`,
+    review: `${dir}/review.json`,
+    rubric: `${dir}/rubric.md`,
+    session: `${dir}/session`,
+    smoke: `${dir}/smoke.json`,
+    verdict: `${dir}/verdict.json`,
+  };
+};
+
+// The verifier's view of a task on a shared branch: only its own commits, since
+// other workers commit to the same branch.
+const sharedDiff = (shared: Shared, displayId: string): string =>
+  `git log -p --grep='\\[${displayId}\\]' ${shared.baseSha}..HEAD`;
+
 // The rubric's integrity hash covers everything ABOVE this heading (the criteria
 // and the verification procedure). The `## Verdict` section can't be covered —
 // it embeds the hash itself — so splitting here keeps render and re-check in
@@ -45,8 +87,13 @@ const criteriaFor = (
   issue: Issue | undefined,
   displayId: string,
   dataScope?: string,
-  source = "Linear"
+  source = "Linear",
+  shared?: Shared
 ): string[] => {
+  const { plan } = statePaths(shared);
+  const diffCommand = shared
+    ? sharedDiff(shared, displayId)
+    : "git diff --stat <base>...HEAD";
   let contract = `The diff implements the task **${displayId}**.`;
   if (issue?.title) {
     contract = `The diff implements: **${issue.title}** (the issue description in Issue context is the contract).`;
@@ -76,17 +123,19 @@ const criteriaFor = (
     // Phrased as a scan with output for the same reason the data-scope criterion
     // is: "the diff matches the plan" asserted in prose is unevidencable, so it
     // gets answered with conclusion-prose.
-    `The diff does what \`${PLAN_RELPATH}\` says, or every departure from it is named under that file's "## Deviations" heading. Evidence must be the plan's own steps set against the diff's files (e.g. \`git diff --stat <base>...HEAD\`), not a summary. Mark \`na\` only when \`${PLAN_RELPATH}\` does not exist.`,
+    `The diff does what \`${plan}\` says, or every departure from it is named under that file's "## Deviations" heading. Evidence must be the plan's own steps set against the diff's files (e.g. \`${diffCommand}\`), not a summary. Mark \`na\` only when \`${plan}\` does not exist.`,
     "The repo's test command passes. Add tests only where the change genuinely warrants coverage — do not add tests for trivial copy/label/config changes.",
     "The repo's typecheck and lint commands pass.",
-    `A PR is open with "${displayId}" in the title and a description that matches the diff.`
+    shared
+      ? `Every change for ${displayId} is committed with "[${displayId}]" in the message and pushed to \`${shared.branch}\`, and \`git status --short\` lists none of the files this task touched.`
+      : `A PR is open with "${displayId}" in the title and a description that matches the diff.`
   );
   if (dataScope) {
     // Phrased as a scan with output, not as a negative to be asserted. The old
     // wording ("no PII is accessed") is unevidencable from a diff, so verdicts
     // answered it with conclusion-prose; a grep over the diff is a real artifact.
     criteria.push(
-      "The diff introduces no customer data, secret, credential, payment detail, or PII. Evidence must be a scan you ran over the diff (e.g. `git diff <base>...HEAD | grep -niE 'secret|token|password|api[_-]?key|bearer'`) plus its output, not an assertion."
+      `The diff introduces no customer data, secret, credential, payment detail, or PII. Evidence must be a scan you ran over the diff (e.g. \`${shared ? sharedDiff(shared, displayId) : "git diff <base>...HEAD"} | grep -niE 'secret|token|password|api[_-]?key|bearer'\`) plus its output, not an assertion.`
     );
   }
   return criteria;
@@ -134,6 +183,56 @@ const renderIssueContext = (
   return context;
 };
 
+// The post-merge production checks and the smoke.json shape, for a task run in
+// a shared checkout. Rendered after `## Verdict`, so outside the hash: the
+// pre-merge verifier never grades them, and the worker runs them only once its
+// commits are merged and deployed.
+const renderSmoke = (
+  checks: string[],
+  displayId: string,
+  smokePath: string
+): string => {
+  const list =
+    checks.length > 0
+      ? checks.map((check) => `- ${check}`).join("\n")
+      : "The task has no `## Smoke test` section: derive one terminal check and one browser check from the contract, and mark each `derived: true`. Leave out the browser check when the change has no browser surface, and say so in `summary`.";
+  const schema = JSON.stringify(
+    {
+      checks: [
+        {
+          derived: false,
+          evidence: "<the command and its output, or what the browser showed>",
+          kind: "terminal | browser",
+          name: "<the check, copied verbatim>",
+          pass: true,
+        },
+      ],
+      mergeSha: "<the merge commit sha>",
+      status: "running | pass | fail",
+      summary: "<one line>",
+      task: displayId,
+      ts: "<epoch seconds>",
+    },
+    null,
+    2
+  );
+  return [
+    "",
+    "## Smoke test",
+    "",
+    "Run these in production after the merge and deploy, read-only unless a step names a reversible write:",
+    "",
+    list,
+    "",
+    `Record the result in \`${smokePath}\` (git-ignored). Write \`"status": "running"\` once the merge lands, then \`pass\` only when every check passed, else \`fail\`:`,
+    "",
+    "```json",
+    schema,
+    "```",
+    "",
+  ].join("\n");
+};
+
 // The per-task definition of done, written to `.captain/rubric.md` by
 // `captain start`. Mechanically derived from the task's contract — captain
 // makes no LLM call and does no summarising. The "How to verify" section is the fixed
@@ -143,8 +242,13 @@ export const renderRubric = (
   issue: Issue | undefined,
   displayId: string,
   dataScope?: string,
-  source = "Linear"
+  source = "Linear",
+  shared?: Shared & { smoke: string[] }
 ): { text: string; hash: string } => {
+  const paths = statePaths(shared);
+  const diff = shared
+    ? `this task's commits (\`${sharedDiff(shared, displayId)}\`) plus any of its files still uncommitted`
+    : "the branch diff against the base branch";
   let body = `# Definition of done — ${displayId}\n\n`;
   body +=
     "Captain wrote this file when the task started. Do not edit it; your verdict must cite its hash.\n\n";
@@ -156,7 +260,8 @@ export const renderRubric = (
     issue,
     displayId,
     dataScope,
-    source
+    source,
+    shared
   ).entries()) {
     body += `${i + 1}. ${criterion.replaceAll("\n", "\n   ")}\n`;
   }
@@ -165,7 +270,7 @@ export const renderRubric = (
   body += [
     "Before you may declare this ticket done:",
     "",
-    `1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file, \`${PLAN_RELPATH}\` if it exists, and the branch diff against the base branch (plus read access to the worktree). Do not share your own reasoning or summary of the work.`,
+    `1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file, \`${paths.plan}\` if it exists, and ${diff} (plus read access to the checkout). Do not share your own reasoning or summary of the work.`,
     "2. The verifier grades every acceptance criterion above, in order, and must cite concrete evidence per criterion (file and line, or command output).",
     "3. Prefer a mechanical referee to your own reading. Where a criterion names a command, run the repo's own command — not a hand-picked subset of test files — and quote it with its exit code or summary line. CI status (`gh pr checks`) beats anything run locally; cite it once the PR is open.",
     "4. If a criterion genuinely cannot apply to this diff, mark it `na` with the reason as its evidence. Do NOT reword the criterion to something you can pass, and do not pass it on an exemption argument — `na` is the honest answer and captain surfaces it as one.",
@@ -200,7 +305,7 @@ export const renderRubric = (
     2
   );
   const tail = [
-    `\nWhen the verifier passes (or fails on something you cannot fix), write \`${VERDICT_RELPATH}\` in this worktree (it is git-ignored):`,
+    `\nWhen the verifier passes (or fails on something you cannot fix), write \`${paths.verdict}\` in this checkout (it is git-ignored):`,
     "",
     "```json",
     schema,
@@ -216,5 +321,6 @@ export const renderRubric = (
 
   // Concatenated, not joined: rubricBody splits at the exact VERDICT_HEADING
   // bytes, so nothing may sit between the body and the heading.
-  return { hash, text: `${body}${VERDICT_HEADING}${tail}` };
+  const smoke = shared ? renderSmoke(shared.smoke, displayId, paths.smoke) : "";
+  return { hash, text: `${body}${VERDICT_HEADING}${tail}${smoke}` };
 };

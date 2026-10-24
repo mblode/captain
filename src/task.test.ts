@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   criteriaOf,
+  smokeOf,
   nextMessageId,
   otherVendor,
   parseTask,
@@ -69,6 +70,15 @@ describe("criteriaOf", () => {
 
   it("is empty when the body has no checklist", () => {
     expect(criteriaOf("plain prose\n- a bullet")).toEqual([]);
+  });
+
+  // Smoke checks run in production after the merge, so the pre-merge verifier
+  // must never be asked to grade them.
+  it("leaves the Smoke test section out, and smokeOf reads only it", () => {
+    const body =
+      "## 1. Work\n\n- [ ] toggle works\n\n## Smoke test\n\n- [ ] S.1 curl prod\n\n## Notes\n\n- [ ] after smoke";
+    expect(criteriaOf(body)).toEqual(["toggle works", "after smoke"]);
+    expect(smokeOf(body)).toEqual(["S.1 curl prod"]);
   });
 });
 

@@ -1,9 +1,10 @@
 # captain
 
 One chat that runs coding agents locally. The `/captain` skill turns a Claude Code session into
-the chat; the `captain` CLI is its hands. Tasks are plain markdown files in a project folder;
-each started task gets a git worktree, a cmux workspace and a full harness (Claude Code, Codex or
-Cursor). The board is derived live from cmux, git, GitHub and each worktree's `.captain/` files.
+the chat; the `captain` CLI is its hands. Tasks are plain markdown files in a project folder
+(or OpenSpec changes, turned into tasks by `captain spec`); each started task gets a cmux
+workspace and a full harness (Claude Code, Codex or Cursor), in the repo's shared checkout by
+default or in its own git worktree. The board is derived live from cmux, git, GitHub and each worktree's `.captain/` files.
 Nothing about progress is stored, so there is no daemon. The design and its reasoning are in
 `docs/plans/captain-v3.md`.
 
@@ -26,14 +27,15 @@ pnpm link --global               # install `captain` globally from this checkout
 
 ```text
 src/
-  cli.ts          # Commander entry: init | add | start | status | approve | reject | send | peek | review | done | drop | gain | install
+  cli.ts          # Commander entry: init | add | spec | start | status | approve | reject | send | peek | review | done | drop | gain | install
   commands.ts     # every command, taking its world as Deps (env, stdout, ports) so tests run the real code
   task.ts         # PURE: the task file (frontmatter + contract body), parse/render, criteria, ids, otherVendor
   board.ts        # PURE: the grouping rule. rowOf(task, evidence) -> group + why + next command; WIP count. Start here.
   gate.ts         # PURE: pendingGate (the cmux feed -> a plan or question gate for a worktree)
   stats.ts        # PURE: computeGain over the task files + the log
   evidence.ts     # the fs/cmux/GitHub edge: gathers each active task's evidence, then board.ts decides
-  project.ts      # the project folder: project.json, tasks/*.md, learnings.md, log.jsonl, its own git history
+  project.ts      # the project folder: project.json (repo, checkout, wip), tasks/*.md, learnings.md, log.jsonl, its own git history
+  openspec.ts     # the repo's OpenSpec home (outside the repo) and a change folder read into a task title and body
   github.ts       # the GithubPort: `gh pr list --head <branch>` -> PR state + CI rollup (rollup is pure)
   cmux.ts         # harnessCommand (claude | codex | Cursor `agent` launch lines), openWorkspace, cmux reachability
   prompt.ts       # the worker brief (<workflow>, <data-scope>, <finishing-protocol>, <fleet-memory>) and the review brief
@@ -46,6 +48,7 @@ src/
   captain/
     control.ts    # the CmuxPort seam: realCmux(env) wraps the cmux CLI; tests pass a fake
     verdict.ts    # PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
+    smoke.ts      # PURE: parseSmoke (fail-safe), a shared worker's production check after the merge
     log.ts        # append-only <project>/log.jsonl: add | start | approve | reject | review | done | drop
     doctor.ts     # `captain install`: pure buildChecks + skill install
 skills/captain/   # the chat: SKILL.md + references/heartbeat.md + references/intake.md
@@ -66,6 +69,24 @@ the task. Ids are lowercase ticket ids (`tig-430`, `db-35a2097c`) or `t-<n>` for
 `add` copies a ticket's description, checklist and open blockers in; after that the file is the
 record and captain never writes back to a tracker.
 
+**Checkout.** `project.json` `checkout` is `shared` (the default) or `worktree`
+(`captain init --worktrees`). A shared task runs in the project repo itself on its current
+branch (a detached HEAD is refused): its files live under `.captain/tasks/<id>/`, its
+workspace is named after the task id, claude gets a fixed `--session-id` (written to that
+dir) so feed gates are matched by session instead of the shared cwd, the bootstrap is
+skipped, and the brief adds `<shared-branch>` (commit only your paths as `[<id>] …`, push
+to the branch) and the production steps (wait for the human merge, write `smoke.json`,
+watch the deploy, run the smoke checks, archive the OpenSpec change on a pass). A task is
+shared when its `worktree` equals the project repo (`isShared` in `evidence.ts`).
+
+**OpenSpec.** `captain spec <id…>|--all` resolves the project by the current repo (never the
+"only project" fallback) and creates a shared one when none exists. Each change in the
+repo's OpenSpec home (`~/.claude/captain/openspec/<name>` or `<name>-<hash8>`, the same key
+v2 used) becomes a task with `source: openspec:<id>`: proposal, design, spec paths, and
+tasks.md's open boxes. A `## Smoke test` section in any task body is split off by
+`smokeOf`: those checks render after `## Verdict` in the rubric, outside the hash, and
+never become criteria.
+
 **Start.** Refuses a closed task, a task with a live worker, an open blocker, and a start past
 the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last two. Then:
 `ensureWorktree` (`<parent>/<repo>-<id>` on branch `<id>-<slug>`), `.captain/rubric.md`,
@@ -82,7 +103,9 @@ the agent env (test pool caps) plus `CAPTAIN_SLOT`.
 worktree, the PR and CI via `gh`, the hash-checked verdict, the review file, and whether a
 `<branch>:review` workspace is open. `rowOf` walks one rule, first match wins: merged, then
 anything waiting on a human (plan, question, needs-input, failed verifier), then the open PR
-(red CI, no CI, pending, no verdict, no review, failed review, ready). Each row carries `next`,
+(red CI, no CI, pending, no verdict, no review, failed review, ready). A shared task skips
+the PR walk (the branch's PR says nothing about one task): waiting on a human, failed smoke,
+passed smoke (`merged`), running smoke (`working`), passing verdict (`ready`), else working. Each row carries `next`,
 the one command that moves it forward, so the chat acts without parsing prose.
 
 **Review.** `captain review` opens a second workspace in the same worktree running the other
@@ -114,6 +137,10 @@ needs CI green, a passing verdict and a passing review.
 - **`feed.exit_plan.reply` takes `{request_id, mode}`**, where `request_id` is NOT the feed
   item's `id`. Approve is `bypassPermissions` (the gated launch allows it), reject is `deny`.
   Pinned by a wire test in `control.test.ts`; re-verify there after a cmux upgrade.
+- **Shared workers share a cwd, an index and a branch.** Never match a shared worker or
+  its gate by cwd (name = task id, gate = session); commits are scoped with
+  `git commit -- <paths>`; a codex or cursor shared worker has no session id, so no feed
+  gate is read for it.
 - **The review workspace shares the worker's cwd**, so worker lookup is by workspace name
   (the branch) first. Keep the `<branch>:review` naming in `reviewName`.
 - **Tests never touch real `$HOME`**: set `CAPTAIN_DIR` and `CAPTAIN_CONFIG` to temp paths.
@@ -146,10 +173,11 @@ needs CI green, a passing verdict and a passing review.
 `CAPTAIN_DIR` (projects root, default `~/captain`) · `CAPTAIN_PROJECT` (default project) ·
 `CAPTAIN_CONFIG` (config.json path; default `$XDG_CONFIG_HOME/captain/config.json`) ·
 `CAPTAIN_SKILLS` (comma-separated pipeline, `$defaults` keeps the built-in steps) ·
-`CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) · `LINEAR_API_KEY` · `DONEBEAR_TOKEN` ·
+`CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) · `CAPTAIN_OPENSPEC_HOME` (base of the
+per-repo OpenSpec homes, default `~/.claude/captain/openspec`) · `LINEAR_API_KEY` · `DONEBEAR_TOKEN` ·
 `CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
-`config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string), `.agentEnv`
+`config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string), `.openspecHome` (string), `.agentEnv`
 (string map merged over the `VITEST_MAX_FORKS/THREADS=2` defaults; `""` drops a key),
 `.harness.<claude|codex|cursor>.model` / `.effort` / `.bin` (each harness's defaults; a task's own
 values win).

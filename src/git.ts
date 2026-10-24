@@ -339,3 +339,23 @@ export const ensureWorktree = async (
 
   return { branch, worktreePath };
 };
+
+// The branch and HEAD a shared-checkout run starts on. A detached HEAD has no
+// branch to push to, so it is refused rather than guessed.
+export const sharedBranchOf = (
+  repo: string,
+  env: NodeJS.ProcessEnv
+): { branch: string; baseSha: string } => {
+  const branch = run("git", ["-C", repo, "symbolic-ref", "--short", "HEAD"], {
+    env,
+  });
+  if (branch.status !== 0 || !branch.stdout.trim()) {
+    throw new CliError(
+      `${repo} is on a detached HEAD; check out the branch the workers should push to`,
+      EXIT.USAGE,
+      "DETACHED_HEAD"
+    );
+  }
+  const head = runRequired("git", ["-C", repo, "rev-parse", "HEAD"], { env });
+  return { baseSha: head.trim(), branch: branch.stdout.trim() };
+};

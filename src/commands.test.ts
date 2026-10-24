@@ -33,6 +33,7 @@ import {
   reject,
   review,
   send,
+  spec,
   start,
   status,
 } from "./commands";
@@ -188,7 +189,7 @@ beforeEach(() => {
     prs,
     repo,
   };
-  init({ name: "rebuild", repo, wip: 2 }, world.deps);
+  init({ checkout: "worktree", name: "rebuild", repo, wip: 2 }, world.deps);
 });
 
 const project = () => resolveProject(world.env);
@@ -470,6 +471,165 @@ describe("the loop after start", () => {
     expect(status([], { all: true }, world.deps)[0].group).toBe("closed");
     gain({ json: true }, world.deps);
     expect(world.output()).toContain('"done": 1');
+  });
+});
+
+describe("shared checkout with OpenSpec changes", () => {
+  const ID = "add-dark-mode";
+  const shared = { project: "shared" };
+
+  // An OpenSpec home for the repo (basename "app") with one change, and a
+  // second project on the same repo that runs every worker in its checkout.
+  const setup = (): void => {
+    const base = tmp("captain-openspec-");
+    world.env.CAPTAIN_OPENSPEC_HOME = base;
+    const dir = join(base, "app", "openspec", "changes", ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "proposal.md"),
+      "# Proposal\n\n## Why\nUsers want a dark theme at night.\n"
+    );
+    writeFileSync(
+      join(dir, "tasks.md"),
+      "# Tasks\n\n## 1. Implementation\n\n- [ ] 1.1 Toggle switches the theme\n- [x] 1.2 Already done\n\n## Smoke test\n\n- [ ] S.1 Terminal: curl production shows the dark stylesheet\n"
+    );
+    init({ checkout: "shared", name: "shared", repo: world.repo }, world.deps);
+  };
+
+  const sharedTask = () => findTask(resolveProject(world.env, "shared"), ID);
+  const stateFile = (name: string): string =>
+    join(world.repo, ".captain", "tasks", ID, name);
+
+  const launched = async (): Promise<void> => {
+    setup();
+    await spec([ID], { ...shared, harness: "claude" }, world.deps);
+    world.cmux.workspaces.push({
+      cwd: world.repo,
+      id: "ws-shared",
+      name: ID,
+      ref: "ws-shared",
+    });
+    world.cmux.runs["ws-shared"] = "running";
+  };
+
+  const writeVerdict = (verdict: "pass" | "fail"): void => {
+    const hash =
+      /`([0-9a-f]{16})`/u.exec(
+        readFileSync(stateFile("rubric.md"), "utf-8")
+      )?.[1] ?? "";
+    writeFileSync(
+      stateFile("verdict.json"),
+      JSON.stringify({
+        criteria: [],
+        rubricHash: hash,
+        summary: verdict,
+        ts: 1,
+        verdict,
+      })
+    );
+  };
+
+  const writeSmoke = (state: "running" | "pass" | "fail"): void => {
+    writeFileSync(
+      stateFile("smoke.json"),
+      JSON.stringify({
+        checks: [{ evidence: "200", name: "S.1", pass: state !== "fail" }],
+        status: state,
+        summary: `smoke ${state}`,
+        ts: 2,
+      })
+    );
+  };
+
+  const row = () => status([ID], shared, world.deps)[0];
+
+  it("turns the change into a task and launches it in the repo's own checkout", async () => {
+    await launched();
+    const t = sharedTask();
+    expect(t).toMatchObject({
+      branch: "main",
+      source: `openspec:${ID}`,
+      state: "active",
+      worktree: world.repo,
+    });
+    const rubric = readFileSync(stateFile("rubric.md"), "utf-8");
+    expect(rubric).toContain("Toggle switches the theme");
+    expect(rubric).not.toContain("1. Already done");
+    expect(rubric).toContain(`committed with "[${ID}]"`);
+    expect(rubric).toContain("## Smoke test");
+    expect(rubric).toContain("curl production shows the dark stylesheet");
+    const brief = readFileSync(stateFile("brief.md"), "utf-8");
+    expect(brief).toContain("<shared-branch>");
+    expect(brief).toContain(`openspec archive ${ID} --yes`);
+    expect(brief).not.toContain("/pr-creator");
+    expect(readFileSync(stateFile("session"), "utf-8")).toMatch(
+      /^[0-9a-f-]{36}$/u
+    );
+    const calls = world.calls();
+    expect(calls).toContain(`new-workspace --name ${ID}`);
+    expect(calls).toContain("--session-id");
+    expect(calls).toContain("--dangerously-skip-permissions");
+  });
+
+  it("walks the board from working to ready, shipping and verified in production", async () => {
+    await launched();
+    expect(row()).toMatchObject({ group: "working", why: "no verdict yet" });
+    writeVerdict("pass");
+    expect(row()).toMatchObject({
+      group: "ready",
+      next: "gh pr create --head main",
+    });
+    writeSmoke("running");
+    expect(row().group).toBe("working");
+    writeSmoke("pass");
+    expect(row()).toMatchObject({
+      group: "merged",
+      next: `captain done ${ID}`,
+    });
+    writeSmoke("fail");
+    expect(row()).toMatchObject({ group: "needs-you" });
+    expect(row().why).toContain("smoke fail");
+  });
+
+  it("matches a plan gate by the worker's session, not the shared cwd", async () => {
+    await launched();
+    const session = readFileSync(stateFile("session"), "utf-8");
+    world.cmux.feed.push(
+      {
+        cwd: world.repo,
+        id: "f1",
+        kind: "exitPlan",
+        request_id: "r-other",
+        session: "someone-else",
+        status: "pending",
+      },
+      {
+        cwd: world.repo,
+        id: "f2",
+        kind: "exitPlan",
+        request_id: "r-mine",
+        session,
+        status: "pending",
+      }
+    );
+    expect(row().gate).toMatchObject({ kind: "plan", replyId: "r-mine" });
+  });
+
+  it("--all skips changes already started, and refuses a change that doesn't exist", async () => {
+    await launched();
+    await expect(spec(["nope"], shared, world.deps)).rejects.toThrow(
+      /no OpenSpec change "nope"/u
+    );
+    await expect(
+      spec([], { ...shared, all: true }, world.deps)
+    ).rejects.toThrow(/no change to start/u);
+  });
+
+  it("refuses a cross-vendor review: a shared task has no PR of its own", async () => {
+    await launched();
+    await expect(review(ID, shared, world.deps)).rejects.toThrow(
+      /no PR of its own/u
+    );
   });
 });
 
