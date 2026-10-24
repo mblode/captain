@@ -687,6 +687,17 @@ export const spec = async (
   options: SpecOptions,
   deps: Deps
 ): Promise<{ unstarted: string[] }> => {
+  // --root only prints where the changes live: it must not create a project.
+  const repoHere = mainRepoRoot(resolve(options.repoPath ?? "."), deps.env);
+  if (
+    options.root &&
+    repoHere &&
+    !options.project &&
+    !deps.env.CAPTAIN_PROJECT
+  ) {
+    out(deps, openspecHome(repoHere, deps.env));
+    return { unstarted: [] };
+  }
   const project = specProject(options, deps);
   const home = openspecHome(project.repo, deps.env);
   if (options.root) {
