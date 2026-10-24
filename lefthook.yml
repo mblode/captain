@@ -23,10 +23,5 @@ pre-commit:
       stage_fixed: true
     - name: oxfmt
       glob: "*.{json,jsonc,css}"
-      # oxfmt ignores lockfiles, and exits non-zero when every file it is given
-      # is ignored — so a lockfile-only commit would fail the hook.
-      exclude:
-        - "package-lock.json"
-        - "**/package-lock.json"
       run: npx oxfmt --write {staged_files}
       stage_fixed: true

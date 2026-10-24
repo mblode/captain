@@ -1,5 +1,5 @@
 // 100% pure (lint-enforced: oxlint bans node:fs here) — the verdict/rubric
-// FILE READERS live in surface.ts; callers feed this module plain data.
+// file readers live in evidence.ts; callers feed this module plain data.
 
 // The agent-side verifier's report, written to <worktree>/.captain/verdict.json
 // per the finishing protocol. Captain only trusts pass/fail + hash; the
@@ -36,7 +36,7 @@ const isCriterion = (c: unknown): boolean =>
 // schema example modelled it as one for months, so most verdicts on disk carry
 // `"1784854700"`). A quoted integer is unambiguous, so accept it rather than
 // silently scoring it 0 — gain's launch→verdict latency drops every 0 sample.
-export const epochSeconds = (raw: unknown): number => {
+const epochSeconds = (raw: unknown): number => {
   if (typeof raw === "number") {
     return raw;
   }

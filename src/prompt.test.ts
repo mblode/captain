@@ -1,58 +1,33 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_SKILLS } from "./config";
-import { renderPrompt, renderPromptExtras } from "./prompt";
-import type { Issue } from "./types";
+import { renderPrompt, renderPromptExtras, renderReviewPrompt } from "./prompt";
+import type { Harness } from "./task";
 
 describe("prompt rendering", () => {
-  it("renders only the issue identity and points to the canonical rubric", () => {
-    const issue: Issue = {
-      criteria: [
-        {
-          description: "Child body",
-          ref: "ENG-404",
-          title: "Child task",
-        },
-      ],
-      description:
-        "Raw markdown with ![shot](https://uploads.linear.app/file.png)",
-      identifier: "ENG-403",
-      labels: { nodes: [{ name: "Frontend" }, { name: "Bug" }] },
-      parent: {
-        ref: "ENG-400",
-        title: "Parent task",
-      },
-      project: { name: "Activation" },
-      team: { name: "Engineering" },
-      title: "Fix launch flow",
-    };
-
-    const prompt = renderPrompt(issue, "ENG-403");
-
-    expect(prompt).toContain("Work on Linear issue ENG-403: Fix launch flow.");
+  it("renders only the task identity and points to the canonical rubric", () => {
+    const prompt = renderPrompt({ id: "tig-403", title: "Fix launch flow" });
+    expect(prompt).toContain("Work on task TIG-403: Fix launch flow.");
     expect(prompt).toContain("Read `.captain/rubric.md` before planning");
-    expect(prompt).not.toContain("Raw markdown");
-    expect(prompt).not.toContain("Child body");
   });
 
-  it("renders a source label other than Linear", () => {
-    const prompt = renderPrompt(
-      { criteria: [{ title: "Fix crashes" }], identifier: "db-35a2097c" },
-      "db-35a2097c",
-      "donebear"
+  it("drops the title separator when there is no title", () => {
+    expect(renderPrompt({ id: "t-9", title: "" })).toContain(
+      "Work on task T-9."
     );
-    expect(prompt).toContain("Work on donebear issue db-35a2097c.");
-    expect(prompt).toContain("Read `.captain/rubric.md`");
-    expect(prompt).not.toContain("Fix crashes");
   });
+});
 
-  it("falls back when issue data is unavailable", () => {
-    expect(renderPrompt(undefined, "ENG-999")).toContain(
-      "Work on Linear issue ENG-999."
+describe("review prompt", () => {
+  it("names the PR, forbids edits and asks for the review file", () => {
+    const out = renderReviewPrompt(
+      { id: "t-1", title: "Billing" },
+      "https://github.com/o/r/pull/7"
     );
-    expect(renderPrompt(undefined, "ENG-999")).toContain(
-      "Read `.captain/rubric.md`"
-    );
+    expect(out).toContain("https://github.com/o/r/pull/7");
+    expect(out).toContain("Do not edit, commit, or push anything.");
+    expect(out).toContain(".captain/review.json");
+    expect(out).toContain("different model vendor");
   });
 });
 
@@ -77,17 +52,14 @@ describe("prompt extras", () => {
     expect(out).not.toContain("<finishing-protocol>");
   });
 
-  // Gated or not, the plan must name the unknowns rather than just "a plan".
-  // Gated, a human resolves them before work starts; ungated, nobody reads the
-  // plan first, so each unknown records the choice made.
+  // The plan gate is the human's one cheap chance to redirect a run, so both
+  // agent variants must ask for the unknowns rather than just "a plan".
   it("asks the plan to lead with a named Decisions for the reviewer section", () => {
-    for (const gated of [true, false]) {
-      const out = renderPromptExtras({ gated, workflow: true });
+    for (const harness of ["claude", "codex"] as Harness[]) {
+      const out = renderPromptExtras({ gated: true, harness, workflow: true });
       expect(out).toContain("## Decisions for the reviewer");
       expect(out).toContain("at most five bullets");
-      expect(out).toContain(
-        gated ? "assumptions you had to make" : "the option you chose, and why"
-      );
+      expect(out).toContain("assumptions you had to make");
       expect(out).toContain("Never resolve an ambiguity silently.");
       // the playbook's plan contract: what changes, in what order, proven how
       expect(out).toContain("name the files you will change");
@@ -103,8 +75,8 @@ describe("prompt extras", () => {
   // frame that rule around a commit: `.captain/` is excluded, so the file is in
   // no commit and appending is the only way the approved plan survives.
   it("makes both agents write the plan to .captain/plan.md and append deviations", () => {
-    for (const agent of ["claude", "codex"]) {
-      const out = renderPromptExtras({ agent, workflow: true });
+    for (const harness of ["claude", "codex"] as Harness[]) {
+      const out = renderPromptExtras({ gated: true, harness, workflow: true });
       expect(out).toContain("write the plan verbatim to `.captain/plan.md`");
       expect(out).toContain(
         'append what changed and why under a "## Deviations"'
@@ -116,16 +88,18 @@ describe("prompt extras", () => {
 
   it("renders the configured skills in order between implement and finish", () => {
     const out = renderPromptExtras({
+      gated: true,
       skills: ["/tidy", "/pr-creator"],
       workflow: true,
     });
-    expect(out).toContain("2. Before you touch code,");
+    expect(out).toContain("2. Once the plan is approved,");
     expect(out).toContain("3. Run /tidy.");
     expect(out).toContain("4. Run /pr-creator.");
     expect(out).toContain(
       "5. Finish with the finishing protocol below (verifier + verdict)."
     );
     // only the configured skills appear — not the unconfigured defaults
+    expect(out).not.toContain("/ui-verification");
     expect(out).not.toContain("/pr-babysitter");
   });
 
@@ -155,7 +129,11 @@ describe("prompt extras", () => {
   // Codex has no plan mode or plan-approval gate — a brief telling it to wait
   // for approval would stall the run at step 1 forever.
   it("swaps the plan-gate steps for codex (no approval wait)", () => {
-    const out = renderPromptExtras({ agent: "codex", workflow: true });
+    const out = renderPromptExtras({
+      gated: true,
+      harness: "codex",
+      workflow: true,
+    });
     expect(out).not.toContain("you are launched in plan mode");
     expect(out).not.toContain("Once the plan is approved");
     expect(out).toContain("no plan-approval gate");
@@ -163,24 +141,30 @@ describe("prompt extras", () => {
     expect(out).toContain("3. Run /tidy.");
   });
 
-  // Claude runs unattended by default, so its brief must not wait for an
-  // approval either; only a gated run gets the plan-mode steps.
-  it("keeps the plan-gate steps only for a gated run", () => {
-    for (const agent of ["claude", undefined]) {
-      const out = renderPromptExtras({ agent, workflow: true });
-      expect(out).not.toContain("you are launched in plan mode");
-      expect(out).toContain("no plan-approval gate");
-    }
-    const gated = renderPromptExtras({
-      agent: "claude",
+  it("keeps the plan-gate steps for a gated claude brief", () => {
+    const out = renderPromptExtras({
       gated: true,
+      harness: "claude",
       workflow: true,
     });
-    expect(gated).toContain(
+    expect(out).toContain(
       "1. Plan first (you are launched in plan mode) and present the plan for approval."
     );
-    expect(gated).toContain("2. Once the plan is approved,");
-    expect(gated).toContain("then implement it.");
+    expect(out).toContain("2. Once the plan is approved,");
+    expect(out).toContain("then implement it.");
+  });
+
+  it("drops the gate for an ungated claude brief but keeps AskUserQuestion", () => {
+    const out = renderPromptExtras({ harness: "claude", workflow: true });
+    expect(out).not.toContain("you are launched in plan mode");
+    expect(out).toContain("no plan-approval gate");
+    expect(out).toContain("AskUserQuestion");
+  });
+
+  it("tells cursor to print a blocking question and stop", () => {
+    const out = renderPromptExtras({ harness: "cursor", workflow: true });
+    expect(out).not.toContain("AskUserQuestion");
+    expect(out).toContain("print the question and");
   });
 
   it("renders the finishing protocol around the rubric path", () => {
@@ -190,48 +174,6 @@ describe("prompt extras", () => {
     expect(out).toContain("fresh-context verifier");
     expect(out).toContain("write the verdict file");
     expect(out).not.toContain("<fleet-memory>");
-  });
-
-  it("keeps OpenSpec files out of every commit and verifies in production after the verdict", () => {
-    const shared = {
-      baseSha: "abc1234",
-      branch: "main",
-      stateDir: ".captain/changes/add-dark-mode",
-    };
-    const home = "/home/u/.claude/captain/openspec/app";
-    const out = renderPromptExtras({
-      openspec: { external: true, home },
-      rubricPath: ".captain/changes/add-dark-mode/rubric.md",
-      shared,
-      sharedId: "add-dark-mode",
-    });
-    expect(out).toContain(`${home}/openspec/changes/add-dark-mode/tasks.md`);
-    expect(out).toContain(
-      `Never stage or commit an \`openspec/\` path or anything under \`${home}\``
-    );
-    expect(out).not.toMatch(/commit (that file|the\s+result)/u);
-    expect(out).toContain("gh pr view main --json number,state,headRefOid");
-    // A squash merge rewrites the commits, so the wait tests the PR's head, never the merge SHA.
-    expect(out).toContain(
-      'git merge-base --is-ancestor <your last [add-dark-mode] commit> "$head"'
-    );
-    expect(out).toContain('[ "$st" = CLOSED ]');
-    expect(out).toContain("`watch/*`");
-    expect(out).toContain(".captain/changes/add-dark-mode/smoke.json");
-    expect(out).toContain(
-      `run \`openspec archive add-dark-mode --yes\` from \`${home}\``
-    );
-    expect(out).toContain("commit nothing");
-    expect(out).not.toContain("your work on this ticket is complete");
-
-    const team = renderPromptExtras({
-      openspec: { external: false, home: "/repo" },
-      rubricPath: ".captain/changes/add-dark-mode/rubric.md",
-      shared,
-      sharedId: "add-dark-mode",
-    });
-    expect(team).toContain("is the team's copy in this repo");
-    expect(team).not.toContain("openspec archive");
   });
 
   it("renders the memory excerpt and the verified-only write rule", () => {

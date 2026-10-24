@@ -6,9 +6,8 @@ const issueIdRegex = new RegExp(`^${issueIdPattern}$`, "u");
 
 const isIssueId = (value: string): boolean => issueIdRegex.test(value);
 
-// A start token is Linear work if it's a bare issue id (TIG-430) or a Linear
-// URL; anything else is a free-form task. Shared by runStart's routing and the
-// CLI's bare-invocation guard (route.ts).
+// `captain add` input is a Linear ticket if it's a bare issue id (TIG-430) or a
+// Linear URL; anything else is a message.
 export const isLinearToken = (token: string): boolean =>
   isIssueId(token) || /^https?:\/\/linear\.app\//iu.test(token);
 

@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
+import { style } from "../format";
 import {
   buildChecks,
   install,
@@ -14,7 +15,6 @@ import {
   renderDoctor,
 } from "./doctor";
 import type { DoctorDeps } from "./doctor";
-import { style } from "./format";
 
 const deps = (over: Partial<DoctorDeps> = {}): DoctorDeps => ({
   cmuxReachable: () => true,
@@ -101,9 +101,9 @@ describe("buildChecks", () => {
   });
 
   it("omits the pipeline-skills check when the pipeline runs none", () => {
-    // /ui-design isn't fetched through the pipeline bundle, so a ui-design-only
-    // pipeline has no installable skills to probe — the check is dropped, not shown as ok.
-    const checks = buildChecks(deps({ configuredSkills: ["ui-design"] }));
+    // A pipeline of only prose or unbundled skills has no installable skills
+    // to probe — the check is dropped, not shown as ok.
+    const checks = buildChecks(deps({ configuredSkills: ["my-own-skill"] }));
     expect(checks.map((c) => c.label)).not.toContain("pipeline skills");
   });
 });

@@ -29,7 +29,7 @@ const donebearUrlRegex = new RegExp(
 
 // A donebear token is either a task URL or a bare full task UUID. A bare UUID is
 // unambiguous — it can't be a Linear id (letters-dash-digits) and is not a
-// plausible one-word free-form task — so it routes to the donebear fetch.
+// plausible message — so it routes to the donebear fetch.
 export const isDonebearToken = (token: string): boolean => {
   const trimmed = token.trim();
   return uuidRegex.test(trimmed) || donebearUrlRegex.test(trimmed);
@@ -104,7 +104,7 @@ export const mapTaskToIssue = (
 
 // Fetch a donebear task and map it into the neutral Issue. Fail-safe to
 // undefined on any failure (missing token, non-OK, GraphQL error, throw), using
-// the same source-level contract as fetchLinearIssue. The runner treats
+// the same source-level contract as fetchLinearIssue. `captain add` treats
 // undefined for a recognized issue token as a failed launch precondition.
 export const fetchDonebearTask = async (
   uuid: string,

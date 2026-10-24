@@ -2,7 +2,7 @@
   "$schema": "https://blode.md/docs.json",
   "name": "Captain",
   "slug": "captain",
-  "description": "Captain a fleet of cmux worktrees from one Claude Code session, one worktree per Linear ticket",
+  "description": "One chat that runs your coding agents locally, in cmux worktrees",
   "navbar": {
     "links": [
       { "label": "GitHub", "href": "https://github.com/mblode/captain" }

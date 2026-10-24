@@ -12,9 +12,6 @@ export interface CmuxWorkspace {
   ref: string;
   name: string;
   cwd: string;
-  // the custom description set at launch — captain writes the OpenSpec change
-  // id here, the one marker that tells agents sharing a checkout apart
-  description?: string;
 }
 
 // One pending block from the fleet feed (question / plan approval / permission).
@@ -35,15 +32,12 @@ export interface CmuxFeedItem {
   // id. This is the only handle `feed.exit_plan.reply` accepts (verified on
   // cmux 0.64.17); passing `id` fails with "requires request_id".
   request_id?: string;
-  // the agent session the item came from, decoded from workstream_id. Agents
-  // sharing one checkout share a cwd, so this is their gate's join key.
-  session?: string;
 }
 
 // What `feed.exit_plan.reply` does with the plan, in cmux's own vocabulary.
-// Captain launches claude with --allow-dangerously-skip-permissions so the
-// agent can self-drive its whole brief unattended — "bypassPermissions" is the
-// approval that preserves that (autoAccept still stops the agent on the first
+// Captain launches gated claude with --allow-dangerously-skip-permissions so the
+// agent can self-drive its whole brief unattended once approved —
+// "bypassPermissions" is the approval that preserves that (autoAccept still stops the agent on the first
 // non-edit tool, which would strand the workspace at a prompt nobody is
 // watching). "deny" sends it back to planning, where reject's feedback lands.
 const REPLY_MODE = { approve: "bypassPermissions", reject: "deny" } as const;
@@ -74,10 +68,8 @@ export interface CmuxPort {
   replyExitPlan(requestId: string, approve: boolean): void;
   // every workspace's agent run state, keyed by workspace id (one `cmux top`)
   runStates(): Record<string, RunState>;
-  // the bottom of a workspace's terminal; "" when it cannot be read
+  // the visible text of a workspace's terminal (what `captain peek` shows)
   readScreen(workspaceId: string): string;
-  // one key event (e.g. "enter", "escape") into a workspace's terminal
-  pressKey(workspaceId: string, key: string): void;
 }
 
 // What a tag row's title says → our RunState.
@@ -90,15 +82,6 @@ const TOP_STATES: Record<string, RunState> = {
 // A `cmux top` tag row's ref: workspace:<UUID>:tag:claude_code — capture both
 // the workspace id and the tag NAME (a workspace can carry more than one tag row).
 const TAG_REF = /^workspace:([^:]+):tag:(.+)$/iu;
-
-// workstream_id is `cmux-feed-v1:<base64 source>:<base64 session id>` (cmux
-// 0.64); for claude the session id is the one passed as `--session-id`.
-export const sessionOf = (
-  workstreamId: string | undefined
-): string | undefined => {
-  const encoded = workstreamId?.split(":")[2];
-  return encoded ? Buffer.from(encoded, "base64").toString("utf-8") : undefined;
-};
 
 // Parse cmux RPC stdout, falling back on garbage. The RPC is unreliable: a
 // status-0 response with malformed stdout must read as "no data this tick", not
@@ -131,7 +114,6 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
           text?: string | null;
           resolved_at?: string | null;
           request_id?: string | null;
-          workstream_id?: string | null;
         }[];
       }
     );
@@ -142,7 +124,6 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
       question_prompt: i.question_prompt ?? undefined,
       request_id: i.request_id ?? undefined,
       resolved_at: i.resolved_at ?? undefined,
-      session: sessionOf(i.workstream_id ?? undefined),
       status: i.status ?? "",
       text: i.text ?? undefined,
     }));
@@ -168,7 +149,6 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
       const cwd = w.current_directory ?? "";
       return {
         cwd,
-        description: w.description ?? undefined,
         id: w.id,
         name: w.description || (cwd ? basename(cwd) : w.ref),
         ref: w.ref,
@@ -180,30 +160,13 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
     run("cmux", ["notify", "--title", title, "--body", body], { env });
   },
 
-  pressKey: (workspaceId: string, key: string): void => {
-    try {
-      runRequired("cmux", ["send-key", "--workspace", workspaceId, key], {
-        env,
-      });
-    } catch (error) {
-      throw new CliError(
-        `failed to press ${key} in workspace ${workspaceId} via cmux: ${error instanceof Error ? error.message : String(error)}`,
-        EXIT.CMUX_UNREACHABLE,
-        "CMUX_UNREACHABLE"
-      );
-    }
-  },
-
   // Is cmux up? Reuses the shared reachability probe (commandExists + `ping`).
   reachable: (): boolean => cmuxReachable(env),
 
-  // Fails soft: an unreadable screen reads as "no gate on screen".
   readScreen: (workspaceId: string): string => {
-    const raw = run(
-      "cmux",
-      ["read-screen", "--workspace", workspaceId, "--lines", "40"],
-      { env }
-    );
+    const raw = run("cmux", ["read-screen", "--workspace", workspaceId], {
+      env,
+    });
     return raw.status === 0 ? raw.stdout : "";
   },
 

@@ -6,6 +6,10 @@ import type { Issue } from "./types";
 // the worktree root. The watcher polls this exact path (see captain/verdict.ts).
 export const VERDICT_RELPATH = ".captain/verdict.json";
 export const RUBRIC_RELPATH = ".captain/rubric.md";
+// The cross-vendor reviewer's pass/fail, written by `captain review`'s agent.
+export const REVIEW_RELPATH = ".captain/review.json";
+// The brief each worker was launched with, kept for `captain` to re-read.
+export const BRIEF_RELPATH = ".captain/brief.md";
 // The approved plan, written by the AGENT once the plan gate clears (captain
 // never sees the plan text — claude presents it in plan mode, where it cannot
 // write files, and captain only replies to the feed item). Git-ignored with the
@@ -19,39 +23,6 @@ export const PLAN_RELPATH = ".captain/plan.md";
 // it embeds the hash itself — so splitting here keeps render and re-check in
 // agreement without a second marker.
 const VERDICT_HEADING = "\n## Verdict\n";
-
-// An OpenSpec change run in the shared checkout instead of its own worktree.
-// Several agents share one branch there, so each change keeps its captain files
-// under its own state dir, and "done" means committed and pushed to the branch,
-// not a PR. `baseSha` is HEAD at launch: the change's commits are the ones after
-// it that carry the change id.
-export interface SharedBranch {
-  stateDir: string;
-  branch: string;
-  baseSha: string;
-}
-
-// Where a run's plan, verdict and smoke result live: under `.captain/` for a
-// worktree, under the change's own state dir on a shared branch.
-export const statePaths = (
-  shared?: SharedBranch
-): { plan: string; smoke: string; verdict: string } =>
-  shared
-    ? {
-        plan: `${shared.stateDir}/plan.md`,
-        smoke: `${shared.stateDir}/smoke.json`,
-        verdict: `${shared.stateDir}/verdict.json`,
-      }
-    : {
-        plan: PLAN_RELPATH,
-        smoke: ".captain/smoke.json",
-        verdict: VERDICT_RELPATH,
-      };
-
-// The verifier's view of a change on a shared branch: only this change's
-// commits, since other agents commit to the same branch.
-const sharedDiff = (shared: SharedBranch, displayId: string): string =>
-  `git log -p --grep='\\[${displayId}\\]' ${shared.baseSha}..HEAD`;
 
 // Deterministic short id of the rubric body — long enough that forging it takes
 // more effort than just running the verifier, short enough to copy by eye.
@@ -74,13 +45,8 @@ const criteriaFor = (
   issue: Issue | undefined,
   displayId: string,
   dataScope?: string,
-  source = "Linear",
-  shared?: SharedBranch
+  source = "Linear"
 ): string[] => {
-  const { plan } = statePaths(shared);
-  const diffCommand = shared
-    ? sharedDiff(shared, displayId)
-    : "git diff --stat <base>...HEAD";
   let contract = `The diff implements the task **${displayId}**.`;
   if (issue?.title) {
     contract = `The diff implements: **${issue.title}** (the issue description in Issue context is the contract).`;
@@ -110,73 +76,20 @@ const criteriaFor = (
     // Phrased as a scan with output for the same reason the data-scope criterion
     // is: "the diff matches the plan" asserted in prose is unevidencable, so it
     // gets answered with conclusion-prose.
-    `The diff does what \`${plan}\` says, or every departure from it is named under that file's "## Deviations" heading. Evidence must be the plan's own steps set against the diff's files (e.g. \`${diffCommand}\`), not a summary. Mark \`na\` only when \`${plan}\` does not exist.`,
+    `The diff does what \`${PLAN_RELPATH}\` says, or every departure from it is named under that file's "## Deviations" heading. Evidence must be the plan's own steps set against the diff's files (e.g. \`git diff --stat <base>...HEAD\`), not a summary. Mark \`na\` only when \`${PLAN_RELPATH}\` does not exist.`,
     "The repo's test command passes. Add tests only where the change genuinely warrants coverage — do not add tests for trivial copy/label/config changes.",
     "The repo's typecheck and lint commands pass.",
-    shared
-      ? `Every change for ${displayId} is committed with "[${displayId}]" in the message and pushed to \`${shared.branch}\`, and \`git status --short\` lists none of the files this change touched.`
-      : `A PR is open with "${displayId}" in the title and a description that matches the diff.`
+    `A PR is open with "${displayId}" in the title and a description that matches the diff.`
   );
   if (dataScope) {
     // Phrased as a scan with output, not as a negative to be asserted. The old
     // wording ("no PII is accessed") is unevidencable from a diff, so verdicts
     // answered it with conclusion-prose; a grep over the diff is a real artifact.
     criteria.push(
-      `The diff introduces no customer data, secret, credential, payment detail, or PII. Evidence must be a scan you ran over the diff (e.g. \`${shared ? sharedDiff(shared, displayId) : "git diff <base>...HEAD"} | grep -niE 'secret|token|password|api[_-]?key|bearer'\`) plus its output, not an assertion.`
+      "The diff introduces no customer data, secret, credential, payment detail, or PII. Evidence must be a scan you ran over the diff (e.g. `git diff <base>...HEAD | grep -niE 'secret|token|password|api[_-]?key|bearer'`) plus its output, not an assertion."
     );
   }
   return criteria;
-};
-
-// The post-merge production checks and the smoke.json shape, for a change run
-// on a shared branch. Rendered after `## Verdict`, so outside the hash: the
-// pre-merge verifier never grades them, and the worker runs them only once the
-// change is merged and deployed.
-const renderSmoke = (
-  issue: Issue | undefined,
-  displayId: string,
-  smokePath: string
-): string => {
-  const checks = issue?.smoke ?? [];
-  const list =
-    checks.length > 0
-      ? checks.map((check) => `- ${check}`).join("\n")
-      : "No `## Smoke test` section in tasks.md: derive one terminal check and one browser check from the proposal, and mark each `derived: true`. Leave out the browser check when the change has no browser surface, and say so in `summary`.";
-  const schema = JSON.stringify(
-    {
-      change: displayId,
-      checks: [
-        {
-          derived: false,
-          evidence: "<the command and its output, or what the browser showed>",
-          kind: "terminal | browser",
-          name: "<the check, copied verbatim>",
-          pass: true,
-        },
-      ],
-      mergeSha: "<the merge commit sha>",
-      status: "running | pass | fail",
-      summary: "<one line>",
-      ts: "<epoch seconds>",
-    },
-    null,
-    2
-  );
-  return [
-    "",
-    "## Smoke test",
-    "",
-    "Run these in production after the merge and deploy, read-only unless a step names a reversible write:",
-    "",
-    list,
-    "",
-    `Record the result in \`${smokePath}\` (git-ignored). Write \`"status": "running"\` once the merge lands, then \`pass\` only when every check passed, else \`fail\`:`,
-    "",
-    "```json",
-    schema,
-    "```",
-    "",
-  ].join("\n");
 };
 
 const renderParentContext = (parent: Issue["parent"]): string => {
@@ -221,25 +134,20 @@ const renderIssueContext = (
   return context;
 };
 
-// The per-run definition of done, written to `.captain/rubric.md` for issue
-// fan-out and free-form dispatch. Mechanically derived from the source-neutral
-// issue/task contract — captain makes no LLM call and does no summarising. The "How to verify" section is the fixed
+// The per-task definition of done, written to `.captain/rubric.md` by
+// `captain start`. Mechanically derived from the task's contract — captain
+// makes no LLM call and does no summarising. The "How to verify" section is the fixed
 // grading procedure (a fresh-context verifier sub-agent), so the verification
 // standard is set by captain once, not improvised per agent.
 export const renderRubric = (
   issue: Issue | undefined,
   displayId: string,
   dataScope?: string,
-  source = "Linear",
-  shared?: SharedBranch
+  source = "Linear"
 ): { text: string; hash: string } => {
-  const paths = statePaths(shared);
-  const diff = shared
-    ? `this change's commits (\`${sharedDiff(shared, displayId)}\`) plus any of its files still uncommitted`
-    : "the branch diff against the base branch";
   let body = `# Definition of done — ${displayId}\n\n`;
   body +=
-    "Captain wrote this file at fan-out. Do not edit it; your verdict must cite its hash.\n\n";
+    "Captain wrote this file when the task started. Do not edit it; your verdict must cite its hash.\n\n";
 
   body += renderIssueContext(issue, displayId, source);
 
@@ -248,8 +156,7 @@ export const renderRubric = (
     issue,
     displayId,
     dataScope,
-    source,
-    shared
+    source
   ).entries()) {
     body += `${i + 1}. ${criterion.replaceAll("\n", "\n   ")}\n`;
   }
@@ -258,7 +165,7 @@ export const renderRubric = (
   body += [
     "Before you may declare this ticket done:",
     "",
-    `1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file, \`${paths.plan}\` if it exists, and ${diff} (plus read access to the checkout). Do not share your own reasoning or summary of the work.`,
+    `1. Spawn a verifier sub-agent with a FRESH context (e.g. the Task/Agent tool). Give it ONLY this rubric file, \`${PLAN_RELPATH}\` if it exists, and the branch diff against the base branch (plus read access to the worktree). Do not share your own reasoning or summary of the work.`,
     "2. The verifier grades every acceptance criterion above, in order, and must cite concrete evidence per criterion (file and line, or command output).",
     "3. Prefer a mechanical referee to your own reading. Where a criterion names a command, run the repo's own command — not a hand-picked subset of test files — and quote it with its exit code or summary line. CI status (`gh pr checks`) beats anything run locally; cite it once the PR is open.",
     "4. If a criterion genuinely cannot apply to this diff, mark it `na` with the reason as its evidence. Do NOT reword the criterion to something you can pass, and do not pass it on an exemption argument — `na` is the honest answer and captain surfaces it as one.",
@@ -293,7 +200,7 @@ export const renderRubric = (
     2
   );
   const tail = [
-    `\nWhen the verifier passes (or fails on something you cannot fix), write \`${paths.verdict}\` in this checkout (it is git-ignored):`,
+    `\nWhen the verifier passes (or fails on something you cannot fix), write \`${VERDICT_RELPATH}\` in this worktree (it is git-ignored):`,
     "",
     "```json",
     schema,
@@ -307,8 +214,7 @@ export const renderRubric = (
     "",
   ].join("\n");
 
-  const smoke = shared ? renderSmoke(issue, displayId, paths.smoke) : "";
   // Concatenated, not joined: rubricBody splits at the exact VERDICT_HEADING
   // bytes, so nothing may sit between the body and the heading.
-  return { hash, text: `${body}${VERDICT_HEADING}${tail}${smoke}` };
+  return { hash, text: `${body}${VERDICT_HEADING}${tail}` };
 };

@@ -1,117 +1,171 @@
 # captain
 
-Dispatch a fleet of cmux worktrees (Linear ticket → PR-ready) and surface what needs you. The
-worktree + Linear + prompt fan-out is captain-native (`runner.ts` + `git.ts`/`linear.ts`/
-`prompt.ts`); each agent's brief carries the whole pipeline and the agent drives it itself.
-Captain keeps **no state** — `status` is derived live from cmux-native signals and the
-per-worktree `.captain/` files. (The previous watcher-daemon/state-machine architecture was
-deleted June 2026 — see `research/` for the history.)
-
-Read [`docs/architecture.md`](docs/architecture.md) before changing start routing, model/agent
-selection, the frontier rule, the surface (`status`/`approve`/`reject`/`--watch`), `gain`, the
-verdict/plan/memory loops, or before re-proposing anything under Non-goals. It also holds the
-full reasoning behind every gotcha below.
+One chat that runs coding agents locally. The `/captain` skill turns a Claude Code session into
+the chat; the `captain` CLI is its hands. Tasks are plain markdown files in a project folder;
+each started task gets a git worktree, a cmux workspace and a full harness (Claude Code, Codex or
+Cursor). The board is derived live from cmux, git, GitHub and each worktree's `.captain/` files.
+Nothing about progress is stored, so there is no daemon. The design and its reasoning are in
+`docs/plans/captain-v3.md`.
 
 ## Commands
 
 ```bash
-npm install                 # setup (requires Node >= 24, per package.json engines)
-npm run build               # tsdown -> dist/
-npm run dev                 # tsdown --watch
-npm run test                # vitest run
-npm run typecheck           # tsc --noEmit
-npm run lint                # oxlint .
-npm run check               # ultracite check (lint + format, CI-equivalent)
-npm run fix                 # ultracite fix (format + lint autofix)
-npm link                    # install `captain` globally from this checkout
+pnpm install --frozen-lockfile   # setup (Node >= 24); `pnpm install` alone rewrites the lockfile's stale version field
+pnpm build                       # tsdown -> dist/
+pnpm dev                         # tsdown --watch
+pnpm test                        # vitest run
+pnpm test -- src/board.test.ts --reporter=dot   # one file, quiet
+pnpm typecheck                   # tsc --noEmit
+pnpm lint                        # oxlint .
+pnpm check                       # ultracite check (lint + format); read-only, unlike `format:check` (`oxfmt .` writes)
+pnpm fix                         # ultracite fix (format + lint autofix)
+pnpm link --global               # install `captain` globally from this checkout
 ```
 
 ## Architecture
 
 ```text
 src/
-  cli.ts         # Commander entry: install | start | spec | status | gain | approve [--note] | reject --note
-  route.ts       # PURE: withImplicitStart (bare `captain tig-123` → `captain start …`; lone non-issue word left alone)
-  runner.ts      # runStart: runIssueWorktree (issue → worktree fan-out) or runDispatch (free-form → current dir); resolveAgent
-  spec.ts        # runSpec: one agent per OpenSpec change in the CURRENT checkout + branch (no worktree, no PR)
-  openspec.ts    # openspecHome (outside the repo, keyed like memory) + read openspec/changes/<id>/ → Issue (unchecked tasks = criteria, `## Smoke test` = smoke)
-  source.ts      # THE ISSUE-SOURCE SEAM: IssueSource registry, sourceFor + isIssueToken. A new source touches only this file
-  types.ts       # Issue: the source-neutral contract every source maps INTO
-  linear.ts      # fetchLinearIssue + mapLinearIssue (sub-issues → criteria, `blocks` relations → blockedBy)
-  donebear.ts    # parseDonebearInput (URL/UUID → db-<8hex>) + fetchDonebearTask + mapTaskToIssue (checklist → criteria)
-  issue.ts       # PURE: openBlockers (the frontier rule)
-  config.ts      # fail-safe loaders: loadSkills/loadDataScope/loadModel/loadEffort/loadAgent, DEFAULT_AGENT_ENV
-  prompt.ts      # the brief: issue context + <workflow> + <data-scope> + <finishing-protocol> + <fleet-memory>
-  rubric.ts      # PURE: renderRubric → .captain/rubric.md (definition of done) + rubricHash
-  memory.ts      # per-repo fleet memory ~/.claude/captain/memory/<repo>/learnings.md (Rules + tail-capped Inbox)
-  cmux.ts launch.ts  # agent command builders (claudeCommand/codexCommand; launchPlanMode inline fallback)
-  git.ts repo.ts images.ts progress.ts shell.ts home.ts errors.ts  # worktrees, repo resolution, screenshots, IO helpers, CliError
+  cli.ts          # Commander entry: init | add | start | status | approve | reject | send | peek | review | done | drop | gain | install
+  commands.ts     # every command, taking its world as Deps (env, stdout, ports) so tests run the real code
+  task.ts         # PURE: the task file (frontmatter + contract body), parse/render, criteria, ids, otherVendor
+  board.ts        # PURE: the grouping rule. rowOf(task, evidence) -> group + why + next command; WIP count. Start here.
+  gate.ts         # PURE: pendingGate (the cmux feed -> a plan or question gate for a worktree)
+  stats.ts        # PURE: computeGain over the task files + the log
+  evidence.ts     # the fs/cmux/GitHub edge: gathers each active task's evidence, then board.ts decides
+  project.ts      # the project folder: project.json, tasks/*.md, learnings.md, log.jsonl, its own git history
+  github.ts       # the GithubPort: `gh pr list --head <branch>` -> PR state + CI rollup (rollup is pure)
+  cmux.ts         # harnessCommand (claude | codex | Cursor `agent` launch lines), openWorkspace, cmux reachability
+  prompt.ts       # the worker brief (<workflow>, <data-scope>, <finishing-protocol>, <fleet-memory>) and the review brief
+  rubric.ts       # PURE: renderRubric -> .captain/rubric.md (definition of done) + rubricHash; the .captain/ paths
+  memory.ts       # learnings.md (Rules + tail-capped Inbox) excerpt for briefs
+  config.ts       # fail-safe config: skills pipeline, data scope, agent env, per-harness model/effort
+  git.ts          # ensureWorktree (lock, prune, reuse), gitCommonDir
+  source.ts       # THE TICKET-SOURCE SEAM: Linear and Done Bear registry used by `captain add`
+  linear.ts donebear.ts issue.ts types.ts shell.ts errors.ts format.ts
   captain/
-    view.ts      # 100% PURE: identity, pendingGate, rowOf (the grouping rule), mergeOrderHints, withHandles. Start here
-    verdict.ts   # 100% PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
-    smoke.ts     # 100% PURE: parseSmoke (fail-safe) — the worker's post-merge production check
-    gain.ts      # 100% PURE: computeGain (ledger + live snapshot + verdicts → metrics, rework, roster)
-    surface.ts   # the one fs/cmux composition edge: fleetRows = workspaces ∩ .captain/ + feed + runStates + verdicts
-    control.ts   # CmuxPort seam: realCmux(env) wraps the cmux CLI; tests pass a fake port
-    commands.ts  # stateless status/approve/reject/gain + friendly-id resolution (resolveTargets)
-    doctor.ts    # PURE buildChecks(deps) preflight + the `install` command
-    format.ts    # TTY-aware colour, grouped status renderer, renderGain (display only)
-    log.ts       # append-only ~/.claude/captain/log.jsonl (approve/reject/launch; `note` on both decisions)
+    control.ts    # the CmuxPort seam: realCmux(env) wraps the cmux CLI; tests pass a fake
+    verdict.ts    # PURE: parseVerdict (fail-safe) + verdictCounts (rubric-hash check)
+    log.ts        # append-only <project>/log.jsonl: add | start | approve | reject | review | done | drop
+    doctor.ts     # `captain install`: pure buildChecks + skill install
+skills/captain/   # the chat: SKILL.md + references/heartbeat.md + references/intake.md
 ```
+
+## How it works
+
+**Projects.** `captain init <name> --repo <path>` makes `~/captain/<name>/` (`CAPTAIN_DIR`
+overrides the root): `project.json` (`repo`, `wip`, optional `bootstrap`), `tasks/`,
+`learnings.md`, `log.jsonl`, and a git repo that `commit()` updates after each write.
+Commands pick the project from `--project`, then `CAPTAIN_PROJECT`, then the only one there is;
+anything ambiguous is an error. The project's `repo` is the only repo its worktrees branch from,
+which removes v2's wrong-repo launches by construction.
+
+**Tasks.** One file per task (`task.ts`). The chat edits them directly; commands write through
+`writeTask`. `parseTask` is fail-safe: a bad enum value falls back to its default, never loses
+the task. Ids are lowercase ticket ids (`tig-430`, `db-35a2097c`) or `t-<n>` for a message.
+`add` copies a ticket's description, checklist and open blockers in; after that the file is the
+record and captain never writes back to a tracker.
+
+**Start.** Refuses a closed task, a task with a live worker, an open blocker, and a start past
+the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last two. Then:
+`ensureWorktree` (`<parent>/<repo>-<id>` on branch `<id>-<slug>`), `.captain/rubric.md`,
+`.captain/brief.md`, `.captain/` appended to `.git/info/exclude`, and `cmux new-workspace` named
+after the branch running `harnessCommand`. An `escalate` task always runs on Claude in plan mode
+(`--permission-mode plan --allow-dangerously-skip-permissions`); everything else runs unattended
+(`--dangerously-skip-permissions`, codex `--dangerously-bypass-approvals-and-sandbox`,
+Cursor `agent --force`). Binaries, default models and efforts come from `DEFAULT_HARNESS` in
+`config.ts` (Codex pins `gpt-6-sol`; Cursor's CLI binary is `agent`). The project `bootstrap` runs first in the same shell. Every launch gets
+the agent env (test pool caps) plus `CAPTAIN_SLOT`.
+
+**The board** (`status`, `evidence.ts` + `board.ts`). For each active task: the worker workspace
+(by name = branch, else by cwd), its `cmux top` run state, the newest unresolved feed gate for the
+worktree, the PR and CI via `gh`, the hash-checked verdict, the review file, and whether a
+`<branch>:review` workspace is open. `rowOf` walks one rule, first match wins: merged, then
+anything waiting on a human (plan, question, needs-input, failed verifier), then the open PR
+(red CI, no CI, pending, no verdict, no review, failed review, ready). Each row carries `next`,
+the one command that moves it forward, so the chat acts without parsing prose.
+
+**Review.** `captain review` opens a second workspace in the same worktree running the other
+vendor (`otherVendor`) on a review-only brief that writes `.captain/review.json`. READY TO MERGE
+needs CI green, a passing verdict and a passing review.
 
 ## Gotchas
 
-Each rule's full rationale is in `docs/architecture.md` § Gotchas in full.
-
-- **ESM, bundler resolution**: extensionless relative imports (`./view`, not `./view.js`); tsdown bundles to `dist/`.
-- **PURE means no filesystem, no subprocess** (`node:crypto` is fine). The pure list in `oxlint.config.ts` is the contract: adding a module here without adding it there writes a rule nobody enforces.
-- **The verdict is fail-safe**: a missing/garbage `verdict.json` is "no verdict yet", and it gates the `✓ verified` label, never the merge.
-- **A criterion has three states** (pass, fail, `na` with reason in `evidence`); the rubric pins `name` verbatim so a softened bar shows as a rename. Don't add a fourth state.
-- **The plan criterion's `na` is a file-existence test** ("only when `.captain/plan.md` does not exist"); don't soften it to an arguable exemption.
-- **Plan deviations are appended under `## Deviations`**, never merged in, and never framed around a commit: `.captain/` is in no commit.
-- **Changing `rubric.ts` voids no in-flight verdict**: the hash is recomputed from each worktree's rubric on disk, which captain never rewrites.
-- **`parseVerdict` accepts `ts` as a number or a quoted integer**; tolerate at the parser, don't also patch the rubric.
-- **Fleet-memory headings match at line start** (`headingAt`), and `SKELETON` must never name a heading in its prose, or the rules silently drop from every brief.
-- **`SKELETON` states no append policy**: `prompt.ts` owns it, because the skeleton is only written when the file is absent and can never be refreshed.
-- **Never trust cmux's workspace status glyph** (it desyncs); trust `cmux top` run-state tags (`runStates`) and the feed's `resolved_at`.
-- **The feed is the gate inventory**: filter `!resolved_at` and take the newest per cwd (`pendingGate`), so a stale item never reads as live.
-- **`feed.exit_plan.reply` takes `{request_id, mode}`**, not `{id, approve}`; approve → `bypassPermissions`, reject → `deny`. Pinned by a wire test in `control.test.ts`.
-- **Colour only on a TTY** (`useColor`): piped output and `--json` stay plain for parsing.
-- **Friendly ids**: `approve`/`reject` take `tig-430` or substrings; an ambiguous ticket across repos must be passed as `${repo}-${ticket}`.
-- **`.captain/` never reaches a diff**: `start` appends it to `.git/info/exclude`; it is also the membership marker `surface.ts` filters by.
-- **Tests must not touch the real `$HOME`**: set `CAPTAIN_HOME`, `CAPTAIN_MEMORY_DIR` and `CAPTAIN_CONFIG` to temp paths and use a fake `CmuxPort` (no mocking library).
-- **Pipeline order is correctness**: `/tidy` (review and fix in one pass) runs before `/pr-creator`. Pinned in `config.test.ts`.
-- **A pipeline step is a `/skill` token or plain English**; plain English is how a step becomes conditional. Don't add a condition DSL.
-- **Skills config is fail-safe**: `loadSkills` never throws; `"$defaults"` expands in place, and a non-empty list without it replaces the defaults.
-- **No daemon, ever**: no watcher, pidfile or `state.json`; derive from cmux + the filesystem. `status --watch` is a foreground re-render, not a violation.
-- **Behaviour parity**: `start` must preserve every mode — Linear fan-out, single Linear issue, donebear task (URL or bare UUID, fannable alongside Linear ids), free-form current-dir dispatch, `--repo-path`, the bare-token form, and `--print` for each. A blocked fan-out issue is skipped; a single blocked issue errors; `--print`/`--force` are unaffected.
-- **Only a gated claude run pauses for a plan**: claude runs with `--dangerously-skip-permissions` unless launched with `--gate`; only that gated run produces the `ExitPlanMode` gate. Don't wire `approve`/`reject` to codex.
-- **Claude `--name` is the ticket slug; messaging is not a control plane**: keep `cmux send`/`approve`/`reject` and fleet memory, not `SendMessage`/`ListAgents`.
-
-## Non-goals
-
-Decided boundaries; the reasoning and audits are in `docs/architecture.md` § Gotchas in full.
-
-- Anything from the AI-native SDLC playbook beyond the three plays already built (plan.md, plan contents, `gain.rework`): no `/security-review` step or criterion, SIEM streaming, egress/sandbox control, risk-tier enum, hooks/managed settings, LLM evals in CI, deploy/rollback tooling or per-environment autonomy (verifying in production after the human merge is in scope), captain-owned breach triggers, or Slack listeners.
-- Captain reads trackers; it never writes them. `IssueSource` gains no write verb.
-- No browser daemon and no graded UI criterion; browser checks are an opt-in `.skills` entry, kept out of `DEFAULT_SKILLS`.
+- **ESM, bundler resolution**: extensionless relative imports; `tsconfig` uses
+  `moduleResolution: "Bundler"` and tsdown bundles to `dist/`.
+- **PURE means no filesystem and no subprocess** (`node:crypto` is fine). The list in
+  `oxlint.config.ts` is the contract: `task.ts`, `board.ts`, `gate.ts`, `stats.ts`,
+  `captain/verdict.ts`, `rubric.ts`, `issue.ts`. A module documented as pure but missing there
+  is a rule nobody enforces.
+- **Status comes from evidence, never from an agent's word.** Don't add a path where a worker
+  can mark itself done. A verdict counts only when its `rubricHash` matches the rubric as it is
+  on disk now; a missing or garbage verdict or review reads as "none", never as a pass.
+- **A PR with no CI checks is NEEDS YOU, not green** (`rollup` returns `none`). CI is part of
+  done; a repo without it must never read as ready.
+- **A criterion has three states.** `na: true` means it cannot apply to this diff, with the
+  reason in `evidence`. It is neither a pass nor a failure. Don't add a fourth.
+- **Plan deviations are APPENDED under `## Deviations` in `.captain/plan.md`**, never merged in.
+  `.captain/` is excluded from git, so there is no history; rewriting would erase what was
+  approved.
+- **Memory headings are matched at LINE START** (`headingAt`), and `SKELETON` names no heading
+  in its prose and states no append policy (`prompt.ts` owns that). Both were real bugs.
+- **Never trust cmux's workspace status glyph.** The trusted signals are `cmux top` run-state
+  tags (`runStates`) and the feed's `resolved_at`.
+- **`feed.exit_plan.reply` takes `{request_id, mode}`**, where `request_id` is NOT the feed
+  item's `id`. Approve is `bypassPermissions` (the gated launch allows it), reject is `deny`.
+  Pinned by a wire test in `control.test.ts`; re-verify there after a cmux upgrade.
+- **The review workspace shares the worker's cwd**, so worker lookup is by workspace name
+  (the branch) first. Keep the `<branch>:review` naming in `reviewName`.
+- **Tests never touch real `$HOME`**: set `CAPTAIN_DIR` and `CAPTAIN_CONFIG` to temp paths.
+  `commands.test.ts` runs the real commands against a temp repo with an origin, a fake `cmux`
+  binary on PATH, and in-memory CmuxPort and GithubPort. No mocking library.
+- **The pipeline order is a correctness property.** `/tidy` (review plus fixes) runs before
+  `/pr-creator`, so the PR carries fixes, not findings. Pinned in `config.test.ts`.
+- **A pipeline step is a `/skill` token OR plain English.** Prose renders verbatim, which is
+  how a step becomes conditional. Don't add a condition DSL.
+- **Config is fail-safe**: `loadSkills`, `loadHarnessDefaults` and friends never throw. A bad
+  file degrades to defaults. `"$defaults"` expands in place inside `.skills`.
+- **No daemon.** The chat wakes itself (the skill's heartbeat) and every wake re-derives the
+  board. If you find yourself persisting progress, derive it instead. The only persisted state
+  is what a human or the chat decided: the task files and the log.
+- **Trackers are read-only.** `add` reads Linear or Done Bear; nothing writes back. If a
+  tracker needs updating, the chat or a worker does it with its own tools.
+- **Messaging between sessions is not a control plane.** Workers are steered with
+  `captain send` and gated with `approve`/`reject`, never Claude Code `SendMessage`.
+- **Harness flags are checked, not live-run.** Every flag `harnessCommand` emits was checked on
+  22 Sep 2026 against Claude Code 2.1.280 `--help`, Codex 0.156.0 `--help` and the Cursor CLI
+  parameter docs. After a harness upgrade, re-check its `--help` and update `cmux.test.ts`.
+- **Changesets gate PRs**: CI runs `pnpm exec changeset status --since origin/main`, and this is a
+  single-package repo, so every PR needs `pnpm changeset` (or `pnpm changeset add --empty` when
+  nothing ships).
+- **A config `bin` is a plain command name or path only** (`safeBin`): it lands unquoted at the
+  front of the launch line, so anything with spaces or shell characters falls back to the default.
 
 ## Env knobs
 
-| Variable | Purpose |
-|----------|---------|
-| `LINEAR_API_KEY` | Linear issue fetch + screenshots (download gated on the issue's source) |
-| `DONEBEAR_TOKEN` | donebear task fetch (`db_` key, read scope is enough) |
-| `CAPTAIN_HOME` | data home: `log.jsonl` + fleet memory base |
-| `CAPTAIN_MEMORY_DIR` | fleet memory override |
-| `CAPTAIN_OPENSPEC_HOME` | base of the per-repo OpenSpec homes (default `~/.claude/captain/openspec`) |
-| `CAPTAIN_SKILLS` | comma-separated pipeline steps, `$defaults` keeps the built-ins |
-| `CAPTAIN_DATA_SCOPE` | overrides the data-scope guardrail |
-| `CAPTAIN_MODEL` / `CAPTAIN_EFFORT` | agent `--model` (default `default`) / `--effort` (default `high`) |
-| `CAPTAIN_PLAN_GATE` | `1` starts claude in plan mode behind `approve` (set by `--gate`; default unattended) |
-| `CAPTAIN_AGENT` | `claude` (default) or `codex` |
-| `CAPTAIN_CONFIG` / `XDG_CONFIG_HOME` | config.json path / config dir |
-| `CAPTAIN_DEBUG=1`, `NO_COLOR` | stack traces, plain output |
+`CAPTAIN_DIR` (projects root, default `~/captain`) · `CAPTAIN_PROJECT` (default project) ·
+`CAPTAIN_CONFIG` (config.json path; default `$XDG_CONFIG_HOME/captain/config.json`) ·
+`CAPTAIN_SKILLS` (comma-separated pipeline, `$defaults` keeps the built-in steps) ·
+`CAPTAIN_DATA_SCOPE` (overrides the data-scope guardrail) · `LINEAR_API_KEY` · `DONEBEAR_TOKEN` ·
+`CAPTAIN_DEBUG=1` (stack traces) · `NO_COLOR`.
 
-`~/.config/captain/config.json` keys (all fail-safe): `.skills`, `.dataScope`, `.model`, `.effort`,
-`.agent`, `.openspecHome`, `.agentEnv` (merged over `DEFAULT_AGENT_ENV`, which caps vitest workers at 2).
+`config.json` keys (all fail-safe): `.skills` (string[]), `.dataScope` (string), `.agentEnv`
+(string map merged over the `VITEST_MAX_FORKS/THREADS=2` defaults; `""` drops a key),
+`.harness.<claude|codex|cursor>.model` / `.effort` / `.bin` (each harness's defaults; a task's own
+values win).
+
+## Verification
+
+CI runs changeset status, `lint`, `typecheck`, `test` and `build`; all pass on `main` (27 Sep 2026,
+202 tests), as does `check`. For a command or board change, also run the built CLI against a
+throwaway project so nothing touches `~/captain`:
+
+```bash
+T=$(mktemp -d); export CAPTAIN_DIR=$T/p CAPTAIN_CONFIG=$T/c.json
+node dist/cli.js init smoke --repo "$PWD" && node dist/cli.js add "Smoke" && node dist/cli.js status
+```
+
+`start`, `review`, `approve` and `send` need a live cmux, so `commands.test.ts` is their proof.
+`captain install` is a preflight for a user's machine, not this repo. There is no `pnpm doctor`,
+`pnpm verify`, or feature map. Gap: nothing live-runs a harness launch line or the cmux wire
+protocol, so an upgrade of either is caught only by the harness-flags gotcha above.

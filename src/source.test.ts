@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isIssueToken, sourceFor } from "./source";
+import { sourceFor } from "./source";
 
 const UUID = "35a2097c-a5c9-477f-b50c-d39b942567a9";
 
@@ -27,14 +27,5 @@ describe("sourceFor", () => {
   it("prepare() parses the token and binds the matching fetch", () => {
     const { parsed } = sourceFor(UUID)?.prepare(UUID) ?? {};
     expect(parsed?.displayId).toBe("db-35a2097c");
-  });
-});
-
-describe("isIssueToken", () => {
-  it("is true for any source's token, false for free-form work", () => {
-    expect(isIssueToken("TIG-430")).toBe(true);
-    expect(isIssueToken(UUID)).toBe(true);
-    expect(isIssueToken("tidy the readme")).toBe(false);
-    expect(isIssueToken("statsu")).toBe(false);
   });
 });
