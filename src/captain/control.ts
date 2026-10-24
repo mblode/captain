@@ -73,6 +73,8 @@ export interface CmuxPort {
   runStates(): Record<string, RunState>;
   // the visible text of a workspace's terminal (what `captain peek` shows)
   readScreen(workspaceId: string): string;
+  // one key event (e.g. "enter", "escape") into a workspace's terminal
+  pressKey(workspaceId: string, key: string): void;
 }
 
 // What a tag row's title says → our RunState.
@@ -172,6 +174,20 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
 
   notify: (title: string, body: string): void => {
     run("cmux", ["notify", "--title", title, "--body", body], { env });
+  },
+
+  pressKey: (workspaceId: string, key: string): void => {
+    try {
+      runRequired("cmux", ["send-key", "--workspace", workspaceId, key], {
+        env,
+      });
+    } catch (error) {
+      throw new CliError(
+        `failed to press ${key} in workspace ${workspaceId} via cmux: ${error instanceof Error ? error.message : String(error)}`,
+        EXIT.CMUX_UNREACHABLE,
+        "CMUX_UNREACHABLE"
+      );
+    }
   },
 
   // Is cmux up? Reuses the shared reachability probe (commandExists + `ping`).

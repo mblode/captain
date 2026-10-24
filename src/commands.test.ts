@@ -113,6 +113,7 @@ interface FakeCmux extends CmuxPort {
   feed: CmuxFeedItem[];
   sent: { id: string; text: string }[];
   replies: { requestId: string; approve: boolean }[];
+  pressed: { id: string; key: string }[];
 }
 
 const fakeCmux = (): FakeCmux => {
@@ -123,6 +124,10 @@ const fakeCmux = (): FakeCmux => {
     notify: () => {
       // not used by commands
     },
+    pressKey: (id, key) => {
+      port.pressed.push({ id, key });
+    },
+    pressed: [],
     reachable: () => true,
     readScreen: (id) => `screen of ${id}\nlast line`,
     replies: [],
@@ -218,14 +223,14 @@ describe("init and add", () => {
     expect(existsSync(join(p.dir, ".git"))).toBe(true);
   });
 
-  it("adds message tasks with sequential ids, defaulting to codex", async () => {
+  it("adds message tasks with sequential ids, defaulting to claude", async () => {
     await add("rebuild billing settings\nsame as old app", {}, world.deps);
     await add("fix login", { blockedBy: "t-1", harness: "cursor" }, world.deps);
     const [a, b] = listTasks(project()).toSorted((x, y) =>
       x.id.localeCompare(y.id)
     );
     expect(a).toMatchObject({
-      harness: "codex",
+      harness: "claude",
       id: "t-1",
       state: "todo",
       title: "rebuild billing settings",
@@ -259,7 +264,11 @@ describe("init and add", () => {
 
 describe("start", () => {
   it("makes a worktree, rubric and brief, and launches the harness in cmux", async () => {
-    await add("rebuild billing\n\n- [ ] plans render", {}, world.deps);
+    await add(
+      "rebuild billing\n\n- [ ] plans render",
+      { harness: "codex" },
+      world.deps
+    );
     await start(["t-1"], {}, world.deps);
     const t = findTask(project(), "t-1");
     expect(t.state).toBe("active");
@@ -334,7 +343,7 @@ describe("start", () => {
 
 describe("the loop after start", () => {
   const started = async (): Promise<string> => {
-    await add("rebuild billing", {}, world.deps);
+    await add("rebuild billing", { harness: "codex" }, world.deps);
     await start(["t-1"], {}, world.deps);
     return attach("t-1");
   };
@@ -613,6 +622,16 @@ describe("shared checkout with OpenSpec changes", () => {
       }
     );
     expect(row().gate).toMatchObject({ kind: "plan", replyId: "r-mine" });
+  });
+
+  it("approves a plan read off the screen with Enter, once the feed forgot it", async () => {
+    await launched();
+    world.cmux.readScreen = () =>
+      "Would you like to proceed?\n❯ 1. Yes, and bypass permissions\n  2. No";
+    expect(row().gate).toMatchObject({ kind: "plan", onScreen: true });
+    approve(ID, { ...shared, note: "scoped" }, world.deps);
+    expect(world.cmux.pressed).toEqual([{ id: "ws-shared", key: "enter" }]);
+    expect(world.cmux.replies).toEqual([]);
   });
 
   it("--all skips changes already started, and refuses a change that doesn't exist", async () => {

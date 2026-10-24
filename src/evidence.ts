@@ -7,7 +7,7 @@ import type { CmuxPort, CmuxWorkspace } from "./captain/control";
 import { parseSmoke } from "./captain/smoke";
 import { parseVerdict, verdictCounts } from "./captain/verdict";
 import { CliError, EXIT } from "./errors";
-import { pendingGate, sameCwd } from "./gate";
+import { pendingGate, sameCwd, screenGate } from "./gate";
 import type { GithubPort } from "./github";
 import type { Project } from "./project";
 import {
@@ -163,6 +163,11 @@ const evidenceFor = (
       ev.review = parseReview(
         readText(join(task.worktree, REVIEW_RELPATH)) ?? ""
       );
+    }
+    // The feed forgets a gate about two minutes after it lands, so a worker
+    // the feed shows nothing for gets its screen read for a menu instead.
+    if (worker && !ev.gate) {
+      ev.gate = screenGate(ports.cmux.readScreen(worker.id));
     }
     if (task.branch) {
       ev.pr = ports.github.pr(project.repo, task.branch);

@@ -75,7 +75,8 @@ wrong about half the time. Defaults:
 
 | Work | Harness, model |
 | --- | --- |
-| Routine implementation (the default) | `codex`, `gpt-6-sol` medium |
+| Routine implementation (the default) | `claude`, its default model, high |
+| Routine work you want on the other vendor | `codex`, `gpt-6-sol` medium |
 | Mechanical, high-volume changes (renames, ports, codemods) | `codex`, `gpt-6-luna` low |
 | UI and anything needing taste | `claude`, Sonnet 5 |
 | Narrow bugs, quick frontend fixes | `cursor`, Grok fast |
@@ -141,5 +142,10 @@ A verified PR (group `captain`, next `captain review <id>`) gets the other vendo
 - **A smoke failure is yours.** `needs-you` with "smoke test failed in production" means
   production disagrees: read `.captain/tasks/<id>/smoke.json`. The worker neither reverts
   nor archives.
+- **`not started <id>`** after `start` or `spec`: shell init read stdin and ate the typed
+  launch command (often fnm or nvm asking to install the repo's Node version). Fix the
+  shell, close the dead workspace, then start it again; rerunning first hits the same prompt.
+- **Workers join your cmux sidebar group.** Never close an apparent duplicate workspace:
+  it is likely the group's anchor.
 - **Worktrees stay after `done`.** Remove them when the human asks:
   `git worktree remove <path>`.

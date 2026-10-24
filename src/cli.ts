@@ -50,6 +50,7 @@ const deps: Deps = {
     cmux: realCmux(process.env),
     github: realGithub(process.env),
   }),
+  startTimeoutMs: 60_000,
   stdout: process.stdout,
 };
 
@@ -183,7 +184,10 @@ program
         json?: boolean;
       }
     ) => {
-      await start(ids, { ...common(), ...o }, deps);
+      const { unstarted } = await start(ids, { ...common(), ...o }, deps);
+      if (unstarted.length > 0) {
+        process.exitCode = EXIT.GENERIC;
+      }
     }
   );
 
@@ -195,6 +199,10 @@ program
   .argument("[ids...]", "OpenSpec change ids")
   .option("--all", "every active change not yet started, up to the WIP limit")
   .option("--root", "print the repo's OpenSpec home and exit")
+  .option(
+    "--repo-path <path>",
+    "the repo to run in (default: the current directory)"
+  )
   .option("--risk <level>", "low or escalate, for changes not yet a task")
   .option("--harness <name>", "claude, codex or cursor")
   .option("--model <id>", "model")
@@ -208,6 +216,7 @@ program
       o: {
         all?: boolean;
         root?: boolean;
+        repoPath?: string;
         risk?: string;
         harness?: string;
         model?: string;
@@ -217,7 +226,10 @@ program
         json?: boolean;
       }
     ) => {
-      await spec(ids, { ...common(), ...o }, deps);
+      const { unstarted } = await spec(ids, { ...common(), ...o }, deps);
+      if (unstarted.length > 0) {
+        process.exitCode = EXIT.GENERIC;
+      }
     }
   );
 

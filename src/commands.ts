@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { inProgress, openBlockers, sortRows } from "./board";
 import type { Row } from "./board";
@@ -17,6 +18,7 @@ import { CliError, EXIT } from "./errors";
 import { boardRows, isShared, reviewName } from "./evidence";
 import type { Ports } from "./evidence";
 import { renderBoard, renderGain, renderTaskLine } from "./format";
+import { screenPlanApprovable } from "./gate";
 import { ensureWorktree, gitCommonDir, sharedBranchOf } from "./git";
 import { openBlockers as issueBlockers, slugify } from "./issue";
 import { readMemoryExcerpt } from "./memory";
@@ -66,6 +68,9 @@ export interface Deps {
   stdout: NodeJS.WritableStream;
   ports: () => Ports;
   color: boolean;
+  // how long `start` waits for each claude worker's agent to appear; unset
+  // skips the check (the tests' fake cmux never runs an agent)
+  startTimeoutMs?: number;
 }
 
 interface Common {
@@ -114,9 +119,10 @@ const asRisk = (value: string | undefined): Risk | undefined => {
 };
 
 // An escalate task always runs in Claude Code plan mode: it is the one harness
-// with a stop the agent can't pass on its own.
+// with a stop the agent can't pass on its own. Claude is also the default:
+// it is the harness the fleet actually runs (codex and cursor are opt-in).
 const harnessFor = (risk: Risk, chosen: Harness | undefined): Harness =>
-  risk === "escalate" ? "claude" : (chosen ?? "codex");
+  risk === "escalate" ? "claude" : (chosen ?? "claude");
 
 export const init = (
   options: Common & {
@@ -515,11 +521,39 @@ const startOne = async (
   return { ...task, command };
 };
 
+// cmux types `--command` into the new shell before its init finishes, so a
+// startup prompt that reads stdin (fnm or nvm offering to install the repo's
+// Node version) can swallow the agent command and leave a bare shell that
+// looks started. Wait for each claude worker's `cmux top` tag; codex and
+// cursor carry no reliable tag, so they aren't checked.
+const unstartedWorkers = async (
+  cmux: Ports["cmux"],
+  names: string[],
+  timeoutMs: number,
+  intervalMs = 2000
+): Promise<string[]> => {
+  let pending = names;
+  const deadline = Date.now() + timeoutMs;
+  while (pending.length > 0) {
+    const runs = cmux.runStates();
+    const workspaces = cmux.listWorkspaces();
+    pending = pending.filter(
+      (name) =>
+        !workspaces.some((w) => w.name === name && w.id.toLowerCase() in runs)
+    );
+    if (pending.length === 0 || Date.now() >= deadline) {
+      break;
+    }
+    await sleep(intervalMs);
+  }
+  return pending;
+};
+
 export const start = async (
   ids: string[],
   options: StartOptions,
   deps: Deps
-): Promise<void> => {
+): Promise<{ unstarted: string[] }> => {
   if (ids.length === 0) {
     throw new CliError("pass the task id(s) to start", EXIT.USAGE, "NO_TASK");
   }
@@ -533,9 +567,21 @@ export const start = async (
       : boardRows(project, listTasks(project), deps.ports());
     started.push(await startOne(project, id, options, deps, rows));
   }
+  const nameOf = (t: Task): string => (isShared(project, t) ? t.id : t.branch);
+  const unstartedNames =
+    options.print || deps.startTimeoutMs === undefined
+      ? []
+      : await unstartedWorkers(
+          deps.ports().cmux,
+          started.filter((t) => t.harness === "claude").map(nameOf),
+          deps.startTimeoutMs
+        );
+  const unstarted = started
+    .filter((t) => unstartedNames.includes(nameOf(t)))
+    .map((t) => t.id);
   if (options.json) {
-    json(deps, { started });
-    return;
+    json(deps, { started, unstarted });
+    return { unstarted };
   }
   for (const t of started) {
     out(
@@ -545,6 +591,13 @@ export const start = async (
         : `started ${t.id} on ${t.harness}${t.model && t.model !== "default" ? ` (${t.model})` : ""} in ${t.worktree}`
     );
   }
+  for (const id of unstarted) {
+    out(
+      deps,
+      `not started ${id}: no agent in its workspace after ${Math.round((deps.startTimeoutMs ?? 0) / 1000)}s. If its screen shows the launch command above the first prompt, shell init read stdin and ate it (often fnm or nvm asking to install the repo's Node version). Fix the shell, close that workspace, then captain start ${id}`
+    );
+  }
+  return { unstarted };
 };
 
 // ---------------------------------------------------------------- spec
@@ -553,6 +606,8 @@ export interface SpecOptions extends StartOptions {
   all?: boolean;
   root?: boolean;
   risk?: string;
+  // the repo to run in, for a driver whose cwd is elsewhere (default: cwd)
+  repoPath?: string;
 }
 
 // The project an OpenSpec launch runs against: --project or $CAPTAIN_PROJECT,
@@ -564,10 +619,10 @@ const specProject = (options: SpecOptions, deps: Deps): Project => {
   if (options.project || deps.env.CAPTAIN_PROJECT) {
     return resolveProject(deps.env, options.project);
   }
-  const repo = mainRepoRoot(process.cwd(), deps.env);
+  const repo = mainRepoRoot(resolve(options.repoPath ?? "."), deps.env);
   if (!repo) {
     throw new CliError(
-      "not inside a git repo: run from the repo, or pass --project",
+      "not inside a git repo: run from the repo, or pass --repo-path or --project",
       EXIT.USAGE,
       "NO_PROJECT"
     );
@@ -631,12 +686,12 @@ export const spec = async (
   ids: string[],
   options: SpecOptions,
   deps: Deps
-): Promise<void> => {
+): Promise<{ unstarted: string[] }> => {
   const project = specProject(options, deps);
   const home = openspecHome(project.repo, deps.env);
   if (options.root) {
     out(deps, home);
-    return;
+    return { unstarted: [] };
   }
   const tasks = listTasks(project);
   const wanted = options.all
@@ -682,15 +737,17 @@ export const spec = async (
       : startable.length;
   const starting = startable.slice(0, room);
   const waiting = wanted.filter((id) => !starting.includes(id));
-  if (starting.length > 0) {
-    await start(starting, { ...options, project: project.name }, deps);
-  }
+  const result =
+    starting.length > 0
+      ? await start(starting, { ...options, project: project.name }, deps)
+      : { unstarted: [] };
   if (waiting.length > 0 && !options.json) {
     out(
       deps,
       `queued ${waiting.join(", ")} (blocked or past the WIP limit of ${project.wip}): captain spec --all again once one ships`
     );
   }
+  return result;
 };
 
 // ---------------------------------------------------------------- status
@@ -750,7 +807,7 @@ const workerOf = (row: Row): string => {
   return row.workspaceId;
 };
 
-const planGate = (row: Row): string => {
+const planGate = (row: Row): void => {
   if (row.gate?.kind !== "plan") {
     throw new CliError(
       `task ${row.id} has no plan waiting for approval`,
@@ -758,7 +815,28 @@ const planGate = (row: Row): string => {
       "NO_PLAN_GATE"
     );
   }
-  return row.gate.replyId ?? "";
+};
+
+// Answer a plan gate: through the feed, or with a keypress on the menu when
+// the gate was read off the screen. Enter takes the highlighted approval, so
+// it is pressed only when that is the bypass-permissions option; Escape
+// declines and leaves the agent in plan mode at its prompt.
+const replyToPlan = (row: Row, approved: boolean, ports: Ports): void => {
+  planGate(row);
+  const { cmux } = ports;
+  if (!row.gate?.onScreen) {
+    cmux.replyExitPlan(row.gate?.replyId ?? "", approved);
+    return;
+  }
+  const worker = workerOf(row);
+  if (approved && !screenPlanApprovable(cmux.readScreen(worker))) {
+    throw new CliError(
+      `the plan menu for ${row.id} has no highlighted "Yes, and bypass permissions" option, so nothing was approved. Answer it in the workspace (captain peek ${row.id})`,
+      EXIT.GENERIC,
+      "PLAN_MENU_UNRECOGNISED"
+    );
+  }
+  cmux.pressKey(worker, approved ? "enter" : "escape");
 };
 
 export const approve = (
@@ -768,7 +846,7 @@ export const approve = (
 ): void => {
   const project = resolveProject(deps.env, options.project);
   const row = rowFor(project, id, deps);
-  deps.ports().cmux.replyExitPlan(planGate(row), true);
+  replyToPlan(row, true, deps.ports());
   appendLog(
     { kind: "approve", name: row.id, note: options.note, ts: now() },
     logDir(project)
@@ -787,11 +865,11 @@ export const reject = (
 ): void => {
   const project = resolveProject(deps.env, options.project);
   const row = rowFor(project, id, deps);
-  const { cmux } = deps.ports();
-  cmux.replyExitPlan(planGate(row), false);
+  const ports = deps.ports();
+  replyToPlan(row, false, ports);
   // Denying the plan returns the agent to planning; the feedback is what it
   // re-plans against.
-  cmux.send(workerOf(row), options.note);
+  ports.cmux.send(workerOf(row), options.note);
   appendLog(
     { kind: "reject", name: row.id, note: options.note, ts: now() },
     logDir(project)

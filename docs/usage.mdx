@@ -16,7 +16,10 @@ The chat turns each message into tasks, shows you one card with the harness and 
 The chat runs these for you. They all take `--json`, and `--project <name>` when you have more than one project.
 
 ```bash
-captain init rebuild --repo ~/code/app --wip 4   # a project: task folder + repo + WIP limit
+captain init rebuild --repo ~/code/app --wip 4   # a project: task folder + repo + WIP limit (shared checkout)
+captain init rebuild --repo ~/code/app --worktrees   # or: a worktree, branch and PR per task
+captain spec add-dark-mode                       # start an OpenSpec change (from the repo)
+captain spec --all                               # every active change not yet started
 captain add "rebuild billing settings"           # a task from a message
 captain add TIG-430                              # a task from a Linear or Done Bear ticket
 captain add "migrate users" --risk escalate      # plan approval before any code
@@ -37,6 +40,16 @@ Each task is `~/captain/<project>/tasks/<id>.md`: frontmatter (`state`, `risk`, 
 
 `start` refuses a task whose `blockedBy` tasks aren't done, and refuses once the number of tasks in progress reaches the WIP limit. Every started task is a PR you'll review, so the limit is your review capacity, not the machine's. `--force` overrides both.
 
+## Shared checkout or worktrees
+
+A project is `shared` by default. Every worker runs in the repo's own checkout on its current branch, commits only its own files with an `[<id>]` tag, and pushes to that branch. There is no PR per task: you merge the branch, and then each worker waits for the deploy, runs the task's `## Smoke test` checks in production and records the result in `.captain/tasks/<id>/smoke.json`. Keep tasks that run together on different files.
+
+`captain init --worktrees` gives each task its own worktree, branch and PR instead, with CI and the other vendor's review before READY TO MERGE.
+
+## OpenSpec changes
+
+A repo can keep its backlog as OpenSpec changes in an OpenSpec home outside the repo (`captain spec --root` prints it). `captain spec <id>` turns a change into a task (proposal, design and spec paths as the contract, `tasks.md`'s open boxes as the criteria, its `## Smoke test` boxes as the production checks) and starts it. Run from a repo with no project yet, it creates a shared one. The worker ticks boxes in the home's `tasks.md` and archives the change once its smoke test passes.
+
 ## The board
 
 `captain status` is derived fresh on every call, from cmux (which workspace, busy or idle, a pending plan or question), GitHub (the PR and its CI), and the worktree's `.captain/` files. Nothing is stored, so there is no daemon to restart and nothing to go stale.
@@ -44,11 +57,11 @@ Each task is `~/captain/<project>/tasks/<id>.md`: frontmatter (`state`, `risk`, 
 | Group | Meaning |
 | --- | --- |
 | NEEDS YOU | a plan to approve, a question, a failed verifier, or a PR with no CI |
-| READY TO MERGE | CI green, the verifier passed, the other vendor's review passed |
+| READY TO MERGE | worktree: CI green, the verifier passed, the other vendor's review passed. Shared: the verifier passed and the commits are on the branch |
 | CAPTAIN'S MOVE | the chat has the next step: request a review, send back findings, restart a worker |
-| WORKING | an agent is busy, CI is running, or a review is under way |
+| WORKING | an agent is busy, CI is running, a review is under way, or a shared task is merged and checking production |
 | QUEUED / BLOCKED | not started yet |
-| MERGED | waiting for `captain done` |
+| MERGED | merged (shared: and verified in production), waiting for `captain done` |
 
 ## What a worker does
 

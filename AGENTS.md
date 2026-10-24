@@ -87,9 +87,20 @@ tasks.md's open boxes. A `## Smoke test` section in any task body is split off b
 `smokeOf`: those checks render after `## Verdict` in the rubric, outside the hash, and
 never become criteria.
 
+**Launch extras.** `openWorkspace` puts every worker in the driver's cmux sidebar group
+(`CMUX_WORKSPACE_ID`; an ungrouped driver anchors a new group named after it; any failure
+launches ungrouped). After launching, `start` waits up to `Deps.startTimeoutMs` (60 s from
+the CLI, unset in tests) for each claude worker's `cmux top` tag and reports `not started
+<id>` (exit 1) for any that never appears: shell init that reads stdin (fnm or nvm offering
+to install the repo's Node) swallows the typed launch command. When the feed shows no gate
+for a worker, its screen is read for Claude's plan or question menu (`screenGate`): cmux
+expires an unanswered feed item after about two minutes. A screen plan gate is approved with
+Enter only when the highlighted option is "Yes, and bypass permissions"
+(`screenPlanApprovable`), and rejected with Escape.
+
 **Start.** Refuses a closed task, a task with a live worker, an open blocker, and a start past
 the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last two. Then:
-`ensureWorktree` (`<parent>/<repo>-<id>` on branch `<id>-<slug>`), `.captain/rubric.md`,
+`ensureWorktree` (`<parent>/<repo>-<id>` on branch `<id>-<slug>`, or the shared checkout), `.captain/rubric.md`,
 `.captain/brief.md`, `.captain/` appended to `.git/info/exclude`, and `cmux new-workspace` named
 after the branch running `harnessCommand`. An `escalate` task always runs on Claude in plan mode
 (`--permission-mode plan --allow-dangerously-skip-permissions`); everything else runs unattended
