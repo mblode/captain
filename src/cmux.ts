@@ -61,8 +61,11 @@ export interface LaunchSpec {
   gated: boolean;
   // env every tool the agent runs inherits (test pool caps, CAPTAIN_SLOT)
   env: Record<string, string>;
-  // the session name claude shows (the branch)
+  // the session name claude shows (the branch, or the task id when shared)
   name?: string;
+  // claude's fixed session id: in a shared checkout every worker has the same
+  // cwd, so this is how a feed gate is matched to its task
+  sessionId?: string;
   // run first in the workspace, before the agent (the project's bootstrap)
   bootstrap?: string;
 }
@@ -102,13 +105,95 @@ export const harnessCommand = (spec: LaunchSpec): string => {
     agent = `${prefix}${spec.bin} ${modelFlag("--model", spec.model)}--force ${prompt}`;
   } else {
     const name = spec.name ? `--name ${shellQuote(spec.name)} ` : "";
+    const session = spec.sessionId
+      ? `--session-id ${shellQuote(spec.sessionId)} `
+      : "";
     const effort = spec.effort ? `--effort ${shellQuote(spec.effort)} ` : "";
     const mode = spec.gated
       ? "--permission-mode plan --allow-dangerously-skip-permissions"
       : "--dangerously-skip-permissions";
-    agent = `${prefix}${spec.bin} ${name}${modelFlag("--model", spec.model)}${effort}${mode} ${prompt}`;
+    agent = `${prefix}${spec.bin} ${name}${session}${modelFlag("--model", spec.model)}${effort}${mode} ${prompt}`;
   }
   return spec.bootstrap ? `(${spec.bootstrap}) && ${agent}` : agent;
+};
+
+// The id of the sidebar group holding `workspaceId`, from
+// `workspace-group list --json --id-format both`. Garbage reads as "no group"
+// so launch never fails on cosmetics.
+export const groupContaining = (
+  listJson: string,
+  workspaceId: string
+): string | undefined => {
+  try {
+    const parsed = JSON.parse(listJson) as {
+      groups?: { id?: string; member_workspace_ids?: string[] }[];
+    };
+    const target = workspaceId.toUpperCase();
+    return parsed.groups?.find((group) =>
+      group.member_workspace_ids?.some((id) => id.toUpperCase() === target)
+    )?.id;
+  } catch {
+    return undefined;
+  }
+};
+
+const workspaceTitle = (
+  workspaceId: string,
+  env: NodeJS.ProcessEnv
+): string | undefined => {
+  const raw = run("cmux", ["rpc", "workspace.list"], { env });
+  try {
+    const parsed = JSON.parse(raw.stdout) as {
+      workspaces?: { id?: string; title?: string }[];
+    };
+    return parsed.workspaces?.find(
+      (w) => w.id?.toUpperCase() === workspaceId.toUpperCase()
+    )?.title;
+  } catch {
+    return undefined;
+  }
+};
+
+// Launched agents join the driver's sidebar group, so a fleet collapses under
+// the session that started it. An ungrouped driver becomes the anchor of a new
+// group named after it. Outside cmux (no CMUX_WORKSPACE_ID) nothing is grouped.
+// Best-effort: any failure still launches the workspace, just ungrouped.
+const driverGroup = (env: NodeJS.ProcessEnv): string | undefined => {
+  const driver = env.CMUX_WORKSPACE_ID;
+  if (!driver) {
+    return undefined;
+  }
+  const list = run(
+    "cmux",
+    ["workspace-group", "list", "--json", "--id-format", "both"],
+    { env }
+  );
+  const existing =
+    list.status === 0 ? groupContaining(list.stdout, driver) : undefined;
+  if (existing) {
+    return existing;
+  }
+  const title = workspaceTitle(driver, env);
+  const created = run(
+    "cmux",
+    [
+      "workspace-group",
+      "create",
+      "--from",
+      driver,
+      ...(title ? ["--name", title] : []),
+      "--json",
+      "--id-format",
+      "both",
+    ],
+    { env }
+  );
+  try {
+    return (JSON.parse(created.stdout) as { group?: { id?: string } }).group
+      ?.id;
+  } catch {
+    return undefined;
+  }
 };
 
 export const openWorkspace = (options: {
@@ -117,6 +202,7 @@ export const openWorkspace = (options: {
   command: string;
   env: NodeJS.ProcessEnv;
 }): void => {
+  const group = driverGroup(options.env);
   runRequired(
     "cmux",
     [
@@ -129,6 +215,7 @@ export const openWorkspace = (options: {
       options.command,
       "--focus",
       "false",
+      ...(group ? ["--group", group] : []),
     ],
     { env: options.env }
   );

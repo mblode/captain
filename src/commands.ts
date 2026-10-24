@@ -1,5 +1,7 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { inProgress, openBlockers, sortRows } from "./board";
 import type { Row } from "./board";
@@ -13,12 +15,14 @@ import {
   REVIEW_EFFORT,
 } from "./config";
 import { CliError, EXIT } from "./errors";
-import { boardRows, reviewName } from "./evidence";
+import { boardRows, isShared, reviewName } from "./evidence";
 import type { Ports } from "./evidence";
 import { renderBoard, renderGain, renderTaskLine } from "./format";
-import { ensureWorktree, gitCommonDir } from "./git";
+import { screenPlanApprovable } from "./gate";
+import { ensureWorktree, gitCommonDir, sharedBranchOf } from "./git";
 import { openBlockers as issueBlockers, slugify } from "./issue";
 import { readMemoryExcerpt } from "./memory";
+import { isChange, listChanges, openspecHome, readChange } from "./openspec";
 import {
   commit,
   findTask,
@@ -26,18 +30,21 @@ import {
   learningsPath,
   listTasks,
   logDir,
+  mainRepoRoot,
+  projectForRepo,
   resolveProject,
   taskExists,
   writeTask,
 } from "./project";
-import type { Project } from "./project";
+import type { Checkout as CheckoutMode, Project } from "./project";
 import { renderPrompt, renderPromptExtras, renderReviewPrompt } from "./prompt";
 import {
-  BRIEF_RELPATH,
   renderRubric,
   REVIEW_RELPATH,
-  RUBRIC_RELPATH,
+  sharedStateDir,
+  statePaths,
 } from "./rubric";
+import type { Shared } from "./rubric";
 import { sourceFor } from "./source";
 import { computeGain } from "./stats";
 import {
@@ -47,6 +54,7 @@ import {
   otherVendor,
   parseList,
   RISKS,
+  smokeOf,
   titleFromMessage,
 } from "./task";
 import type { Harness, Risk, Task } from "./task";
@@ -60,6 +68,9 @@ export interface Deps {
   stdout: NodeJS.WritableStream;
   ports: () => Ports;
   color: boolean;
+  // how long `start` waits for each claude worker's agent to appear; unset
+  // skips the check (the tests' fake cmux never runs an agent)
+  startTimeoutMs?: number;
 }
 
 interface Common {
@@ -108,9 +119,10 @@ const asRisk = (value: string | undefined): Risk | undefined => {
 };
 
 // An escalate task always runs in Claude Code plan mode: it is the one harness
-// with a stop the agent can't pass on its own.
+// with a stop the agent can't pass on its own. Claude is also the default:
+// it is the harness the fleet actually runs (codex and cursor are opt-in).
 const harnessFor = (risk: Risk, chosen: Harness | undefined): Harness =>
-  risk === "escalate" ? "claude" : (chosen ?? "codex");
+  risk === "escalate" ? "claude" : (chosen ?? "claude");
 
 export const init = (
   options: Common & {
@@ -118,12 +130,14 @@ export const init = (
     repo: string;
     wip?: number;
     bootstrap?: string;
+    checkout?: CheckoutMode;
   },
   deps: Deps
 ): void => {
   const project = initProject(deps.env, options);
   if (options.json) {
     json(deps, {
+      checkout: project.checkout,
       dir: project.dir,
       name: project.name,
       repo: project.repo,
@@ -133,7 +147,7 @@ export const init = (
   }
   out(
     deps,
-    `created ${project.dir}\n  repo ${project.repo}\n  wip  ${project.wip}`
+    `created ${project.dir}\n  repo     ${project.repo}\n  checkout ${project.checkout}\n  wip      ${project.wip}`
   );
 };
 
@@ -274,21 +288,31 @@ const issueOf = (task: Task): Issue => ({
   title: task.title,
 });
 
+// A task added by `captain spec` names its OpenSpec change in `source`.
+const OPENSPEC_SOURCE = "openspec:";
+
 const briefFor = (
   project: Project,
   task: Task,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  shared?: Shared
 ): string => {
   const memoryPath = learningsPath(project);
+  const rubricPath = statePaths(shared).rubric;
   return (
-    renderPrompt(task) +
+    renderPrompt(task, rubricPath) +
     renderPromptExtras({
       dataScope: loadDataScope(env),
       gated: task.risk === "escalate",
       harness: task.harness,
+      id: task.id,
       memory: readMemoryExcerpt(memoryPath),
       memoryPath,
-      rubricPath: RUBRIC_RELPATH,
+      openspecHome: task.source.startsWith(OPENSPEC_SOURCE)
+        ? openspecHome(project.repo, env)
+        : undefined,
+      rubricPath,
+      shared,
       skills: loadSkills(env),
       workflow: true,
     })
@@ -302,18 +326,46 @@ const requireCmux = (env: NodeJS.ProcessEnv): void => {
   }
 };
 
-// Start one task: a worktree off the project repo, its rubric and brief, and a
-// full harness in its own cmux workspace. Refuses a blocked task and refuses
-// past the WIP limit (unless --force), because every started task is a PR you
-// will have to review.
-const startOne = async (
+// Where a task runs: its own worktree and branch, or the project repo's checkout
+// on its current branch, with its captain files under its own state dir.
+interface Checkout {
+  cwd: string;
+  branch: string;
+  shared?: Shared;
+}
+
+const checkoutFor = async (
   project: Project,
-  id: string,
+  task: Task,
+  env: NodeJS.ProcessEnv
+): Promise<Checkout> => {
+  if (project.checkout === "shared") {
+    const { baseSha, branch } = sharedBranchOf(project.repo, env);
+    return {
+      branch,
+      cwd: project.repo,
+      shared: { baseSha, branch, stateDir: sharedStateDir(task.id) },
+    };
+  }
+  const worktree = await ensureWorktree({
+    env,
+    issueId: task.id,
+    repoRoot: project.repo,
+    slug: slugify(task.title),
+  });
+  return { branch: worktree.branch, cwd: worktree.worktreePath };
+};
+
+// Start one task: a worktree off the project repo (or the shared checkout), its
+// rubric and brief, and a full harness in its own cmux workspace. Refuses a
+// blocked task and refuses past the WIP limit (unless --force), because every
+// started task is work you will have to review.
+const refuseStart = (
+  project: Project,
+  task: Task,
   options: StartOptions,
-  deps: Deps,
   rows: Row[]
-): Promise<Task & { command: string }> => {
-  let task = findTask(project, id);
+): void => {
   const all = listTasks(project);
   if (task.state === "done" || task.state === "dropped") {
     throw new CliError(
@@ -350,6 +402,79 @@ const startOne = async (
       "WIP_LIMIT"
     );
   }
+};
+
+// Write a task's rubric, brief and session into its checkout, then open its
+// cmux workspace running the harness. Returns the launch command.
+const launch = async (
+  project: Project,
+  task: Task,
+  checkout: Checkout,
+  rows: Row[],
+  env: NodeJS.ProcessEnv
+): Promise<string> => {
+  const { shared } = checkout;
+  const paths = statePaths(shared);
+  await mkdir(join(checkout.cwd, shared?.stateDir ?? ".captain"), {
+    recursive: true,
+  });
+  if (shared) {
+    // A relaunch is a fresh run: the last run's plan, verdict and smoke test
+    // no longer apply.
+    for (const file of [paths.verdict, paths.plan, paths.smoke]) {
+      await rm(join(checkout.cwd, file), { force: true });
+    }
+  }
+  await writeFile(
+    join(checkout.cwd, paths.rubric),
+    renderRubric(
+      issueOf(task),
+      // A shared run's commits are tagged with the id as written, so the tag
+      // matches the OpenSpec change it may have come from.
+      shared ? task.id : task.id.toUpperCase(),
+      loadDataScope(env),
+      "Captain",
+      shared ? { ...shared, smoke: smokeOf(task.body) } : undefined
+    ).text
+  );
+  const promptPath = join(checkout.cwd, paths.brief);
+  await writeFile(promptPath, briefFor(project, task, env, shared));
+  await excludeCaptainDir(project.repo, env);
+  // Claude's fixed session id is how a shared worker's feed gates are told
+  // apart from its neighbours' (they all share one cwd).
+  const sessionId =
+    shared && task.harness === "claude" ? randomUUID() : undefined;
+  if (shared) {
+    await writeFile(join(checkout.cwd, paths.session), sessionId ?? "");
+  }
+  const name = shared ? task.id : checkout.branch;
+  const command = harnessCommand({
+    bin: loadHarnessDefaults(task.harness, env).bin,
+    // The bootstrap prepares a fresh worktree; in the shared checkout it would
+    // run once per worker, concurrently, in the same directory.
+    bootstrap: shared ? undefined : project.bootstrap,
+    effort: task.effort,
+    env: { ...loadAgentEnv(env), CAPTAIN_SLOT: String(inProgress(rows)) },
+    gated: task.risk === "escalate",
+    harness: task.harness,
+    model: task.model,
+    name,
+    promptPath,
+    sessionId,
+  });
+  openWorkspace({ command, cwd: checkout.cwd, env, name });
+  return command;
+};
+
+const startOne = async (
+  project: Project,
+  id: string,
+  options: StartOptions,
+  deps: Deps,
+  rows: Row[]
+): Promise<Task & { command: string }> => {
+  let task = findTask(project, id);
+  refuseStart(project, task, options, rows);
 
   const { risk } = task;
   const harness = harnessFor(risk, asHarness(options.harness) ?? task.harness);
@@ -361,56 +486,26 @@ const startOne = async (
     model: options.model ?? (task.model || defaults.model),
   };
 
-  const brief = briefFor(project, task, deps.env);
   if (options.print) {
-    return { ...task, command: brief };
+    const checkout =
+      project.checkout === "shared"
+        ? await checkoutFor(project, task, deps.env)
+        : undefined;
+    return {
+      ...task,
+      command: briefFor(project, task, deps.env, checkout?.shared),
+    };
   }
   requireCmux(deps.env);
 
-  const worktree = await ensureWorktree({
-    env: deps.env,
-    issueId: task.id,
-    repoRoot: project.repo,
-    slug: slugify(task.title),
-  });
-  await mkdir(join(worktree.worktreePath, ".captain"), { recursive: true });
-  await writeFile(
-    join(worktree.worktreePath, RUBRIC_RELPATH),
-    renderRubric(
-      issueOf(task),
-      task.id.toUpperCase(),
-      loadDataScope(deps.env),
-      "Captain"
-    ).text
-  );
-  const promptPath = join(worktree.worktreePath, BRIEF_RELPATH);
-  await writeFile(promptPath, brief);
-  await excludeCaptainDir(project.repo, deps.env);
-
-  const slot = String(inProgress(rows));
-  const command = harnessCommand({
-    bin: defaults.bin,
-    bootstrap: project.bootstrap,
-    effort: task.effort,
-    env: { ...loadAgentEnv(deps.env), CAPTAIN_SLOT: slot },
-    gated: risk === "escalate",
-    harness,
-    model: task.model,
-    name: worktree.branch,
-    promptPath,
-  });
-  openWorkspace({
-    command,
-    cwd: worktree.worktreePath,
-    env: deps.env,
-    name: worktree.branch,
-  });
+  const checkout = await checkoutFor(project, task, deps.env);
+  const command = await launch(project, task, checkout, rows, deps.env);
 
   task = {
     ...task,
-    branch: worktree.branch,
+    branch: checkout.branch,
     state: "active",
-    worktree: worktree.worktreePath,
+    worktree: checkout.cwd,
   };
   writeTask(project, task);
   appendLog(
@@ -426,11 +521,39 @@ const startOne = async (
   return { ...task, command };
 };
 
+// cmux types `--command` into the new shell before its init finishes, so a
+// startup prompt that reads stdin (fnm or nvm offering to install the repo's
+// Node version) can swallow the agent command and leave a bare shell that
+// looks started. Wait for each claude worker's `cmux top` tag; codex and
+// cursor carry no reliable tag, so they aren't checked.
+const unstartedWorkers = async (
+  cmux: Ports["cmux"],
+  names: string[],
+  timeoutMs: number,
+  intervalMs = 2000
+): Promise<string[]> => {
+  let pending = names;
+  const deadline = Date.now() + timeoutMs;
+  while (pending.length > 0) {
+    const runs = cmux.runStates();
+    const workspaces = cmux.listWorkspaces();
+    pending = pending.filter(
+      (name) =>
+        !workspaces.some((w) => w.name === name && w.id.toLowerCase() in runs)
+    );
+    if (pending.length === 0 || Date.now() >= deadline) {
+      break;
+    }
+    await sleep(intervalMs);
+  }
+  return pending;
+};
+
 export const start = async (
   ids: string[],
   options: StartOptions,
   deps: Deps
-): Promise<void> => {
+): Promise<{ unstarted: string[] }> => {
   if (ids.length === 0) {
     throw new CliError("pass the task id(s) to start", EXIT.USAGE, "NO_TASK");
   }
@@ -444,9 +567,21 @@ export const start = async (
       : boardRows(project, listTasks(project), deps.ports());
     started.push(await startOne(project, id, options, deps, rows));
   }
+  const nameOf = (t: Task): string => (isShared(project, t) ? t.id : t.branch);
+  const unstartedNames =
+    options.print || deps.startTimeoutMs === undefined
+      ? []
+      : await unstartedWorkers(
+          deps.ports().cmux,
+          started.filter((t) => t.harness === "claude").map(nameOf),
+          deps.startTimeoutMs
+        );
+  const unstarted = started
+    .filter((t) => unstartedNames.includes(nameOf(t)))
+    .map((t) => t.id);
   if (options.json) {
-    json(deps, { started });
-    return;
+    json(deps, { started, unstarted });
+    return { unstarted };
   }
   for (const t of started) {
     out(
@@ -456,6 +591,174 @@ export const start = async (
         : `started ${t.id} on ${t.harness}${t.model && t.model !== "default" ? ` (${t.model})` : ""} in ${t.worktree}`
     );
   }
+  for (const id of unstarted) {
+    out(
+      deps,
+      `not started ${id}: no agent in its workspace after ${Math.round((deps.startTimeoutMs ?? 0) / 1000)}s. If its screen shows the launch command above the first prompt, shell init read stdin and ate it (often fnm or nvm asking to install the repo's Node version). Fix the shell, close that workspace, then captain start ${id}`
+    );
+  }
+  return { unstarted };
+};
+
+// ---------------------------------------------------------------- spec
+
+export interface SpecOptions extends StartOptions {
+  all?: boolean;
+  root?: boolean;
+  risk?: string;
+  // the repo to run in, for a driver whose cwd is elsewhere (default: cwd)
+  repoPath?: string;
+}
+
+// The project an OpenSpec launch runs against: --project or $CAPTAIN_PROJECT,
+// else the project whose repo holds the current directory. Never the "only
+// project" fallback, which would launch one repo's changes in another. With
+// no project for this repo yet, one is created (shared checkout), so a repo
+// with OpenSpec changes needs no setup.
+const specProject = (options: SpecOptions, deps: Deps): Project => {
+  if (options.project || deps.env.CAPTAIN_PROJECT) {
+    return resolveProject(deps.env, options.project);
+  }
+  const repo = mainRepoRoot(resolve(options.repoPath ?? "."), deps.env);
+  if (!repo) {
+    throw new CliError(
+      "not inside a git repo: run from the repo, or pass --repo-path or --project",
+      EXIT.USAGE,
+      "NO_PROJECT"
+    );
+  }
+  const found = projectForRepo(deps.env, repo);
+  if (found) {
+    return found;
+  }
+  const project = initProject(deps.env, {
+    checkout: "shared",
+    name: basename(repo),
+    repo,
+  });
+  out(deps, `created project ${project.name} for ${repo}`);
+  return project;
+};
+
+// The task for an OpenSpec change. A new or not-yet-started task takes the
+// change folder's current text; a started one keeps the contract it ran with.
+const taskForChange = (
+  project: Project,
+  home: string,
+  id: string,
+  options: SpecOptions
+): Task => {
+  const { title, body } = readChange(home, id);
+  if (taskExists(project, id)) {
+    const existing = findTask(project, id);
+    if (existing.state !== "todo") {
+      return existing;
+    }
+    const refreshed = { ...existing, body, title };
+    writeTask(project, refreshed);
+    return refreshed;
+  }
+  const risk = asRisk(options.risk) ?? "low";
+  const task: Task = {
+    blockedBy: [],
+    body,
+    branch: "",
+    created: today(),
+    effort: options.effort ?? "",
+    harness: harnessFor(risk, asHarness(options.harness)),
+    id,
+    model: options.model ?? "",
+    risk,
+    source: `${OPENSPEC_SOURCE}${id}`,
+    state: "todo",
+    title,
+    worktree: "",
+  };
+  writeTask(project, task);
+  appendLog({ kind: "add", name: id, ts: now() }, logDir(project));
+  return task;
+};
+
+// Start OpenSpec changes: each becomes a task (see taskForChange) and starts
+// like any other. `--all` takes every active change that has no task in flight
+// or closed, up to the WIP limit; the rest wait for the next run.
+export const spec = async (
+  ids: string[],
+  options: SpecOptions,
+  deps: Deps
+): Promise<{ unstarted: string[] }> => {
+  // --root only prints where the changes live: it must not create a project.
+  const repoHere = mainRepoRoot(resolve(options.repoPath ?? "."), deps.env);
+  if (
+    options.root &&
+    repoHere &&
+    !options.project &&
+    !deps.env.CAPTAIN_PROJECT
+  ) {
+    out(deps, openspecHome(repoHere, deps.env));
+    return { unstarted: [] };
+  }
+  const project = specProject(options, deps);
+  const home = openspecHome(project.repo, deps.env);
+  if (options.root) {
+    out(deps, home);
+    return { unstarted: [] };
+  }
+  const tasks = listTasks(project);
+  const wanted = options.all
+    ? listChanges(home).filter((id) => {
+        const task = tasks.find((t) => t.id === id);
+        return !task || task.state === "todo";
+      })
+    : ids.map((id) => id.trim().toLowerCase());
+  if (wanted.length === 0) {
+    throw new CliError(
+      options.all
+        ? `no change to start in ${home}/openspec/changes`
+        : "pass the change id(s), or --all",
+      EXIT.USAGE,
+      "NO_CHANGE"
+    );
+  }
+  for (const id of wanted) {
+    if (!isChange(home, id)) {
+      throw new CliError(
+        `no OpenSpec change "${id}" in ${home}/openspec/changes`,
+        EXIT.USAGE,
+        "UNKNOWN_CHANGE"
+      );
+    }
+  }
+  for (const id of wanted) {
+    taskForChange(project, home, id, options);
+  }
+  commit(project, `spec ${wanted.join(", ")}`);
+  const startable = options.all
+    ? wanted.filter(
+        (id) => openBlockers(findTask(project, id), tasks).length === 0
+      )
+    : wanted;
+  const room =
+    options.all && !options.force && !options.print
+      ? Math.max(
+          0,
+          project.wip -
+            inProgress(boardRows(project, listTasks(project), deps.ports()))
+        )
+      : startable.length;
+  const starting = startable.slice(0, room);
+  const waiting = wanted.filter((id) => !starting.includes(id));
+  const result =
+    starting.length > 0
+      ? await start(starting, { ...options, project: project.name }, deps)
+      : { unstarted: [] };
+  if (waiting.length > 0 && !options.json) {
+    out(
+      deps,
+      `queued ${waiting.join(", ")} (blocked or past the WIP limit of ${project.wip}): captain spec --all again once one ships`
+    );
+  }
+  return result;
 };
 
 // ---------------------------------------------------------------- status
@@ -515,7 +818,7 @@ const workerOf = (row: Row): string => {
   return row.workspaceId;
 };
 
-const planGate = (row: Row): string => {
+const planGate = (row: Row): void => {
   if (row.gate?.kind !== "plan") {
     throw new CliError(
       `task ${row.id} has no plan waiting for approval`,
@@ -523,7 +826,28 @@ const planGate = (row: Row): string => {
       "NO_PLAN_GATE"
     );
   }
-  return row.gate.replyId ?? "";
+};
+
+// Answer a plan gate: through the feed, or with a keypress on the menu when
+// the gate was read off the screen. Enter takes the highlighted approval, so
+// it is pressed only when that is the bypass-permissions option; Escape
+// declines and leaves the agent in plan mode at its prompt.
+const replyToPlan = (row: Row, approved: boolean, ports: Ports): void => {
+  planGate(row);
+  const { cmux } = ports;
+  if (!row.gate?.onScreen) {
+    cmux.replyExitPlan(row.gate?.replyId ?? "", approved);
+    return;
+  }
+  const worker = workerOf(row);
+  if (approved && !screenPlanApprovable(cmux.readScreen(worker))) {
+    throw new CliError(
+      `the plan menu for ${row.id} has no highlighted "Yes, and bypass permissions" option, so nothing was approved. Answer it in the workspace (captain peek ${row.id})`,
+      EXIT.GENERIC,
+      "PLAN_MENU_UNRECOGNISED"
+    );
+  }
+  cmux.pressKey(worker, approved ? "enter" : "escape");
 };
 
 export const approve = (
@@ -533,7 +857,7 @@ export const approve = (
 ): void => {
   const project = resolveProject(deps.env, options.project);
   const row = rowFor(project, id, deps);
-  deps.ports().cmux.replyExitPlan(planGate(row), true);
+  replyToPlan(row, true, deps.ports());
   appendLog(
     { kind: "approve", name: row.id, note: options.note, ts: now() },
     logDir(project)
@@ -552,11 +876,11 @@ export const reject = (
 ): void => {
   const project = resolveProject(deps.env, options.project);
   const row = rowFor(project, id, deps);
-  const { cmux } = deps.ports();
-  cmux.replyExitPlan(planGate(row), false);
+  const ports = deps.ports();
+  replyToPlan(row, false, ports);
   // Denying the plan returns the agent to planning; the feedback is what it
   // re-plans against.
-  cmux.send(workerOf(row), options.note);
+  ports.cmux.send(workerOf(row), options.note);
   appendLog(
     { kind: "reject", name: row.id, note: options.note, ts: now() },
     logDir(project)
@@ -611,6 +935,13 @@ export const review = async (
   const project = resolveProject(deps.env, options.project);
   const row = rowFor(project, id, deps);
   const task = findTask(project, id);
+  if (isShared(project, task)) {
+    throw new CliError(
+      `task ${task.id} runs in the shared checkout and has no PR of its own to review`,
+      EXIT.USAGE,
+      "SHARED_TASK"
+    );
+  }
   if (!row.pr || row.pr.state !== "open") {
     throw new CliError(
       `task ${task.id} has no open PR to review`,
@@ -679,7 +1010,7 @@ export const close = (
   } else {
     out(
       deps,
-      `${state} ${task.id}${task.worktree ? `\n  remove the worktree when you're finished: git worktree remove ${task.worktree}` : ""}`
+      `${state} ${task.id}${task.worktree && !isShared(project, task) ? `\n  remove the worktree when you're finished: git worktree remove ${task.worktree}` : ""}`
     );
   }
 };

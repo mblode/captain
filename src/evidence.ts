@@ -4,17 +4,18 @@ import { join } from "node:path";
 import { rowOf } from "./board";
 import type { Evidence, Grade, Row } from "./board";
 import type { CmuxPort, CmuxWorkspace } from "./captain/control";
+import { parseSmoke } from "./captain/smoke";
 import { parseVerdict, verdictCounts } from "./captain/verdict";
 import { CliError, EXIT } from "./errors";
-import { pendingGate, sameCwd } from "./gate";
+import { pendingGate, sameCwd, screenGate } from "./gate";
 import type { GithubPort } from "./github";
 import type { Project } from "./project";
 import {
   REVIEW_RELPATH,
-  RUBRIC_RELPATH,
   rubricBody,
   rubricHash,
-  VERDICT_RELPATH,
+  sharedStateDir,
+  statePaths,
 } from "./rubric";
 import type { Task } from "./task";
 
@@ -35,14 +36,35 @@ const readText = (path: string): string | undefined => {
   }
 };
 
+// A task runs in the shared checkout when its "worktree" is the project repo
+// itself; its captain files then live under its own state dir.
+export const isShared = (project: Project, task: Task): boolean =>
+  Boolean(task.worktree) && task.worktree === project.repo;
+
+export const pathsOf = (
+  project: Project,
+  task: Task
+): ReturnType<typeof statePaths> =>
+  statePaths(
+    isShared(project, task) ? { stateDir: sharedStateDir(task.id) } : undefined
+  );
+
+// The worker's cmux workspace name: the branch in a worktree, the task id in
+// the shared checkout (where every worker is on the same branch).
+export const workerName = (project: Project, task: Task): string =>
+  isShared(project, task) ? task.id : task.branch;
+
 // The worker's verdict counts only if it cites the rubric as it exists NOW, so
 // editing the criteria after the fact voids it.
-export const readVerdict = (worktree: string): Grade | undefined => {
-  const verdict = parseVerdict(readText(join(worktree, VERDICT_RELPATH)) ?? "");
+export const readVerdict = (
+  checkout: string,
+  paths = statePaths()
+): Grade | undefined => {
+  const verdict = parseVerdict(readText(join(checkout, paths.verdict)) ?? "");
   if (!verdict) {
     return undefined;
   }
-  const rubric = readText(join(worktree, RUBRIC_RELPATH));
+  const rubric = readText(join(checkout, paths.rubric));
   const expected = rubric ? rubricHash(rubricBody(rubric)) : undefined;
   return verdictCounts(verdict, expected)
     ? { summary: verdict.summary, verdict: verdict.verdict }
@@ -68,20 +90,24 @@ export const parseReview = (text: string): Grade | undefined => {
 
 export const reviewName = (branch: string): string => `${branch}:review`;
 
-// The worker's workspace is named after the branch; the reviewer's after
-// `<branch>:review`. Matching by cwd is the fallback for a workspace someone
-// renamed.
+// The worker's workspace is named after the branch (the task id when
+// shared); the reviewer's after `<branch>:review`. Matching by cwd is the
+// fallback for a renamed worktree workspace, never for a shared one: every
+// shared worker has the same cwd.
 const workerOf = (
+  project: Project,
   task: Task,
   workspaces: CmuxWorkspace[]
 ): CmuxWorkspace | undefined =>
-  workspaces.find((w) => w.name === task.branch) ??
-  workspaces.find(
-    (w) =>
-      Boolean(task.worktree) &&
-      sameCwd(w.cwd, task.worktree) &&
-      w.name !== reviewName(task.branch)
-  );
+  workspaces.find((w) => w.name === workerName(project, task)) ??
+  (isShared(project, task)
+    ? undefined
+    : workspaces.find(
+        (w) =>
+          Boolean(task.worktree) &&
+          sameCwd(w.cwd, task.worktree) &&
+          w.name !== reviewName(task.branch)
+      ));
 
 const evidenceFor = (
   project: Project,
@@ -106,7 +132,7 @@ const evidenceFor = (
   const runs = ports.cmux.runStates();
   const feed = ports.cmux.feedList();
   for (const task of active) {
-    const worker = workerOf(task, workspaces);
+    const worker = workerOf(project, task, workspaces);
     const ev: Evidence = {
       reviewing: workspaces.some((w) => w.name === reviewName(task.branch)),
     };
@@ -116,12 +142,32 @@ const evidenceFor = (
         run: runs[worker.id.toLowerCase()] ?? "unknown",
       };
     }
-    if (task.worktree) {
+    const paths = pathsOf(project, task);
+    if (isShared(project, task)) {
+      const smoke = parseSmoke(
+        readText(join(task.worktree, paths.smoke)) ?? ""
+      );
+      ev.shared = {
+        branch: task.branch,
+        smoke: smoke ?? undefined,
+      };
+      ev.reviewing = false;
+      const session = readText(join(task.worktree, paths.session))?.trim();
+      // A shared worker without a session id (codex, cursor) has no feed gate
+      // captain can tell apart from its neighbours', so none is read.
+      ev.gate = session ? pendingGate(feed, task.worktree, session) : undefined;
+      ev.verdict = readVerdict(task.worktree, paths);
+    } else if (task.worktree) {
       ev.gate = pendingGate(feed, task.worktree);
       ev.verdict = readVerdict(task.worktree);
       ev.review = parseReview(
         readText(join(task.worktree, REVIEW_RELPATH)) ?? ""
       );
+    }
+    // The feed forgets a gate about two minutes after it lands, so a worker
+    // the feed shows nothing for gets its screen read for a menu instead.
+    if (worker && !ev.gate) {
+      ev.gate = screenGate(ports.cmux.readScreen(worker.id));
     }
     if (task.branch) {
       ev.pr = ports.github.pr(project.repo, task.branch);

@@ -55,11 +55,17 @@ describe("prompt extras", () => {
   // The plan gate is the human's one cheap chance to redirect a run, so both
   // agent variants must ask for the unknowns rather than just "a plan".
   it("asks the plan to lead with a named Decisions for the reviewer section", () => {
+    // Only claude can be gated. Ungated, nobody reads the plan first, so each
+    // unknown records the choice made instead of waiting on a reviewer.
     for (const harness of ["claude", "codex"] as Harness[]) {
       const out = renderPromptExtras({ gated: true, harness, workflow: true });
       expect(out).toContain("## Decisions for the reviewer");
       expect(out).toContain("at most five bullets");
-      expect(out).toContain("assumptions you had to make");
+      expect(out).toContain(
+        harness === "claude"
+          ? "assumptions you had to make"
+          : "the option you chose, and why"
+      );
       expect(out).toContain("Never resolve an ambiguity silently.");
       // the playbook's plan contract: what changes, in what order, proven how
       expect(out).toContain("name the files you will change");
@@ -165,6 +171,33 @@ describe("prompt extras", () => {
     const out = renderPromptExtras({ harness: "cursor", workflow: true });
     expect(out).not.toContain("AskUserQuestion");
     expect(out).toContain("print the question and");
+  });
+
+  it("gives a shared-checkout worker the branch rules and the production steps", () => {
+    const out = renderPromptExtras({
+      id: "add-x",
+      openspecHome: "/home/u/os/app",
+      rubricPath: ".captain/tasks/add-x/rubric.md",
+      shared: {
+        baseSha: "abc1234",
+        branch: "main",
+        stateDir: ".captain/tasks/add-x",
+      },
+      skills: ["/tidy", "/pr-creator", "/pr-babysitter"],
+      workflow: true,
+    });
+    expect(out).toContain("<shared-branch>");
+    expect(out).toContain('git commit -m "[add-x] <summary>" -- <paths>');
+    expect(out).toContain("git push origin main");
+    expect(out).toContain("/home/u/os/app/openspec/changes/add-x/tasks.md");
+    expect(out).toContain(".captain/tasks/add-x/plan.md");
+    expect(out).toContain("done means verified in production");
+    expect(out).toContain(".captain/tasks/add-x/smoke.json");
+    expect(out).toContain("openspec archive add-x --yes");
+    // no PR exists, so the PR steps drop out of the pipeline
+    expect(out).toContain("3. Run /tidy.");
+    expect(out).not.toContain("/pr-creator");
+    expect(out).not.toContain("/pr-babysitter");
   });
 
   it("renders the finishing protocol around the rubric path", () => {

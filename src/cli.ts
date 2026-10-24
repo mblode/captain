@@ -15,6 +15,7 @@ import {
   reject,
   review,
   send,
+  spec,
   start,
   status,
 } from "./commands";
@@ -49,6 +50,7 @@ const deps: Deps = {
     cmux: realCmux(process.env),
     github: realGithub(process.env),
   }),
+  startTimeoutMs: 60_000,
   stdout: process.stdout,
 };
 
@@ -96,21 +98,32 @@ program
   .command("init")
   .description("create a project: a task folder tied to one repo")
   .argument("<name>", "project name")
-  .requiredOption("--repo <path>", "the product repo worktrees branch from")
+  .requiredOption("--repo <path>", "the product repo")
+  .option(
+    "--worktrees",
+    "give each task its own worktree, branch and PR (default: every worker shares the repo's checkout and branch)"
+  )
   .option("--wip <n>", "max tasks in progress at once (default 4)")
   .option(
     "--bootstrap <cmd>",
-    "shell command run in each new worktree before the agent"
+    "shell command run in each new worktree before the agent (--worktrees only)"
   )
   .option("--json", "emit JSON")
   .action(
     (
       name: string,
-      o: { repo: string; wip?: string; bootstrap?: string; json?: boolean }
+      o: {
+        repo: string;
+        worktrees?: boolean;
+        wip?: string;
+        bootstrap?: string;
+        json?: boolean;
+      }
     ) => {
       init(
         {
           bootstrap: o.bootstrap,
+          checkout: o.worktrees ? "worktree" : "shared",
           json: o.json,
           name,
           repo: o.repo,
@@ -171,7 +184,52 @@ program
         json?: boolean;
       }
     ) => {
-      await start(ids, { ...common(), ...o }, deps);
+      const { unstarted } = await start(ids, { ...common(), ...o }, deps);
+      if (unstarted.length > 0) {
+        process.exitCode = EXIT.GENERIC;
+      }
+    }
+  );
+
+program
+  .command("spec")
+  .description(
+    "start OpenSpec change(s) from the repo's OpenSpec home (outside the repo) as tasks"
+  )
+  .argument("[ids...]", "OpenSpec change ids")
+  .option("--all", "every active change not yet started, up to the WIP limit")
+  .option("--root", "print the repo's OpenSpec home and exit")
+  .option(
+    "--repo-path <path>",
+    "the repo to run in (default: the current directory)"
+  )
+  .option("--risk <level>", "low or escalate, for changes not yet a task")
+  .option("--harness <name>", "claude, codex or cursor")
+  .option("--model <id>", "model")
+  .option("--effort <level>", "effort")
+  .option("--force", "start even if blocked or over the WIP limit")
+  .option("--print", "print the brief without launching anything")
+  .option("--json", "emit JSON")
+  .action(
+    async (
+      ids: string[],
+      o: {
+        all?: boolean;
+        root?: boolean;
+        repoPath?: string;
+        risk?: string;
+        harness?: string;
+        model?: string;
+        effort?: string;
+        force?: boolean;
+        print?: boolean;
+        json?: boolean;
+      }
+    ) => {
+      const { unstarted } = await spec(ids, { ...common(), ...o }, deps);
+      if (unstarted.length > 0) {
+        process.exitCode = EXIT.GENERIC;
+      }
     }
   );
 

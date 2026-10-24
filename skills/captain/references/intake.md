@@ -33,13 +33,24 @@ the task list yet. Treat them as messages: card first, start after a yes.
 2. Slice vertically. Each task is a thin path through every layer it touches, demoable
    on main alone, and small enough for one fresh context window.
 3. A blocker is a task whose absence makes this one impossible to build or verify.
-   "Touches the same files" is not a blocker. Keep the graph shallow: most tasks
-   unblocked, one chain where the dependency is real.
+   Overlapping writes also need scheduling: in a shared checkout, give each file one
+   owner or run those tasks sequentially. Do not dispatch concurrent writers to the
+   same files. Keep the dependency graph shallow and distinguish data dependencies
+   from ownership constraints in the task briefs.
 4. A wide mechanical change (a rename across the codebase) is expand, then migrate in
    batches, then contract. Three or more tasks, each green on its own.
 5. Put setup work first as its own task: make the change easy, then make the easy change.
 6. Present the whole slice list as one card: title, blocked by, what works when it
    closes, harness and model. Iterate until the human approves, then add them all.
+
+## Changes to active scope
+
+Before telling a worker to hold or omit a feature, compare the decision with its task
+contract and generated rubric. Name any affected criteria and get the contract owner's
+decision before further implementation or final verification. Do not tell the worker to
+pass an unchanged criterion for a feature it was told not to build. The worker records
+the blocker; it does not rewrite its rubric. A changed contract requires a regenerated
+rubric and fresh grading, not reuse of the old passing verdict.
 
 ## Risk
 

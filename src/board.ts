@@ -4,6 +4,7 @@
 // can't drift from reality, and a crashed chat loses nothing.
 
 import type { RunState } from "./captain/control";
+import type { Smoke } from "./captain/smoke";
 import type { Gate } from "./gate";
 import type { Task } from "./task";
 
@@ -55,6 +56,9 @@ export interface Evidence {
   review?: Grade;
   // is a review workspace open right now
   reviewing?: boolean;
+  // the task runs in the shared checkout: no PR of its own, and done means
+  // verified in production (its smoke result)
+  shared?: { branch: string; smoke?: Pick<Smoke, "status" | "summary"> };
 }
 
 export interface Row {
@@ -75,6 +79,7 @@ export interface Row {
   pr?: PullRequest;
   verdict?: Grade;
   review?: Grade;
+  smoke?: Smoke["status"];
 }
 
 // A blocker is open unless it names a task in this project that is done or
@@ -171,8 +176,62 @@ const openPrDecision = (
   };
 };
 
+// The grouping rule for a task in the shared checkout. Its commits go straight
+// to the shared branch, so the branch's PR says nothing about this task alone:
+// the verdict and the smoke result do. The first match wins.
+const sharedRow = (
+  id: string,
+  ev: Evidence,
+  shared: NonNullable<Evidence["shared"]>
+): Decision => {
+  const peek = `captain peek ${id}`;
+  const human = waitingOnHuman(id, ev);
+  if (human) {
+    return human;
+  }
+  const { smoke } = shared;
+  if (smoke?.status === "fail") {
+    return {
+      group: "needs-you",
+      next: peek,
+      why: `smoke test failed in production: ${smoke.summary}`,
+    };
+  }
+  if (smoke?.status === "pass") {
+    return {
+      group: "merged",
+      next: `captain done ${id}`,
+      why: "merged and verified in production",
+    };
+  }
+  if (smoke?.status === "running") {
+    return { group: "working", next: peek, why: "merged, checking production" };
+  }
+  if (ev.verdict?.verdict === "pass") {
+    return {
+      group: "ready",
+      next:
+        ev.pr?.state === "open"
+          ? `gh pr merge ${ev.pr.url}`
+          : `gh pr create --head ${shared.branch}`,
+      why: `verified and pushed to ${shared.branch}, waiting for your merge`,
+    };
+  }
+  if (!ev.workspace) {
+    return {
+      group: "captain",
+      next: `captain start ${id}`,
+      why: "no worker running and no verdict",
+    };
+  }
+  return { group: "working", next: peek, why: "no verdict yet" };
+};
+
 // The grouping rule for a started task. The first match wins.
 const activeRow = (id: string, ev: Evidence): Decision => {
+  if (ev.shared) {
+    return sharedRow(id, ev, ev.shared);
+  }
   if (ev.pr?.state === "merged") {
     return { group: "merged", next: `captain done ${id}`, why: "PR merged" };
   }
@@ -225,6 +284,7 @@ export const rowOf = (task: Task, ev: Evidence, all: Task[]): Row => {
     review: ev.review,
     risk: task.risk,
     run: ev.workspace?.run,
+    smoke: ev.shared?.smoke?.status,
     state: task.state,
     title: task.title,
     verdict: ev.verdict,
