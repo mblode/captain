@@ -68,6 +68,64 @@ describe("repoLabel", () => {
   });
 });
 
+describe("realCmux workspace names", () => {
+  let binDir: string;
+
+  beforeAll(() => {
+    binDir = mkdtempSync(join(tmpdir(), "captain-cmux-names-"));
+    const workspaces = [
+      {
+        current_directory: "/repo",
+        description: null,
+        id: "a",
+        ref: "workspace:1",
+        title: "task-one",
+      },
+      {
+        current_directory: "/repo",
+        description: "",
+        id: "b",
+        ref: "workspace:2",
+        title: "task-two",
+      },
+      {
+        current_directory: "/repo",
+        description: "legacy-name",
+        id: "c",
+        ref: "workspace:3",
+        title: "dynamic-title",
+      },
+      { current_directory: "/repo/worktree", id: "d", ref: "workspace:4" },
+      { id: "e", ref: "workspace:5" },
+    ];
+    const fake = join(binDir, "cmux");
+    writeFileSync(
+      fake,
+      `#!/bin/sh\ncat <<'JSON'\n${JSON.stringify({ workspaces })}\nJSON\n`
+    );
+    chmodSync(fake, 0o755);
+  });
+
+  afterAll(async () => {
+    await rm(binDir, { force: true, recursive: true });
+  });
+
+  it("keeps titled workers distinct in a shared cwd and preserves legacy fallbacks", () => {
+    const env = { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` };
+    expect(
+      realCmux(env)
+        .listWorkspaces()
+        .map((w) => w.name)
+    ).toEqual([
+      "task-one",
+      "task-two",
+      "legacy-name",
+      "worktree",
+      "workspace:5",
+    ]);
+  });
+});
+
 // The cmux RPC is unreliable: status-0 stdout can still be garbage. Every reader
 // must treat that as "no data this tick", never a thrown exception.
 describe("realCmux fails soft on garbage RPC output", () => {
