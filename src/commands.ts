@@ -355,8 +355,12 @@ const checkoutFor = async (
   // The folder carries the project name: two projects on one repo both have a
   // `t-1`. A task started before that keeps the worktree it already has.
   const worktree = await ensureWorktree({
+    branch:
+      task.worktree && task.worktree !== project.repo && task.branch
+        ? task.branch
+        : undefined,
     env,
-    issueId: task.id,
+    issueId: `${project.name}/${task.id}`,
     repoRoot: project.repo,
     slug: slugify(task.title),
     worktreePath:

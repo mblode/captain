@@ -50,21 +50,22 @@ export const pathsOf = (
     isShared(project, task) ? { stateDir: sharedStateDir(task.id) } : undefined
   );
 
-// The worker's cmux workspace name, as v2 named it: the branch in a worktree.
-// In the shared checkout every worker is on one branch, so the name comes from
-// the task: `<ticket>-<title slug>`, the title slug alone for a chat message
-// (`t-<n>` says nothing), and the change id for an OpenSpec change (already a
-// slug).
-export const workerName = (project: Project, task: Task): string => {
-  if (!isShared(project, task)) {
-    return task.branch;
-  }
+const legacySharedName = (task: Task): string => {
   const slug = slugify(task.title);
   if (!slug || task.source.startsWith("openspec:")) {
     return task.id;
   }
   return /^t-\d+$/u.test(task.id) ? slug : `${task.id}-${slug}`;
 };
+
+const workerTag = (project: Project, task: Task): string =>
+  ` [${project.name}/${task.id}]`;
+
+// Keep the title readable, but identify shared workers independently of it.
+export const workerName = (project: Project, task: Task): string =>
+  isShared(project, task)
+    ? `${legacySharedName(task)}${workerTag(project, task)}`
+    : task.branch;
 
 // The worker's verdict counts only if it cites the rubric as it exists NOW, so
 // editing the criteria after the fact voids it.
@@ -102,24 +103,46 @@ export const parseReview = (text: string): Grade | undefined => {
 
 export const reviewName = (branch: string): string => `${branch}:review`;
 
-// The worker's workspace is named after the branch (the task id when
-// shared); the reviewer's after `<branch>:review`. Matching by cwd is the
-// fallback for a renamed worktree workspace, never for a shared one: every
-// shared worker has the same cwd.
+// Restrict every match to the checkout. Old shared workers retain their task
+// id or title name; accept those only when the match is unambiguous.
 const workerOf = (
   project: Project,
   task: Task,
-  workspaces: CmuxWorkspace[]
-): CmuxWorkspace | undefined =>
-  workspaces.find((w) => w.name === workerName(project, task)) ??
-  (isShared(project, task)
-    ? undefined
-    : workspaces.find(
-        (w) =>
-          Boolean(task.worktree) &&
-          sameCwd(w.cwd, task.worktree) &&
-          w.name !== reviewName(task.branch)
-      ));
+  workspaces: CmuxWorkspace[],
+  tasks: Task[]
+): CmuxWorkspace | undefined => {
+  const local = workspaces.filter(
+    (w) => Boolean(task.worktree) && sameCwd(w.cwd, task.worktree)
+  );
+  const shared = isShared(project, task);
+  let matches = local.filter((w) =>
+    shared ? w.name.endsWith(workerTag(project, task)) : w.name === task.branch
+  );
+  if (matches.length === 0) {
+    matches = shared
+      ? local.filter((w) => w.name === task.id)
+      : local.filter((w) => w.name !== reviewName(task.branch));
+  }
+  if (shared && matches.length === 0) {
+    matches = local.filter((w) => w.name === legacySharedName(task));
+    if (
+      matches.length > 0 &&
+      tasks.some(
+        (other) =>
+          other.id !== task.id &&
+          other.state === "active" &&
+          isShared(project, other) &&
+          legacySharedName(other) === legacySharedName(task)
+      )
+    ) {
+      throw new CliError(`ambiguous legacy worker name for ${task.id}`);
+    }
+  }
+  if (matches.length > 1) {
+    throw new CliError(`multiple workspaces match task ${task.id}`);
+  }
+  return matches[0];
+};
 
 const evidenceFor = (
   project: Project,
@@ -144,7 +167,7 @@ const evidenceFor = (
   const runs = ports.cmux.runStates();
   const feed = ports.cmux.feedList();
   for (const task of active) {
-    const worker = workerOf(project, task, workspaces);
+    const worker = workerOf(project, task, workspaces, active);
     const ev: Evidence = {
       reviewing: workspaces.some((w) => w.name === reviewName(task.branch)),
     };

@@ -38,10 +38,9 @@ import {
   status,
 } from "./commands";
 import type { Deps } from "./commands";
-import { parseReview, readVerdict, workerName } from "./evidence";
-import { findTask, listTasks, resolveProject } from "./project";
+import { parseReview, readVerdict } from "./evidence";
+import { findTask, listTasks, resolveProject, writeTask } from "./project";
 import { renderRubric } from "./rubric";
-import { parseTask } from "./task";
 
 // The commands run for real against a temp project, a temp git repo with an
 // origin, a fake `cmux` binary (for new-workspace and ping) and an in-memory
@@ -264,6 +263,39 @@ describe("init and add", () => {
 });
 
 describe("start", () => {
+  it("isolates identical tasks across projects and preserves an existing branch on restart", async () => {
+    await add("Fix login", {}, world.deps);
+    await start(["t-1"], {}, world.deps);
+    const firstProject = project();
+    const first = findTask(firstProject, "t-1");
+    init(
+      { checkout: "worktree", name: "second", repo: world.repo },
+      world.deps
+    );
+    const secondOptions = { project: "second" };
+    await add("Fix login", secondOptions, world.deps);
+    await start(["t-1"], secondOptions, world.deps);
+    const second = findTask(resolveProject(world.env, "second"), "t-1");
+    expect(second.worktree).not.toBe(first.worktree);
+    expect(second.branch).not.toBe(first.branch);
+    expect(
+      readFileSync(join(first.worktree, ".captain", "brief.md"), "utf-8")
+    ).toContain("Fix login");
+
+    // Simulate a task launched before project names were added to branches.
+    git(first.worktree, "branch", "-m", "t-1-fix-login");
+    writeTask(firstProject, {
+      ...first,
+      branch: "t-1-fix-login",
+      title: "Renamed task",
+    });
+    await start(["t-1"], { project: firstProject.name }, world.deps);
+    expect(findTask(firstProject, "t-1")).toMatchObject({
+      branch: "t-1-fix-login",
+      worktree: first.worktree,
+    });
+  });
+
   it("makes a worktree, rubric and brief, and launches the harness in cmux", async () => {
     await add(
       "rebuild billing\n\n- [ ] plans render",
@@ -273,7 +305,7 @@ describe("start", () => {
     await start(["t-1"], {}, world.deps);
     const t = findTask(project(), "t-1");
     expect(t.state).toBe("active");
-    expect(t.branch).toBe("t-1-rebuild-billing");
+    expect(t.branch).toBe("rebuild/t-1-rebuild-billing");
     expect(t.worktree).toBe(join(world.repo, "..", "app-rebuild-t-1"));
     expect(
       readFileSync(join(t.worktree, ".captain", "rubric.md"), "utf-8")
@@ -285,7 +317,7 @@ describe("start", () => {
     expect(brief).toContain("Work on task T-1: rebuild billing.");
     expect(brief).toContain("no plan-approval gate");
     const calls = world.calls();
-    expect(calls).toContain("new-workspace --name t-1-rebuild-billing");
+    expect(calls).toContain("new-workspace --name rebuild/t-1-rebuild-billing");
     expect(calls).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(calls).toContain(
       "codex -m 'gpt-6-sol' -c model_reasoning_effort='medium'"
@@ -601,6 +633,17 @@ describe("shared checkout with OpenSpec changes", () => {
     expect(row().why).toContain("smoke fail");
   });
 
+  it("keeps old shared workers discoverable and refuses a restart without deleting evidence", async () => {
+    await launched();
+    const original = readFileSync(stateFile("rubric.md"), "utf-8");
+    writeFileSync(stateFile("plan.md"), "approved plan");
+    await expect(start([ID], shared, world.deps)).rejects.toThrow(
+      "already has a worker"
+    );
+    expect(readFileSync(stateFile("plan.md"), "utf-8")).toBe("approved plan");
+    expect(readFileSync(stateFile("rubric.md"), "utf-8")).toBe(original);
+  });
+
   it("matches a plan gate by the worker's session, not the shared cwd", async () => {
     await launched();
     const session = readFileSync(stateFile("session"), "utf-8");
@@ -681,35 +724,5 @@ describe("evidence readers", () => {
     });
     expect(parseReview('{"verdict":"maybe"}')).toBeUndefined();
     expect(parseReview("")).toBeUndefined();
-  });
-});
-
-const sharedProject = {
-  bootstrap: "",
-  checkout: "shared" as const,
-  dir: "/p",
-  name: "p",
-  repo: "/repo",
-  wip: 3,
-};
-const sharedTaskOf = (id: string, title: string, source = "") => ({
-  ...parseTask("", id),
-  source,
-  title,
-  worktree: "/repo",
-});
-
-describe("workerName", () => {
-  it("names a shared worker the way v2 did", () => {
-    const name = (id: string, title: string, source?: string) =>
-      workerName(sharedProject, sharedTaskOf(id, title, source));
-    expect(name("t-4", "Rebuild the billing page")).toBe(
-      "rebuild-the-billing-page"
-    );
-    expect(name("tig-430", "Fix login")).toBe("tig-430-fix-login");
-    expect(name("add-dark-mode", "Add dark mode", "openspec:x")).toBe(
-      "add-dark-mode"
-    );
-    expect(name("t-5", "")).toBe("t-5");
   });
 });

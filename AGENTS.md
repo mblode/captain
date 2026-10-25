@@ -72,7 +72,7 @@ record and captain never writes back to a tracker.
 **Checkout.** `project.json` `checkout` is `shared` (the default) or `worktree`
 (`captain init --worktrees`). A shared task runs in the project repo itself on its current
 branch (a detached HEAD is refused): its files live under `.captain/tasks/<id>/`, its
-workspace is named after the task id, claude gets a fixed `--session-id` (written to that
+workspace has a readable task name followed by `[<project>/<id>]`, claude gets a fixed `--session-id` (written to that
 dir) so feed gates are matched by session instead of the shared cwd, the bootstrap is
 skipped, and the brief adds `<shared-branch>` (commit only your paths as `[<id>] …`, push
 to the branch) and the production steps (wait for the human merge, write `smoke.json`,
@@ -100,7 +100,7 @@ Enter only when the highlighted option is "Yes, and bypass permissions"
 
 **Start.** Refuses a closed task, a task with a live worker, an open blocker, and a start past
 the WIP limit (`inProgress(rows) >= project.wip`); `--force` overrides the last two. Then:
-`ensureWorktree` (`<parent>/<repo>-<project>-<id>` on branch `<id>-<slug>`, or the shared checkout; the project name keeps two projects' `t-1` apart, and a task keeps a worktree it already has), `.captain/rubric.md`,
+`ensureWorktree` (`<parent>/<repo>-<project>-<id>` on branch `<project>/<id>-<slug>`, or the shared checkout; the project name keeps two projects' `t-1` apart, and a task keeps a worktree it already has), `.captain/rubric.md`,
 `.captain/brief.md`, `.captain/` appended to `.git/info/exclude`, and `cmux new-workspace` named
 after the branch running `harnessCommand`. An `escalate` task always runs on Claude in plan mode
 (`--permission-mode plan --allow-dangerously-skip-permissions`); everything else runs unattended
@@ -149,7 +149,7 @@ needs CI green, a passing verdict and a passing review.
   item's `id`. Approve is `bypassPermissions` (the gated launch allows it), reject is `deny`.
   Pinned by a wire test in `control.test.ts`; re-verify there after a cmux upgrade.
 - **Shared workers share a cwd, an index and a branch.** Never match a shared worker or
-  its gate by cwd (name = task id, gate = session); commits are scoped with
+  its gate by cwd alone (worker = project/task tag, legacy task id or title; gate = session); commits are scoped with
   `git commit -- <paths>`; a codex or cursor shared worker has no session id, so no feed
   gate is read for it.
 - **The review workspace shares the worker's cwd**, so worker lookup is by workspace name
