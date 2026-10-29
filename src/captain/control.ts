@@ -157,6 +157,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
           id: string;
           ref: string;
           description?: string | null;
+          title?: string | null;
           current_directory?: string | null;
         }[];
       }
@@ -166,7 +167,7 @@ export const realCmux = (env: NodeJS.ProcessEnv): CmuxPort => ({
       return {
         cwd,
         id: w.id,
-        name: w.description || (cwd ? basename(cwd) : w.ref),
+        name: w.description || w.title || (cwd ? basename(cwd) : w.ref),
         ref: w.ref,
       };
     });
